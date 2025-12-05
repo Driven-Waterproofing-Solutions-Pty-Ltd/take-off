@@ -18,7 +18,7 @@ struct VerifyParams {
 }
 
 const SUPABASE_URL: &str = "https://poyashauvewhifohkxeg.supabase.co";
-const SUPABASE_KEY: &str = "sb_publishable_khl6tXRew5oN3J7gxAqfwg_0B265o2T"; // User provided key
+const SUPABASE_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBveWFzaGF1dmV3aGlmb2hreGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NTI2OTgsImV4cCI6MjA4MDUyODY5OH0.WWDtyUhPo1GO48sgDGPi5RCHmTvzvzMSSckTyAAqiwA";
 
 #[tauri::command]
 pub fn get_machine_id() -> Result<String, String> {
