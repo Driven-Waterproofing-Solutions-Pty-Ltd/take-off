@@ -1,0 +1,33 @@
+{
+  "productName": "ProTakeoff",
+  "version": "0.1.0",
+  "identifier": "com.protakeoff.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:3000",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "ProTakeoff",
+        "width": 1200,
+        "height": 800
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": []
+  },
+  "plugins": {
+    "sql": {
+      "preload": ["sqlite:protakeoff.db"]
+    }
+  }
+}

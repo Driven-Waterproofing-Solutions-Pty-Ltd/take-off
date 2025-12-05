@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"","local":true,"windows":["*"],"permissions":["core:default","sql:default","sql:allow-load","sql:allow-execute","sql:allow-select","shell:allow-open","store:default","http:default","fs:default","fs:allow-read-text-file","fs:allow-read-file","dialog:default"]}}

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ProTakeoff</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: light;
+      /* Forcee browser components to light mode */
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      overflow: hidden;
+      /* Prevent body scroll, handle in app */
+      background-color: #f8fafc;
+    }
+
+    /* Custom scrollbar for better UI */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: #f1f5f9;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+
+    .react-pdf__Page__canvas {
+      margin: 0 auto;
+      box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+    }
+
+    /* Force inputs to be light themed */
+    input,
+    select,
+    textarea {
+      background-color: #ffffff;
+      color: #0f172a;
+      color-scheme: light;
+    }
+  </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0",
+    "xlsx": "https://aistudiocdn.com/xlsx@^0.18.5",
+    "react-pdf": "https://aistudiocdn.com/react-pdf@^10.2.0",
+    "pdfjs-dist": "https://aistudiocdn.com/pdfjs-dist@^4.8.69",
+    "jszip": "https://aistudiocdn.com/jszip@^3.10.1",
+    "html2canvas": "https://aistudiocdn.com/html2canvas@^1.4.1",
+    "jspdf": "https://aistudiocdn.com/jspdf@^2.5.1",
+    "pdf-lib": "https://aistudiocdn.com/pdf-lib@^1.17.1"
+  }
+}
+</script>
+  <link rel="stylesheet" href="/index.css">
+</head>
+
+<body class="bg-slate-50 text-slate-900 h-screen w-screen flex flex-col">
+  <div id="root" class="h-full w-full"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+
+</html>
