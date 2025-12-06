@@ -2,7 +2,7 @@
 
 <img src="public/prologo.svg" alt="ProTakeoff AI Logo" width="200"/>
 
-# ProTakeoff AI
+# ProTakeoff
 ### Next-Gen Open Source Estimating Software
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
