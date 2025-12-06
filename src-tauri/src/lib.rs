@@ -2,9 +2,26 @@ mod license;
 use tauri::menu::{Menu, MenuItem, Submenu, PredefinedMenuItem};
 use tauri::{Emitter, Manager};
 
+#[tauri::command]
+fn get_startup_args() -> Vec<String> {
+    std::env::args().collect()
+}
+
+#[tauri::command]
+fn read_file_binary(path: String) -> Result<Vec<u8>, String> {
+    std::fs::read(path).map_err(|e| e.to_string())
+}
+
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+// ... (existing setup code) ...
+        .invoke_handler(tauri::generate_handler![
+            license::verify_license,
+            license::get_machine_id,
+            get_startup_args
+        ])
         .setup(|app| {
             let handle = app.handle();
             
@@ -121,7 +138,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             license::verify_license,
-            license::get_machine_id
+            license::get_machine_id,
+            get_startup_args,
+            read_file_binary
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

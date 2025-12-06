@@ -26,11 +26,24 @@
     "icon": [
       "icons/icon.png",
       "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": [
+          "takeoff"
+        ],
+        "name": "Takeoff Project",
+        "description": "ProTakeoff Project File",
+        "role": "Editor",
+        "mimeType": "application/x-protakeoff"
+      }
     ]
   },
   "plugins": {
     "sql": {
-      "preload": ["sqlite:protakeoff.db"]
+      "preload": [
+        "sqlite:protakeoff.db"
+      ]
     }
   }
 }

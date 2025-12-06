@@ -114,39 +114,19 @@ const App: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<BlueprintCanvasRef>(null);
 
-  // --- License Check ---
+  // --- License Check & Startup File ---
   useEffect(() => {
-    const checkSavedLicense = async () => {
+    const init = async () => {
+      // Check License
       try {
         const store = await Store.load('store.json');
         const savedKey = await store.get<string>('license_key');
 
         if (savedKey) {
-          // Verify again on startup to ensure it hasn't been revoked
-          // For faster startup, we could trust the store, but verifying is safer
           const res = await invoke<LicenseResponse>('verify_license', { key: savedKey });
           if (res.valid) {
             setIsLicensed(true);
-            if (res.expires_at) {
-              const expDate = new Date(res.expires_at);
-              setLicenseExpiration(expDate);
-
-              // Check for 7 days warning
-              const dayInMs = 24 * 60 * 60 * 1000;
-              const now = new Date();
-              const timeDiff = expDate.getTime() - now.getTime();
-              const daysLeft = Math.ceil(timeDiff / dayInMs);
-
-              if (daysLeft <= 7 && daysLeft > 0) {
-                addToast(`License expires in ${daysLeft} days.`, 'error'); // Using error style for visibility
-              } else if (daysLeft <= 0) {
-                // Theoretically handled by backend returning valid:false if < now(), 
-                // but good to check just in case backend logic differs
-                // If it was valid but expired today/now?
-                // Backend RPC check: "expires_at < now()" -> false.
-                // So if we are here, it is >= now().
-              }
-            }
+            if (res.expires_at) setLicenseExpiration(new Date(res.expires_at));
           }
         }
       } catch (e) {
@@ -154,8 +134,23 @@ const App: React.FC = () => {
       } finally {
         setCheckingLicense(false);
       }
+
+      // Check Startup Args (File Association)
+      try {
+        const args = await invoke<string[]>('get_startup_args');
+        // Args[0] is binary, Args[1] might be file path if double-clicked
+        if (args && args.length > 1) {
+          const possiblePath = args[1];
+          if (possiblePath.toLowerCase().endsWith('.takeoff')) {
+            setPendingImportPath(possiblePath);
+            setShowImportConfirm(true);
+          }
+        }
+      } catch (e) {
+        console.error("Failed to get startup args", e);
+      }
     };
-    checkSavedLicense();
+    init();
   }, []);
 
   // --- Persistence Logic ---
@@ -343,8 +338,10 @@ const App: React.FC = () => {
       let name: string;
 
       if (pendingImportPath) {
-        const data = await readFile(pendingImportPath);
-        importData = data;
+        // Use Rust backend to read file to bypass frontend FS scope restrictions for arbitrary paths
+        const data = await invoke<number[]>('read_file_binary', { path: pendingImportPath });
+        importData = new Uint8Array(data);
+
         // Extract filename from path for default name
         // Simple split for windows/unix
         const filename = pendingImportPath.split(/[\\/]/).pop() || "Project";

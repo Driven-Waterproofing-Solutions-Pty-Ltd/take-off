@@ -406,9 +406,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                                                     )}
 
                                                                     <div className="flex items-center gap-2">
-                                                                        <span className="text-xs font-mono text-slate-500">
-                                                                            {displayQty.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}
-                                                                        </span>
+                                                                        {displayQty.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })} <span className="text-[10px] text-slate-400 ml-0.5">{item.unit}</span>
 
                                                                         {/* Visibility Toggle */}
                                                                         <button
