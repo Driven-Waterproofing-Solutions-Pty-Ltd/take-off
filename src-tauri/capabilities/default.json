@@ -1,6 +1,8 @@
 {
   "identifier": "default",
-  "windows": ["*"],
+  "windows": [
+    "*"
+  ],
   "permissions": [
     "core:default",
     "sql:default",
@@ -13,6 +15,14 @@
     "fs:default",
     "fs:allow-read-text-file",
     "fs:allow-read-file",
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [
+        {
+          "path": "$HOME/**"
+        }
+      ]
+    },
     "dialog:default"
   ]
 }
