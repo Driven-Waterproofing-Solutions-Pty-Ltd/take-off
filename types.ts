@@ -180,3 +180,10 @@ export interface FileSystemWritableFileStream extends WritableStream {
   seek(position: number): Promise<void>;
   truncate(size: number): Promise<void>;
 }
+
+export interface LicenseResponse {
+  valid: boolean;
+  message: string;
+  token?: string;
+  expires_at?: string;
+}

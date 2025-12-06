@@ -4,17 +4,26 @@ use tauri::State;
 use reqwest::Client;
 use machine_uid::get as get_machine_uid;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct LicenseResponse {
     valid: bool,
     message: String,
     token: Option<String>,
+    expires_at: Option<String>,
 }
 
 #[derive(Serialize)]
 struct VerifyParams {
     p_key: String,
     p_machine_id: String,
+}
+
+// Internal struct to match Supabase RPC return
+#[derive(Deserialize)]
+struct RpcResponse {
+    valid: bool,
+    message: String,
+    expires_at: Option<String>,
 }
 
 const SUPABASE_URL: &str = "https://poyashauvewhifohkxeg.supabase.co";
@@ -48,29 +57,35 @@ pub async fn verify_license(key: String) -> Result<LicenseResponse, String> {
     match response {
         Ok(res) => {
             if res.status().is_success() {
-                // Parse the response. Assuming the RPC returns a JSON with success/token
-                // Adjust based on actual RPC return.
-                // If RPC returns void or simple true/false, we need to handle that.
-                // User said: "returns token".
-                
-                // Let's assume it returns { "token": "..." } or similar.
-                // For now, if success, we consider it valid.
-                let body = res.text().await.unwrap_or_default();
-                // Simple check for now
-                if body.contains("error") {
-                     return Ok(LicenseResponse {
-                        valid: false,
-                        message: "License verification failed".to_string(),
-                        token: None,
-                    });
+                // Parse the response as JSON directly
+                match res.json::<RpcResponse>().await {
+                    Ok(rpc_data) => {
+                        return Ok(LicenseResponse {
+                            valid: rpc_data.valid,
+                            message: rpc_data.message,
+                            token: None, // We aren't using this token field much, but keeping for compatibility
+                            expires_at: rpc_data.expires_at,
+                        });
+                    },
+                    Err(_) => {
+                         return Ok(LicenseResponse {
+                            valid: false,
+                            message: "Failed to parse license server response".to_string(),
+                            token: None,
+                            expires_at: None,
+                        });
+                    }
                 }
-                
-                return Ok(LicenseResponse {
-                    valid: true,
-                    message: "License verified successfully".to_string(),
-                    token: Some(body), // Store the raw response as token for now
+            } else {
+                 // Try to get error text
+                 return Ok(LicenseResponse {
+                    valid: false,
+                    message: "Server returned error".to_string(),
+                    token: None,
+                    expires_at: None,
                 });
             }
+        }
         }
         Err(_) => {
             // Network error, fall through to offline check

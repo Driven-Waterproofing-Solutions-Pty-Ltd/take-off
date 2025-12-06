@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Keyboard, BookOpen, MousePointer2, Layers, FileText, Settings, Calculator, Package, FileDown, Save, Box } from 'lucide-react';
+import { X, Keyboard, BookOpen, MousePointer2, Layers, FileText, Settings, Calculator, Package, FileDown, Save, Box, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
+import { Store } from '@tauri-apps/plugin-store';
+import { LicenseResponse } from '../types';
 
 interface HelpModalProps {
     isOpen: boolean;
@@ -8,13 +11,34 @@ interface HelpModalProps {
 }
 
 const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
-    const [activeTab, setActiveTab] = useState<'guide' | 'shortcuts' | 'properties'>('guide');
+    const [activeTab, setActiveTab] = useState<'guide' | 'shortcuts' | 'properties' | 'license'>('guide');
+    const [licenseInfo, setLicenseInfo] = useState<LicenseResponse | null>(null);
+    const [checkingLicense, setCheckingLicense] = useState(false);
     const [mounted, setMounted] = useState(false);
+
+    const checkLicense = async () => {
+        setCheckingLicense(true);
+        try {
+            const store = await Store.load('store.json');
+            const savedKey = await store.get<string>('license_key');
+            if (savedKey) {
+                const res = await invoke<LicenseResponse>('verify_license', { key: savedKey });
+                setLicenseInfo(res);
+            }
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setCheckingLicense(false);
+        }
+    };
 
     useEffect(() => {
         setMounted(true);
+        if (isOpen && activeTab === 'license') {
+            checkLicense();
+        }
         return () => setMounted(false);
-    }, []);
+    }, [isOpen, activeTab]);
 
     if (!isOpen || !mounted) return null;
 
@@ -72,6 +96,12 @@ const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
                         className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'shortcuts' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
                     >
                         <Keyboard size={16} /> Keyboard Shortcuts
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('license')}
+                        className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'license' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+                    >
+                        <ShieldCheck size={16} /> License
                     </button>
                 </div>
 
@@ -395,6 +425,71 @@ const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
                                     </div>
                                 </div>
 
+                            </div>
+                        </div>
+                    )}
+
+                    {activeTab === 'license' && (
+                        <div className="max-w-2xl mx-auto space-y-6">
+                            <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-sm text-center">
+                                {checkingLicense ? (
+                                    <div className="flex flex-col items-center gap-3 py-8">
+                                        <div className="w-8 h-8 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin"></div>
+                                        <p className="text-slate-500">Verifying license...</p>
+                                    </div>
+                                ) : licenseInfo ? (
+                                    <div className="space-y-6">
+                                        <div className="flex flex-col items-center gap-4">
+                                            <div className={`p-4 rounded-full ${licenseInfo.valid ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
+                                                <ShieldCheck size={48} />
+                                            </div>
+                                            <div>
+                                                <h3 className="text-2xl font-bold text-slate-800">
+                                                    {licenseInfo.valid ? 'License Active' : 'License Invalid'}
+                                                </h3>
+                                                <p className="text-slate-500 mt-1">{licenseInfo.message}</p>
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 gap-4 max-w-sm mx-auto text-left">
+                                            <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
+                                                <div className="text-xs text-slate-500 uppercase tracking-widest font-bold mb-1">Status</div>
+                                                <div className={`font-semibold ${licenseInfo.valid ? 'text-green-600' : 'text-red-600'}`}>
+                                                    {licenseInfo.valid ? 'Verified' : 'Unverified'}
+                                                </div>
+                                            </div>
+
+                                            <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
+                                                <div className="text-xs text-slate-500 uppercase tracking-widest font-bold mb-1">Expiration Date</div>
+                                                <div className="font-semibold text-slate-800 flex items-center gap-2">
+                                                    {licenseInfo.expires_at ? (
+                                                        <>
+                                                            {new Date(licenseInfo.expires_at).toLocaleDateString()}
+                                                            {(() => {
+                                                                const exp = new Date(licenseInfo.expires_at);
+                                                                const now = new Date();
+                                                                const diff = Math.ceil((exp.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+                                                                if (diff <= 7 && diff > 0) {
+                                                                    return <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-bold flex items-center gap-1"><AlertTriangle size={10} /> Expires soon</span>
+                                                                }
+                                                                if (diff <= 0) {
+                                                                    return <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold">Expired</span>
+                                                                }
+                                                                return null;
+                                                            })()}
+                                                        </>
+                                                    ) : (
+                                                        'Lifetime License'
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="text-slate-500 py-8">
+                                        Unable to load license information.
+                                    </div>
+                                )}
                             </div>
                         </div>
                     )}

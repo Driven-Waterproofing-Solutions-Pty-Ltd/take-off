@@ -20,7 +20,7 @@ import ConfirmModal from './components/ConfirmModal';
 import PromptModal from './components/PromptModal';
 import ExportModal from './components/ExportModal';
 import LicenseModal from './components/LicenseModal';
-import { ToolType, ProjectData, TakeoffItem, Shape, Unit, PlanSet, FileSystemFileHandle, LegendSettings } from './types';
+import { ToolType, ProjectData, TakeoffItem, Shape, Unit, PlanSet, FileSystemFileHandle, LegendSettings, LicenseResponse } from './types';
 import { PresetScale, getAreaUnitFromLinear } from './utils/geometry';
 import { useToast } from './contexts/ToastContext';
 import {
@@ -44,6 +44,7 @@ const App: React.FC = () => {
   // License State
   const [isLicensed, setIsLicensed] = useState(false);
   const [checkingLicense, setCheckingLicense] = useState(true);
+  const [licenseExpiration, setLicenseExpiration] = useState<Date | null>(null);
 
   // History State
   const {
@@ -72,7 +73,7 @@ const App: React.FC = () => {
 
   // Current View State
   const [projectName, setProjectName] = useState("Untitled Project");
-  const [pageIndex, setPageIndex] = useState<number>(0); 
+  const [pageIndex, setPageIndex] = useState<number>(0);
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
   const [pdfPageWidth, setPdfPageWidth] = useState<number>(0);
 
@@ -111,26 +112,46 @@ const App: React.FC = () => {
 
   // --- License Check ---
   useEffect(() => {
-      const checkSavedLicense = async () => {
-          try {
-            const store = await Store.load('store.json');
-            const savedKey = await store.get<string>('license_key');
-            
-            if (savedKey) {
-                // Verify again on startup to ensure it hasn't been revoked
-                // For faster startup, we could trust the store, but verifying is safer
-                const res = await invoke<{ valid: boolean }>('verify_license', { key: savedKey });
-                if (res.valid) {
-                    setIsLicensed(true);
-                }
+    const checkSavedLicense = async () => {
+      try {
+        const store = await Store.load('store.json');
+        const savedKey = await store.get<string>('license_key');
+
+        if (savedKey) {
+          // Verify again on startup to ensure it hasn't been revoked
+          // For faster startup, we could trust the store, but verifying is safer
+          const res = await invoke<LicenseResponse>('verify_license', { key: savedKey });
+          if (res.valid) {
+            setIsLicensed(true);
+            if (res.expires_at) {
+              const expDate = new Date(res.expires_at);
+              setLicenseExpiration(expDate);
+
+              // Check for 7 days warning
+              const dayInMs = 24 * 60 * 60 * 1000;
+              const now = new Date();
+              const timeDiff = expDate.getTime() - now.getTime();
+              const daysLeft = Math.ceil(timeDiff / dayInMs);
+
+              if (daysLeft <= 7 && daysLeft > 0) {
+                addToast(`License expires in ${daysLeft} days.`, 'error'); // Using error style for visibility
+              } else if (daysLeft <= 0) {
+                // Theoretically handled by backend returning valid:false if < now(), 
+                // but good to check just in case backend logic differs
+                // If it was valid but expired today/now?
+                // Backend RPC check: "expires_at < now()" -> false.
+                // So if we are here, it is >= now().
+              }
             }
-          } catch(e) {
-            console.error("Failed to load license", e);
-          } finally {
-            setCheckingLicense(false);
           }
-      };
-      checkSavedLicense();
+        }
+      } catch (e) {
+        console.error("Failed to load license", e);
+      } finally {
+        setCheckingLicense(false);
+      }
+    };
+    checkSavedLicense();
   }, []);
 
   // --- Persistence Logic ---
@@ -313,7 +334,7 @@ const App: React.FC = () => {
     setLoadingMessage("Importing Project...");
     try {
       await clearProjectData();
-      
+
       let importData: File | Uint8Array;
       let name: string;
 
@@ -335,11 +356,11 @@ const App: React.FC = () => {
 
       const state = await importProjectFromZip(importData);
       clearHistory({ items: state.items, projectData: state.projectData, planSets: state.planSets, totalPages: state.totalPages });
-      
+
       // Use name from project file if available, else filename
       const finalName = state.projectName || name;
       setProjectName(finalName);
-      
+
       await saveProjectData(state.items, state.projectData, state.planSets, state.totalPages, finalName);
       for (const plan of state.planSets) {
         await savePlanFile(plan.id, plan.file);
@@ -382,7 +403,7 @@ const App: React.FC = () => {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         const name = names[i];
-        
+
         // Create a copy of the file to ensure we have a fresh blob that hasn't been read/detached
         const fileBlob = new Blob([file], { type: 'application/pdf' });
         const fileCopy = new File([fileBlob], file.name, { type: 'application/pdf', lastModified: file.lastModified });
@@ -390,10 +411,10 @@ const App: React.FC = () => {
         const buffer = await fileCopy.arrayBuffer();
         // We need to copy the buffer because pdfjs might detach it
         const bufferCopy = buffer.slice(0);
-        
+
         const pdf = await pdfjs.getDocument(bufferCopy).promise;
         const numPages = pdf.numPages;
-        
+
         const newPlanSet: PlanSet = {
           id: crypto.randomUUID(),
           file: fileCopy, // Use the fresh copy
@@ -557,11 +578,11 @@ const App: React.FC = () => {
   const handleResumeTakeoff = (id: string) => {
     const item = items.find(i => i.id === id);
     if (item) {
-        if ([ToolType.LINEAR, ToolType.AREA, ToolType.SEGMENT, ToolType.DIMENSION].includes(item.type)) {
-            const scale = getCurrentPageScale();
-            if (!scale.isSet) { addToast("Please set the scale first", 'error'); return; }
-        }
-        setActiveTakeoffId(id); setActiveTool(item.type); setIsDeductionMode(false); setViewMode('canvas');
+      if ([ToolType.LINEAR, ToolType.AREA, ToolType.SEGMENT, ToolType.DIMENSION].includes(item.type)) {
+        const scale = getCurrentPageScale();
+        if (!scale.isSet) { addToast("Please set the scale first", 'error'); return; }
+      }
+      setActiveTakeoffId(id); setActiveTool(item.type); setIsDeductionMode(false); setViewMode('canvas');
     }
   };
 
@@ -586,23 +607,23 @@ const App: React.FC = () => {
 
   // Keyboard Shortcuts (simplified for this file block)
   useKeyboardShortcuts({
-    undo, redo, setTool: (t) => { setActiveTool(t); if(t===ToolType.SELECT) setActiveTakeoffId(null); },
-    toggleDeductionMode: () => { if(activeTakeoffId) setIsDeductionMode(p=>!p); },
-    deleteSelectedItem: () => { if(activeTakeoffId) handleDeleteItem(activeTakeoffId); },
+    undo, redo, setTool: (t) => { setActiveTool(t); if (t === ToolType.SELECT) setActiveTakeoffId(null); },
+    toggleDeductionMode: () => { if (activeTakeoffId) setIsDeductionMode(p => !p); },
+    deleteSelectedItem: () => { if (activeTakeoffId) handleDeleteItem(activeTakeoffId); },
     cancelAction: () => { setActiveTakeoffId(null); setActiveTool(ToolType.SELECT); },
-    zoomIn: () => setZoomLevel(z=>Math.min(10, z+0.25)), zoomOut: () => setZoomLevel(z=>Math.max(0.1, z-0.25)),
-    saveProject: handleSaveProject, nextPage: () => pageIndex < totalPages-1 && setPageIndex(p=>p+1),
-    prevPage: () => pageIndex > 0 && setPageIndex(p=>p-1), zoomToFit: () => setZoomLevel(1.0),
-    toggleRecord: () => activeTakeoffId && handleStopTakeoff(), toggleViewMode: () => setViewMode(v=>v==='canvas'?'estimates':'canvas'),
-    finishShape: () => activeTakeoffId && handleStopTakeoff(), copyItem: () => {}, pasteItem: () => {}
+    zoomIn: () => setZoomLevel(z => Math.min(10, z + 0.25)), zoomOut: () => setZoomLevel(z => Math.max(0.1, z - 0.25)),
+    saveProject: handleSaveProject, nextPage: () => pageIndex < totalPages - 1 && setPageIndex(p => p + 1),
+    prevPage: () => pageIndex > 0 && setPageIndex(p => p - 1), zoomToFit: () => setZoomLevel(1.0),
+    toggleRecord: () => activeTakeoffId && handleStopTakeoff(), toggleViewMode: () => setViewMode(v => v === 'canvas' ? 'estimates' : 'canvas'),
+    finishShape: () => activeTakeoffId && handleStopTakeoff(), copyItem: () => { }, pasteItem: () => { }
   });
 
   if (checkingLicense) {
-      return <div className="h-screen w-screen bg-slate-50 flex items-center justify-center"><Loader2 className="animate-spin text-slate-400" size={32} /></div>;
+    return <div className="h-screen w-screen bg-slate-50 flex items-center justify-center"><Loader2 className="animate-spin text-slate-400" size={32} /></div>;
   }
 
   if (!isLicensed) {
-      return <LicenseModal onSuccess={() => setIsLicensed(true)} />;
+    return <LicenseModal onSuccess={() => setIsLicensed(true)} />;
   }
 
   if (isInitializing) {
@@ -628,11 +649,11 @@ const App: React.FC = () => {
         onSelect={setActiveTakeoffId} onOpenUploadModal={() => setShowUploadModal(true)} planSets={planSets} pageIndex={pageIndex}
         setPageIndex={setPageIndex} totalPages={totalPages} projectData={projectData}
         scaleInfo={{ isSet: currentScale.isSet, unit: currentScale.unit, ppu: currentScale.pixelsPerUnit }}
-        onToggleVisibility={(id) => handleUpdateItem(id, {visible: !items.find(i=>i.id===id)?.visible})}
+        onToggleVisibility={(id) => handleUpdateItem(id, { visible: !items.find(i => i.id === id)?.visible })}
         onShowEstimates={() => { handleStopTakeoff(); setViewMode('estimates'); }}
-        onRenamePage={(i, n) => setHistory({...historyState, projectData: {...projectData, [i]: {...projectData[i], name: n}}})}
+        onRenamePage={(i, n) => setHistory({ ...historyState, projectData: { ...projectData, [i]: { ...projectData[i], name: n } } })}
         onDeletePage={(i) => { setPageToDelete(i); setShowDeletePageConfirm(true); }}
-        onEditItem={setEditingItem} onRenameItem={(id, n) => handleUpdateItem(id, {label: n})}
+        onEditItem={setEditingItem} onRenameItem={(id, n) => handleUpdateItem(id, { label: n })}
         projectName={projectName} onNewProject={handleNewProjectRequest} onSaveProject={handleSaveProject} onLoadProject={handleLoadProjectClick}
         isSaving={isSaving} lastSavedAt={lastSavedAt} activeTool={activeTool} onOpenExportModal={() => setShowExportModal(true)}
       />
@@ -643,7 +664,7 @@ const App: React.FC = () => {
         ) : (
           <>
             {planSets.length > 0 && (
-              <Tools activeTool={activeTool} setTool={(t) => { setActiveTool(t); if(t===ToolType.SELECT) setActiveTakeoffId(null); setIsDeductionMode(false); }}
+              <Tools activeTool={activeTool} setTool={(t) => { setActiveTool(t); if (t === ToolType.SELECT) setActiveTakeoffId(null); setIsDeductionMode(false); }}
                 onInitiateTool={handleInitiateTool} scale={zoomLevel} setScale={setZoomLevel} onSetPresetScale={setPendingPreset}
                 isRecording={!!activeTakeoffId && activeTool !== ToolType.SELECT} onUndo={undo} onRedo={redo} canUndo={canUndo} canRedo={canRedo}
                 isLegendVisible={currentLegend.visible ?? true} onToggleLegend={() => handleUpdateLegend({ visible: !(currentLegend.visible ?? true) })}
