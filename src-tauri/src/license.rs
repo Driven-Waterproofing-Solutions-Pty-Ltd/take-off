@@ -1,6 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::process::Command;
-use tauri::State;
 use reqwest::Client;
 use machine_uid::get as get_machine_uid;
 

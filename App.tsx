@@ -1,6 +1,7 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { Store } from '@tauri-apps/plugin-store';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { writeFile, readFile } from '@tauri-apps/plugin-fs';
@@ -12,6 +13,7 @@ import { jsPDF } from 'jspdf';
 import Sidebar from './components/Sidebar';
 import BlueprintCanvas, { BlueprintCanvasRef } from './components/BlueprintCanvas';
 import Tools from './components/Tools';
+import HelpModal from './components/HelpModal';
 import NewItemModal from './components/NewItemModal';
 import UploadModal from './components/UploadModal';
 import PropertiesModal from './components/PropertiesModal';
@@ -86,6 +88,8 @@ const App: React.FC = () => {
 
   const [showNewItemModal, setShowNewItemModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [showHelpModal, setShowHelpModal] = useState(false);
+  const [helpModalTab, setHelpModalTab] = useState<'guide' | 'shortcuts' | 'properties' | 'license'>('guide');
   const [editingItem, setEditingItem] = useState<TakeoffItem | null>(null);
   const [pendingTool, setPendingTool] = useState<ToolType | null>(null);
 
@@ -605,6 +609,36 @@ const App: React.FC = () => {
     });
   };
 
+  useEffect(() => {
+    const unlisteners: Promise<() => void>[] = [];
+
+    unlisteners.push(listen('open_help', () => {
+      setHelpModalTab('guide');
+      setShowHelpModal(true);
+    }));
+
+    unlisteners.push(listen('open_activation', () => {
+      setHelpModalTab('license');
+      setShowHelpModal(true);
+    }));
+
+    unlisteners.push(listen('new_project', () => {
+      handleNewProjectRequest();
+    }));
+
+    unlisteners.push(listen('open_project', () => {
+      handleLoadProjectClick();
+    }));
+
+    unlisteners.push(listen('save_project', () => {
+      handleSaveProject();
+    }));
+
+    return () => {
+      unlisteners.forEach(u => u.then(f => f()));
+    };
+  }, [handleNewProjectRequest, handleLoadProjectClick, handleSaveProject]);
+
   // Keyboard Shortcuts (simplified for this file block)
   useKeyboardShortcuts({
     undo, redo, setTool: (t) => { setActiveTool(t); if (t === ToolType.SELECT) setActiveTakeoffId(null); },
@@ -656,6 +690,7 @@ const App: React.FC = () => {
         onEditItem={setEditingItem} onRenameItem={(id, n) => handleUpdateItem(id, { label: n })}
         projectName={projectName} onNewProject={handleNewProjectRequest} onSaveProject={handleSaveProject} onLoadProject={handleLoadProjectClick}
         isSaving={isSaving} lastSavedAt={lastSavedAt} activeTool={activeTool} onOpenExportModal={() => setShowExportModal(true)}
+        onOpenHelp={() => setShowHelpModal(true)}
       />
       <main className="flex-1 relative flex flex-col h-full overflow-hidden">
         {viewMode === 'estimates' ? (
@@ -684,6 +719,7 @@ const App: React.FC = () => {
       {showUploadModal && <UploadModal onUpload={handleUpload} onCancel={() => setShowUploadModal(false)} isFirstUpload={planSets.length === 0} />}
       {showNewItemModal && pendingTool && <NewItemModal toolType={pendingTool} existingCount={items.length} onCreate={handleCreateTakeoffItem} onCancel={() => { setShowNewItemModal(false); setPendingTool(null); }} />}
       {editingItem && <PropertiesModal item={editingItem} items={items} onSave={handleUpdateItem} onClose={() => setEditingItem(null)} />}
+      <HelpModal isOpen={showHelpModal} onClose={() => setShowHelpModal(false)} initialTab={helpModalTab} />
       <ExportModal isOpen={showExportModal} planSets={planSets} projectData={projectData} currentPageIndex={pageIndex} isExporting={isExporting} progress={exportProgress} onClose={() => setShowExportModal(false)} onExport={handleExportPDF} />
       <PromptModal isOpen={showNewProjectPrompt} title="Create New Project" message="Enter a name for the new project." placeholder="My Project" onConfirm={handleNewProjectConfirmed} onCancel={() => setShowNewProjectPrompt(false)} confirmText="Create Project" />
       <ConfirmModal isOpen={showImportConfirm} title="Import Project?" message="Loading a project will replace the current workspace." onConfirm={handleImportConfirmed} onCancel={() => { setShowImportConfirm(false); setPendingImportFile(null); setPendingImportPath(null); }} confirmText="Import Project" isDestructive />

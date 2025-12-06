@@ -4,7 +4,6 @@ import { TakeoffItem, ToolType, ProjectData, PlanSet } from '../types';
 import { Trash2, Upload, ChevronDown, ChevronRight, FilePlus, FolderOpen, Save, RefreshCw, Settings, Edit2, Table, Eye, EyeOff, FileDown, MoreHorizontal, Plus, HelpCircle } from 'lucide-react';
 import { evaluateFormula } from '../utils/math';
 import Logo from './Logo';
-import HelpModal from './HelpModal';
 
 interface SidebarProps {
     items: TakeoffItem[];
@@ -36,6 +35,7 @@ interface SidebarProps {
     lastSavedAt: Date | null;
     activeTool: ToolType;
     onOpenExportModal: () => void;
+    onOpenHelp: () => void;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({
@@ -63,11 +63,11 @@ const Sidebar: React.FC<SidebarProps> = ({
     isSaving,
     lastSavedAt,
     activeTool,
-    onOpenExportModal
+    onOpenExportModal,
+    onOpenHelp
 }) => {
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
     const [expandedPages, setExpandedPages] = useState<Set<number>>(new Set());
-    const [showHelpModal, setShowHelpModal] = useState(false);
 
     // Page Renaming State
     const [editingPageIndex, setEditingPageIndex] = useState<number | null>(null);
@@ -252,13 +252,11 @@ const Sidebar: React.FC<SidebarProps> = ({
                         <Save size={16} />
                     </button>
                     <div className="w-px h-4 bg-slate-200 mx-1"></div>
-                    <button onClick={() => setShowHelpModal(true)} className="p-1.5 text-blue-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors" title="Help & Shortcuts">
+                    <button onClick={onOpenHelp} className="p-1.5 text-blue-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors" title="Help & Shortcuts">
                         <HelpCircle size={16} />
                     </button>
                 </div>
             </div>
-
-            <HelpModal isOpen={showHelpModal} onClose={() => setShowHelpModal(false)} />
 
             {/* Estimates & Export Buttons (Moved to Top) */}
             <div className="p-2 border-b border-slate-100 bg-white flex gap-2 shrink-0">

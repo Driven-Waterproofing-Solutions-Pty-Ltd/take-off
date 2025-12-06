@@ -8,9 +8,10 @@ import { LicenseResponse } from '../types';
 interface HelpModalProps {
     isOpen: boolean;
     onClose: () => void;
+    initialTab?: 'guide' | 'shortcuts' | 'properties' | 'license';
 }
 
-const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
+const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose, initialTab }) => {
     const [activeTab, setActiveTab] = useState<'guide' | 'shortcuts' | 'properties' | 'license'>('guide');
     const [licenseInfo, setLicenseInfo] = useState<LicenseResponse | null>(null);
     const [checkingLicense, setCheckingLicense] = useState(false);
@@ -31,6 +32,12 @@ const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
             setCheckingLicense(false);
         }
     };
+
+    useEffect(() => {
+        if (initialTab) {
+            setActiveTab(initialTab);
+        }
+    }, [initialTab, isOpen]);
 
     useEffect(() => {
         setMounted(true);
