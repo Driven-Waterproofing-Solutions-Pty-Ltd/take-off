@@ -86,7 +86,6 @@ pub async fn verify_license(key: String) -> Result<LicenseResponse, String> {
                 });
             }
         }
-        }
         Err(_) => {
             // Network error, fall through to offline check
         }
@@ -100,5 +99,6 @@ pub async fn verify_license(key: String) -> Result<LicenseResponse, String> {
         valid: false,
         message: "Could not verify license (Network error and offline check failed)".to_string(),
         token: None,
+        expires_at: None,
     })
 }
