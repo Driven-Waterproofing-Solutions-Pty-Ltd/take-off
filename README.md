@@ -50,7 +50,7 @@ _Powerful, modern, and free estimating software for contractors and estimators._
 
 ## 🚀 Overview
 
-**ProTakeoff AI** is a cutting-edge, open-source construction estimating software designed to streamline the takeoff and bidding process. Built with **Tauri**, **React**, and **Rust**, it combines the performance of a native desktop application with the flexibility of modern web technologies.
+**ProTakeoff** is a cutting-edge, open-source construction estimating software designed to streamline the takeoff and bidding process. Built with **Tauri**, **React**, and **Rust**, it combines the performance of a native desktop application with the flexibility of modern web technologies.
 
 Whether you're a general contractor, subcontractor, or DIY enthusiast, ProTakeoff AI provides the tools you need to calculate materials, labor, and costs with precision.
 
