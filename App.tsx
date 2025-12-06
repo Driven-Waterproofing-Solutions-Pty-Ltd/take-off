@@ -37,6 +37,7 @@ import {
 } from './utils/storage';
 import { generateMarkupPDF } from './utils/pdfExport';
 import { Loader2 } from 'lucide-react';
+import { licenseService } from './services/licenseService';
 
 type ViewMode = 'canvas' | 'estimates';
 
@@ -47,6 +48,7 @@ const App: React.FC = () => {
   const [isLicensed, setIsLicensed] = useState(false);
   const [checkingLicense, setCheckingLicense] = useState(true);
   const [licenseExpiration, setLicenseExpiration] = useState<Date | null>(null);
+  const [licenseError, setLicenseError] = useState<string | null>(null);
 
   // History State
   const {
@@ -119,18 +121,20 @@ const App: React.FC = () => {
     const init = async () => {
       // Check License
       try {
-        const store = await Store.load('store.json');
-        const savedKey = await store.get<string>('license_key');
+        const res = await licenseService.checkLicense();
 
-        if (savedKey) {
-          const res = await invoke<LicenseResponse>('verify_license', { key: savedKey });
-          if (res.valid) {
-            setIsLicensed(true);
-            if (res.expires_at) setLicenseExpiration(new Date(res.expires_at));
+        if (res.valid) {
+          setIsLicensed(true);
+          if (res.expiresAt) setLicenseExpiration(new Date(res.expiresAt));
+        } else {
+          if (res.message) {
+            addToast(res.message, 'error');
+            setLicenseError(res.message);
           }
         }
       } catch (e) {
         console.error("Failed to load license", e);
+        setLicenseError("Failed to check license status.");
       } finally {
         setCheckingLicense(false);
       }
@@ -654,7 +658,7 @@ const App: React.FC = () => {
   }
 
   if (!isLicensed) {
-    return <LicenseModal onSuccess={() => setIsLicensed(true)} />;
+    return <LicenseModal onSuccess={() => setIsLicensed(true)} initialMessage={licenseError} />;
   }
 
   if (isInitializing) {

@@ -1,16 +1,16 @@
 import React, { useState } from 'react';
 import { ShieldCheck, Key, Loader2, AlertCircle } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
-import { Store } from '@tauri-apps/plugin-store';
+import { licenseService } from '../services/licenseService';
 
 interface LicenseModalProps {
     onSuccess: () => void;
+    initialMessage?: string | null;
 }
 
-const LicenseModal: React.FC<LicenseModalProps> = ({ onSuccess }) => {
+const LicenseModal: React.FC<LicenseModalProps> = ({ onSuccess, initialMessage }) => {
     const [key, setKey] = useState('');
     const [isLoading, setIsLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
+    const [error, setError] = useState<string | null>(initialMessage || null);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -20,21 +20,16 @@ const LicenseModal: React.FC<LicenseModalProps> = ({ onSuccess }) => {
         setError(null);
 
         try {
-            const response = await invoke<{ valid: boolean; message: string; token?: string }>('verify_license', { key: key.trim() });
-            
+            const response = await licenseService.activateKey(key.trim());
+
             if (response.valid) {
-                // Save license info
-                const store = await Store.load('store.json');
-                await store.set('license_key', key.trim());
-                await store.set('license_token', response.token);
-                await store.save();
                 onSuccess();
             } else {
                 setError(response.message || "Invalid License Key.");
             }
         } catch (err: any) {
             console.error(err);
-            setError(err.toString() || "Connection error. Please check internet.");
+            setError(err.toString() || "Connection error.");
         } finally {
             setIsLoading(false);
         }
@@ -58,7 +53,7 @@ const LicenseModal: React.FC<LicenseModalProps> = ({ onSuccess }) => {
                         <label className="block text-sm font-medium text-slate-700 mb-1.5 ml-1">Serial Key</label>
                         <div className="relative">
                             <Key className="absolute left-3 top-2.5 text-slate-400" size={18} />
-                            <input 
+                            <input
                                 type="text"
                                 className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all uppercase font-mono tracking-widest text-center"
                                 placeholder="XXXX-XXXX-XXXX-XXXX"
@@ -90,7 +85,7 @@ const LicenseModal: React.FC<LicenseModalProps> = ({ onSuccess }) => {
                         )}
                     </button>
                 </form>
-                
+
                 <div className="mt-6 text-center">
                     <a href="#" className="text-sm text-blue-600 hover:underline">Purchase a license key</a>
                 </div>
