@@ -677,7 +677,7 @@ const App: React.FC = () => {
   const activePlan = getActivePlanDetails();
 
   return (
-    <div className="flex h-screen w-screen bg-slate-50 overflow-hidden font-sans">
+    <div className="flex h-screen w-screen bg-slate-50 overflow-hidden font-sans" onDragOver={(e) => { e.preventDefault(); console.log('[DRAG] App root onDragOver'); }}>
       <input type="file" ref={fileInputRef} onChange={handleImportFileSelect} className="hidden" accept=".zip,.takeoff" />
       <Sidebar
         items={items} activeTakeoffId={activeTakeoffId} onDelete={handleDeleteItem} onResume={handleResumeTakeoff} onStop={handleStopTakeoff}

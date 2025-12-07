@@ -160,6 +160,7 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
     const [editingSubItemId, setEditingSubItemId] = useState<string | null>(null);
     const [editingPropertyIndex, setEditingPropertyIndex] = useState<number | null>(null);
     const [draggedSubItemId, setDraggedSubItemId] = useState<string | null>(null);
+    const [isDraggingSub, setIsDraggingSub] = useState(false);
 
     // Refs for auto-scroll
     const propertyEditRef = useRef<HTMLDivElement>(null);
@@ -193,6 +194,17 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
         };
         setPreviewValue(evaluateFormula(tempItem, convertedQty));
     }, [properties, formula, unit, item]);
+
+    useEffect(() => {
+        if (isDraggingSub) {
+            const handleGlobalMouseUp = () => {
+                setIsDraggingSub(false);
+                setDraggedSubItemId(null);
+            };
+            window.addEventListener('mouseup', handleGlobalMouseUp);
+            return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
+        }
+    }, [isDraggingSub]);
 
     const handleAddOrUpdateProperty = () => {
         if (newPropName && newPropValue) {
@@ -332,31 +344,49 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
         setSubItems(subItems.filter(s => s.id !== id));
     };
 
-    const handleSubItemDragStart = (e: React.DragEvent, subItemId: string) => {
+    const handleSubItemMouseDown = (e: React.MouseEvent, subItemId: string) => {
+        // Ignore drag if clicking on interactive elements
+        const target = e.target as HTMLElement;
+        if (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'BUTTON' || target.closest('button')) {
+            return;
+        }
+
+        console.log('[MOUSE-DRAG] SubItem MouseDown:', subItemId);
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDraggingSub(true);
         setDraggedSubItemId(subItemId);
-        e.dataTransfer.effectAllowed = 'move';
     };
 
-    const handleSubItemDragOver = (e: React.DragEvent) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-    };
+    const handleSubItemMouseUp = (e: React.MouseEvent, targetSubItemId: string) => {
+        if (!isDraggingSub || !draggedSubItemId || draggedSubItemId === targetSubItemId) {
+            if (isDraggingSub) {
+                console.log('[MOUSE-DRAG] SubItem drop cancelled');
+            }
+            setIsDraggingSub(false);
+            setDraggedSubItemId(null);
+            return;
+        }
 
-    const handleSubItemDrop = (e: React.DragEvent, targetSubItemId: string) => {
-        e.preventDefault();
-        if (!draggedSubItemId || draggedSubItemId === targetSubItemId) return;
-
+        console.log('[MOUSE-DRAG] SubItem MouseUp - reordering');
         const draggedIndex = subItems.findIndex(s => s.id === draggedSubItemId);
         const targetIndex = subItems.findIndex(s => s.id === targetSubItemId);
 
-        if (draggedIndex === -1 || targetIndex === -1) return;
+        if (draggedIndex === -1 || targetIndex === -1) {
+            console.log('[MOUSE-DRAG] SubItem drop cancelled - item not found');
+            setIsDraggingSub(false);
+            setDraggedSubItemId(null);
+            return;
+        }
 
         const newSubItems = [...subItems];
         const [draggedItem] = newSubItems.splice(draggedIndex, 1);
         newSubItems.splice(targetIndex, 0, draggedItem);
 
         setSubItems(newSubItems);
+        setIsDraggingSub(false);
         setDraggedSubItemId(null);
+        console.log('[MOUSE-DRAG] SubItem reorder completed');
     };
 
     const handleSave = () => {
@@ -732,11 +762,10 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
                                         return (
                                             <div
                                                 key={sub.id}
-                                                draggable
-                                                onDragStart={(e) => handleSubItemDragStart(e, sub.id)}
-                                                onDragOver={handleSubItemDragOver}
-                                                onDrop={(e) => handleSubItemDrop(e, sub.id)}
-                                                className={`bg-slate-50 border rounded-lg p-3 transition-colors cursor-move ${isEditing ? 'border-blue-400 ring-1 ring-blue-100' : 'border-slate-200 hover:border-blue-300'} ${draggedSubItemId === sub.id ? 'opacity-50' : ''}`}
+                                                onMouseDown={(e) => handleSubItemMouseDown(e, sub.id)}
+                                                onMouseUp={(e) => handleSubItemMouseUp(e, sub.id)}
+                                                className={`bg-slate-50 border rounded-lg p-3 transition-colors cursor-grab active:cursor-grabbing select-none ${isEditing ? 'border-blue-400 ring-1 ring-blue-100' : 'border-slate-200 hover:border-blue-300'} ${draggedSubItemId === sub.id && isDraggingSub ? 'opacity-50' : ''}`}
+                                                style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
                                             >
                                                 <div className="flex justify-between items-start">
                                                     <div className="flex items-center gap-3">

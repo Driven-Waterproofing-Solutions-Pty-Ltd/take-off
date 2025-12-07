@@ -22,6 +22,8 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
     const [groups, setGroups] = useState<string[]>([]);
     const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
     const [draggedGroup, setDraggedGroup] = useState<string | null>(null);
+    const [isDragging, setIsDragging] = useState(false);
+    const [dragSource, setDragSource] = useState<'item' | 'group' | null>(null);
     const [editingGroup, setEditingGroup] = useState<string | null>(null);
     const [tempGroupName, setTempGroupName] = useState('');
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
@@ -30,6 +32,19 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
 
     // Modal State
     const [showNewGroupModal, setShowNewGroupModal] = useState(false);
+
+    useEffect(() => {
+        if (isDragging) {
+            const handleGlobalMouseUp = () => {
+                setIsDragging(false);
+                setDraggedItemId(null);
+                setDraggedGroup(null);
+                setDragSource(null);
+            };
+            window.addEventListener('mouseup', handleGlobalMouseUp);
+            return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
+        }
+    }, [isDragging]);
 
     // Sync groups with items, ensuring all item groups exist in the list
     useEffect(() => {
@@ -130,30 +145,153 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
         e.stopPropagation();
         setDraggedItemId(id);
         e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', id);
     };
 
     const handleGroupDragStart = (e: React.DragEvent, group: string) => {
+        e.stopPropagation();
         setDraggedGroup(group);
         e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', group);
+    };
+
+    const handleMouseDownItem = (e: React.MouseEvent, itemId: string) => {
+        // Ignore drag if clicking on interactive elements
+        const target = e.target as HTMLElement;
+        if (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'BUTTON' || target.closest('button')) {
+            return;
+        }
+
+        console.log('[MOUSE-DRAG] MouseDown on item:', itemId);
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(true);
+        setDraggedItemId(itemId);
+        setDraggedGroup(null);
+        setDragSource('item');
+    };
+
+    const handleMouseDownGroup = (e: React.MouseEvent, group: string) => {
+        // Ignore drag if clicking on interactive elements
+        const target = e.target as HTMLElement;
+        if (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'BUTTON' || target.closest('button')) {
+            return;
+        }
+
+        console.log('[MOUSE-DRAG] MouseDown on group:', group);
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(true);
+        setDraggedGroup(group);
+        setDraggedItemId(null);
+        setDragSource('group');
+    };
+
+    const handleMouseUp = (e: React.MouseEvent, target?: { type: 'item', id: string } | { type: 'group', name: string }) => {
+        if (!isDragging) return;
+        e.stopPropagation();
+        
+        console.log('[MOUSE-DRAG] MouseUp', { draggedItemId, draggedGroup, target });
+
+        // Handle item drop on item (reorder)
+        if (draggedItemId && target?.type === 'item' && draggedItemId !== target.id) {
+            const draggedItem = items.find(i => i.id === draggedItemId);
+            const targetItem = items.find(i => i.id === target.id);
+            
+            if (draggedItem && targetItem) {
+                console.log('[MOUSE-DRAG] Reordering item to target position');
+                const newItems = items.filter(i => i.id !== draggedItemId);
+                const targetIndex = newItems.findIndex(i => i.id === target.id);
+                const updatedDraggedItem = { ...draggedItem, group: targetItem.group };
+                newItems.splice(targetIndex, 0, updatedDraggedItem);
+                onReorderItems(newItems);
+            }
+        }
+        
+        // Handle item drop on group (move to group)
+        else if (draggedItemId && target?.type === 'group') {
+            const draggedItem = items.find(i => i.id === draggedItemId);
+            if (draggedItem && draggedItem.group !== target.name) {
+                console.log('[MOUSE-DRAG] Moving item to group:', target.name);
+                const newItems = items.filter(i => i.id !== draggedItemId);
+                const updatedDraggedItem = { ...draggedItem, group: target.name };
+                newItems.push(updatedDraggedItem);
+                onReorderItems(newItems);
+            }
+        }
+        
+        // Handle group reordering
+        else if (draggedGroup) {
+            let targetGroupName: string | undefined;
+
+            if (target?.type === 'group') {
+                targetGroupName = target.name;
+            } else if (target?.type === 'item') {
+                const targetItem = items.find(i => i.id === target.id);
+                if (targetItem) targetGroupName = targetItem.group || 'General';
+            }
+
+            if (targetGroupName && draggedGroup !== targetGroupName) {
+                console.log('[MOUSE-DRAG] Reordering group');
+                const newGroups = [...groups];
+                const fromIndex = newGroups.indexOf(draggedGroup);
+                const toIndex = newGroups.indexOf(targetGroupName);
+
+                if (fromIndex !== -1 && toIndex !== -1) {
+                    newGroups.splice(fromIndex, 1);
+                    newGroups.splice(toIndex, 0, draggedGroup);
+                    setGroups(newGroups);
+                }
+            }
+        }
+
+        // Clear drag state
+        setIsDragging(false);
+        setDraggedItemId(null);
+        setDraggedGroup(null);
+        setDragSource(null);
+        console.log('[MOUSE-DRAG] Drag operation completed');
+    };
+
+    const handleMouseLeave = () => {
+        if (isDragging) {
+            console.log('[MOUSE-DRAG] Mouse left container, cancelling drag');
+            setIsDragging(false);
+            setDraggedItemId(null);
+            setDraggedGroup(null);
+            setDragSource(null);
+        }
     };
 
     const handleDragOver = (e: React.DragEvent) => {
         e.preventDefault();
+        e.stopPropagation();
         e.dataTransfer.dropEffect = 'move';
     };
 
     const handleDropOnItem = (e: React.DragEvent, targetItemId: string) => {
+        console.log('[DRAG] DropOnItem - target:', targetItemId, 'draggedItem:', draggedItemId, 'draggedGroup:', draggedGroup);
         e.preventDefault();
         e.stopPropagation();
 
-        if (draggedGroup) return; // Don't drop groups on items
-        if (!draggedItemId || draggedItemId === targetItemId) return;
+        if (draggedGroup) {
+            console.log('[DRAG] Drop cancelled - cannot drop group on item');
+            return;
+        }
+        if (!draggedItemId || draggedItemId === targetItemId) {
+            console.log('[DRAG] Drop cancelled - no dragged item or same item');
+            return;
+        }
 
         const draggedItem = items.find(i => i.id === draggedItemId);
         const targetItem = items.find(i => i.id === targetItemId);
 
-        if (!draggedItem || !targetItem) return;
+        if (!draggedItem || !targetItem) {
+            console.log('[DRAG] Drop cancelled - item not found');
+            return;
+        }
 
+        console.log('[DRAG] Executing drop - moving item to group:', targetItem.group);
         const newItems = items.filter(i => i.id !== draggedItemId);
         const targetIndex = newItems.findIndex(i => i.id === targetItemId);
         const updatedDraggedItem = { ...draggedItem, group: targetItem.group };
@@ -162,16 +300,23 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
 
         onReorderItems(newItems);
         setDraggedItemId(null);
+        setDraggedGroup(null);
+        console.log('[DRAG] Drop completed successfully');
     };
 
     const handleDropOnGroup = (e: React.DragEvent, targetGroup: string) => {
+        console.log('[DRAG] DropOnGroup - target:', targetGroup, 'draggedItem:', draggedItemId, 'draggedGroup:', draggedGroup);
         e.preventDefault();
         e.stopPropagation();
 
         // Handle Group Reordering
         if (draggedGroup) {
-            if (draggedGroup === targetGroup) return;
+            if (draggedGroup === targetGroup) {
+                console.log('[DRAG] Drop cancelled - cannot drop group on itself');
+                return;
+            }
 
+            console.log('[DRAG] Reordering group:', draggedGroup, 'to position of:', targetGroup);
             const newGroups = [...groups];
             const fromIndex = newGroups.indexOf(draggedGroup);
             const toIndex = newGroups.indexOf(targetGroup);
@@ -181,18 +326,27 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
 
             setGroups(newGroups);
             setDraggedGroup(null);
+            setDraggedItemId(null);
+            console.log('[DRAG] Group reorder completed');
             return;
         }
 
         // Handle Item Moving to Group
         if (draggedItemId) {
             const draggedItem = items.find(i => i.id === draggedItemId);
-            if (!draggedItem) return;
+            if (!draggedItem) {
+                console.log('[DRAG] Drop cancelled - dragged item not found');
+                return;
+            }
 
             // If dropping on the group header, just move it to the group (append)
             // If it's already in the group, do nothing (reordering handled by dropOnItem)
-            if (draggedItem.group === targetGroup) return;
+            if (draggedItem.group === targetGroup) {
+                console.log('[DRAG] Drop cancelled - item already in target group');
+                return;
+            }
 
+            console.log('[DRAG] Moving item to group:', targetGroup);
             const newItems = items.filter(i => i.id !== draggedItemId);
             const updatedDraggedItem = { ...draggedItem, group: targetGroup };
 
@@ -200,6 +354,8 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
 
             onReorderItems(newItems);
             setDraggedItemId(null);
+            setDraggedGroup(null);
+            console.log('[DRAG] Item move to group completed');
         }
     };
 
@@ -340,7 +496,7 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                     <>
                         {/* Grouped Table */}
                         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                            <table className="w-full text-left border-collapse table-fixed">
+                            <table className="w-full text-left border-collapse table-fixed" onDragOver={handleDragOver}>
                                 <thead>
                                     <tr className="bg-slate-50 border-b border-slate-100 text-xs font-semibold text-slate-600 uppercase tracking-wider">
                                         <th className="w-8"></th>
@@ -384,16 +540,14 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                                         <tbody
                                             key={group}
                                             className="border-b border-slate-100 last:border-0"
-                                            onDragOver={handleDragOver}
-                                            onDrop={(e) => handleDropOnGroup(e, group)}
+                                            onMouseUp={(e) => handleMouseUp(e, { type: 'group', name: group })}
                                         >
                                             {/* Group Header */}
                                             <tr
-                                                draggable
-                                                onDragStart={(e) => handleGroupDragStart(e, group)}
-                                                onDragOver={handleDragOver}
-                                                onDrop={(e) => handleDropOnGroup(e, group)}
-                                                className={`bg-blue-50/50 hover:bg-blue-50 transition-colors border-b border-blue-100 ${draggedGroup === group ? 'opacity-50' : ''}`}
+                                                onMouseDown={(e) => handleMouseDownGroup(e, group)}
+                                                onMouseUp={(e) => handleMouseUp(e, { type: 'group', name: group })}
+                                                className={`bg-blue-50/50 hover:bg-blue-50 transition-colors border-b border-blue-100 ${draggedGroup === group && isDragging ? 'opacity-50' : ''} cursor-grab active:cursor-grabbing select-none`}
+                                                style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
                                             >
                                                 <td colSpan={8} className="px-4 py-3">
                                                     <div className="flex items-center justify-between">
@@ -444,13 +598,12 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                                                     <React.Fragment key={item.id}>
                                                         {/* Main Item Row */}
                                                         <tr
-                                                            draggable
-                                                            onDragStart={(e) => handleDragStart(e, item.id)}
-                                                            onDragOver={handleDragOver}
-                                                            onDrop={(e) => handleDropOnItem(e, item.id)}
+                                                            onMouseDown={(e) => handleMouseDownItem(e, item.id)}
+                                                            onMouseUp={(e) => handleMouseUp(e, { type: 'item', id: item.id })}
                                                             onDoubleClick={() => onEditItem(item)}
                                                             onContextMenu={(e) => handleContextMenu(e, item.id)}
-                                                            className={`hover:bg-blue-50/50 transition-colors group ${draggedItemId === item.id ? 'opacity-50 bg-slate-100' : 'bg-white'}`}
+                                                            className={`hover:bg-blue-50/50 transition-colors group ${draggedItemId === item.id && isDragging ? 'opacity-50 bg-slate-100' : 'bg-white'} cursor-grab active:cursor-grabbing select-none`}
+                                                            style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
                                                         >
                                                             <td className="px-2 text-center cursor-grab text-slate-300 hover:text-slate-500">
                                                                 <GripVertical size={16} className="inline-block" />
