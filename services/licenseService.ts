@@ -1,4 +1,5 @@
 
+import { invoke } from '@tauri-apps/api/core';
 import { supabase } from './supabaseClient';
 import { LazyStore } from '@tauri-apps/plugin-store';
 
@@ -14,6 +15,15 @@ export interface LicenseStatus {
 
 export const licenseService = {
     async getMachineId(): Promise<string> {
+        try {
+            // Try to get hardware-locked ID from Rust
+            const hardwareId = await invoke<string>('get_machine_id');
+            if (hardwareId) return hardwareId;
+        } catch (e) {
+            console.error("Failed to get hardware ID, falling back to soft ID", e);
+        }
+
+        // Fallback: Use stored random UUID (Soft ID)
         let machineId = await store.get<string>('machine_id');
         if (!machineId) {
             machineId = crypto.randomUUID();

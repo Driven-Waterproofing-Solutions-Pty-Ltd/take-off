@@ -1,9 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Keyboard, BookOpen, MousePointer2, Layers, FileText, Settings, Calculator, Package, FileDown, Save, Box, ShieldCheck, AlertTriangle } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
-import { Store } from '@tauri-apps/plugin-store';
-import { LicenseResponse } from '../types';
+import { licenseService } from '../services/licenseService';
 
 interface HelpModalProps {
     isOpen: boolean;
@@ -13,19 +11,15 @@ interface HelpModalProps {
 
 const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose, initialTab }) => {
     const [activeTab, setActiveTab] = useState<'guide' | 'shortcuts' | 'properties' | 'license'>('guide');
-    const [licenseInfo, setLicenseInfo] = useState<LicenseResponse | null>(null);
+    const [licenseInfo, setLicenseInfo] = useState<{ valid: boolean; message: string; expiresAt?: string } | null>(null);
     const [checkingLicense, setCheckingLicense] = useState(false);
     const [mounted, setMounted] = useState(false);
 
     const checkLicense = async () => {
         setCheckingLicense(true);
         try {
-            const store = await Store.load('store.json');
-            const savedKey = await store.get<string>('license_key');
-            if (savedKey) {
-                const res = await invoke<LicenseResponse>('verify_license', { key: savedKey });
-                setLicenseInfo(res);
-            }
+            const res = await licenseService.checkLicense();
+            setLicenseInfo(res);
         } catch (e) {
             console.error(e);
         } finally {
@@ -469,11 +463,11 @@ const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose, initialTab }) =>
                                             <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
                                                 <div className="text-xs text-slate-500 uppercase tracking-widest font-bold mb-1">Expiration Date</div>
                                                 <div className="font-semibold text-slate-800 flex items-center gap-2">
-                                                    {licenseInfo.expires_at ? (
+                                                    {licenseInfo.expiresAt ? (
                                                         <>
-                                                            {new Date(licenseInfo.expires_at).toLocaleDateString()}
+                                                            {new Date(licenseInfo.expiresAt).toLocaleDateString()}
                                                             {(() => {
-                                                                const exp = new Date(licenseInfo.expires_at);
+                                                                const exp = new Date(licenseInfo.expiresAt);
                                                                 const now = new Date();
                                                                 const diff = Math.ceil((exp.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
                                                                 if (diff <= 7 && diff > 0) {
