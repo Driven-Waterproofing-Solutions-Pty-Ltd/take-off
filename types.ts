@@ -61,7 +61,8 @@ export enum Unit {
   LBS = 'lbs',
   PIECES = 'Pcs',
   BOX = 'Box',
-  BUCKET = 'Bucket'
+  BUCKET = 'Bucket',
+  TON = 'Ton'
 }
 
 export interface Point {

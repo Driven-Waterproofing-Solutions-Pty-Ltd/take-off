@@ -167,7 +167,7 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
     const subItemEditRef = useRef<HTMLDivElement>(null);
 
     const availableUnits: Unit[] = Object.values(Unit);
-    const subItemUnits = Array.from(new Set([...Object.values(Unit), 'Sheets', 'Rolls', 'Gallons', 'Lbs', 'Pcs']));
+    const subItemUnits = Array.from(new Set([...Object.values(Unit), 'Sheets', 'Rolls', 'Gallons', 'Lbs', 'Pcs', 'Ton']));
 
     // Extract unique groups from all items
     const existingGroups = Array.from(new Set(

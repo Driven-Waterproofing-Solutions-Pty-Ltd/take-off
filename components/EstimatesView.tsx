@@ -91,21 +91,13 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
             items.filter(i => i.type !== ToolType.NOTE).forEach(item => {
                 const convertedQty = convertValue(item.totalValue, Unit.FEET, item.unit, item.type);
                 const calculated = evaluateFormula(item, convertedQty);
-                const totalCost = calculated * (item.price || 0);
+                let totalCost = calculated * (item.price || 0);
+                let unitPrice = item.price || 0;
 
-                // Main Item Row
-                allData.push({
-                    Group: item.group || 'General',
-                    Label: item.label,
-                    Type: item.type,
-                    Qty: Number(calculated.toFixed(2)),
-                    Unit: item.unit,
-                    UnitPrice: item.price || 0,
-                    TotalCost: totalCost,
-                    Pages: Array.from(new Set(item.shapes.map(s => Number(s.pageIndex) + 1))).sort((a: number, b: number) => a - b).join(', '),
-                });
+                // Calculate sub-items first to check if we need to derive unit price
+                const subItemRows: any[] = [];
+                let subItemsTotal = 0;
 
-                // Sub Items Rows (Contextual)
                 if (item.subItems && item.subItems.length > 0) {
                     const subContext: Record<string, number> = {};
 
@@ -116,7 +108,9 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                         if (varName) subContext[varName] = subQty;
 
                         const subTotal = subQty * sub.price;
-                        allData.push({
+                        subItemsTotal += subTotal;
+
+                        subItemRows.push({
                             Group: item.group || 'General',
                             Label: `  ↳ ${sub.label}`,
                             Type: 'Sub-Item',
@@ -128,6 +122,34 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                         });
                     });
                 }
+
+                // If unit price is empty/zero but we have sub-items with costs, derive unit price
+                if ((!item.price || item.price === 0) && subItemsTotal > 0 && calculated > 0) {
+                    totalCost = subItemsTotal;
+                    unitPrice = totalCost / calculated;
+                } else {
+                    // Otherwise calculate the total from the item unit price as it is currently
+                    // This means we DO NOT add sub-items total to the main item total if the main item has a price
+                    // The user instruction says: "otherwise calculate the total from the item unit price as it is currently"
+                    // Current behavior (before my changes) was: const totalCost = calculated * (item.price || 0);
+                    // So we revert to that simple calculation if we are not in the "empty unit price" scenario.
+                    totalCost = calculated * (item.price || 0);
+                }
+
+                // Main Item Row
+                allData.push({
+                    Group: item.group || 'General',
+                    Label: item.label,
+                    Type: item.type,
+                    Qty: Number(calculated.toFixed(2)),
+                    Unit: item.unit,
+                    UnitPrice: unitPrice,
+                    TotalCost: totalCost,
+                    Pages: Array.from(new Set(item.shapes.map(s => Number(s.pageIndex) + 1))).sort((a: number, b: number) => a - b).join(', '),
+                });
+
+                // Add Sub Items Rows
+                allData.push(...subItemRows);
             });
 
             const ws = XLSX.utils.json_to_sheet(allData);
@@ -518,6 +540,7 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                                         const convertedQty = convertValue(item.totalValue, Unit.FEET, item.unit, item.type);
                                         const qty = evaluateFormula(item, convertedQty);
                                         let itemTotal = qty * (item.price || 0);
+                                        let subItemsTotal = 0;
 
                                         // Add Sub Items cost (Calculation Context)
                                         if (item.subItems) {
@@ -528,9 +551,51 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                                                 const varName = toVariableName(sub.label);
                                                 if (varName) subContext[varName] = subQty;
 
-                                                itemTotal += (subQty * sub.price);
+                                                subItemsTotal += (subQty * sub.price);
                                             });
                                         }
+
+                                        // If unit price is empty/zero but we have sub-items with costs, use sub-items total
+                                        if ((!item.price || item.price === 0) && subItemsTotal > 0) {
+                                            itemTotal = subItemsTotal;
+                                        } else {
+                                            // Otherwise calculate as currently (just item price * qty) + subItemsTotal
+                                            // Wait, the original code was:
+                                            // itemTotal = qty * (item.price || 0);
+                                            // ...
+                                            // itemTotal += (subQty * sub.price);
+                                            // So it WAS adding sub-items to the total.
+                                            // "otherwise calculate the total from the item unit price as it is currently"
+                                            // implies we should keep the original behavior which INCLUDED sub-items in the group total.
+                                            // The group total logic I wrote:
+                                            // itemTotal = qty * (item.price || 0);
+                                            // ...
+                                            // itemTotal += subItemsTotal;
+                                            // This matches the original behavior for the group total calculation.
+                                            // Original: itemTotal += (subQty * sub.price); inside the loop.
+                                            // My change: subItemsTotal += ... inside loop, then itemTotal += subItemsTotal.
+                                            // So this part is actually correct for the GROUP total.
+                                            // The issue might be in the Excel export logic where I might have deviated.
+                                            // Let's double check the Excel export logic I just changed.
+                                            
+                                            // Re-reading the user request: "on item with sub-items , if unit price is left empty , then calculate the total from the sub-items total price, and then divide that by qty , to find the unit price , this can happen if the sub-items have unit price and total price. otherwise calculate the total from the item unit price as it is currently."
+                                            
+                                            // "otherwise calculate the total from the item unit price as it is currently"
+                                            // In the Excel export, the original code was:
+                                            // const totalCost = calculated * (item.price || 0);
+                                            // It did NOT add sub-items to the main item's TotalCost column.
+                                            // Sub-items were listed as separate rows below.
+                                            
+                                            // So for the Excel export, "as it is currently" means totalCost = calculated * item.price.
+                                            // It does NOT include sub-items total.
+                                            
+                                            // However, for the Group Total in the UI (lines 517+), the original code WAS adding sub-items.
+                                            // So I should leave the Group Total logic alone (it sums everything).
+                                            
+                                            // But I need to fix the Excel export logic above.
+                                            itemTotal += subItemsTotal;
+                                        }
+
                                         return sum + itemTotal;
                                     }, 0);
 
@@ -589,10 +654,39 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                                             {!isCollapsed && groupItems.map(item => {
                                                 const convertedQty = convertValue(item.totalValue, Unit.FEET, item.unit, item.type);
                                                 const calculatedValue = evaluateFormula(item, convertedQty);
-                                                const itemTotalCost = calculatedValue * (item.price || 0);
+                                                let itemTotalCost = calculatedValue * (item.price || 0);
+                                                let displayUnitPrice = item.price || 0;
+                                                let subItemsTotal = 0;
 
                                                 // Context for sub-item calculations
                                                 const subContext: Record<string, number> = {};
+
+                                                // Pre-calculate sub-items to determine total cost logic
+                                                if (item.subItems) {
+                                                    // We need a temporary context for this pre-calculation to not affect the render loop
+                                                    const tempContext: Record<string, number> = {};
+                                                    item.subItems.forEach(sub => {
+                                                        const subQty = evaluateFormula(item, convertedQty, sub.formula, tempContext);
+                                                        const varName = toVariableName(sub.label);
+                                                        if (varName) tempContext[varName] = subQty;
+                                                        subItemsTotal += (subQty * sub.price);
+                                                    });
+                                                }
+
+                                                // If unit price is empty/zero but we have sub-items with costs, derive unit price
+                                                if ((!item.price || item.price === 0) && subItemsTotal > 0) {
+                                                    itemTotalCost = subItemsTotal;
+                                                    if (calculatedValue > 0) {
+                                                        displayUnitPrice = itemTotalCost / calculatedValue;
+                                                    }
+                                                } else {
+                                                    // Otherwise calculate as currently
+                                                    // Original UI code: const itemTotalCost = calculatedValue * (item.price || 0);
+                                                    // It did NOT add sub-items to the main row's total cost in the UI table either.
+                                                    // Sub-items are displayed in their own rows.
+                                                    // So I should NOT add subItemsTotal here.
+                                                    itemTotalCost = calculatedValue * (item.price || 0);
+                                                }
 
                                                 return (
                                                     <React.Fragment key={item.id}>
@@ -638,7 +732,7 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                                                                 {item.unit}
                                                             </td>
                                                             <td className="px-6 py-3 text-right text-slate-600 text-sm font-medium">
-                                                                {item.price ? `$${item.price.toFixed(2)}` : '-'}
+                                                                {displayUnitPrice > 0 ? `$${displayUnitPrice.toFixed(2)}` : '-'}
                                                             </td>
                                                             <td className="px-6 py-3 text-right font-semibold text-slate-700">
                                                                 {itemTotalCost > 0 ? `$${itemTotalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}
