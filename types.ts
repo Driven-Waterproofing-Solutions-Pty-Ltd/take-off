@@ -187,4 +187,5 @@ export interface LicenseResponse {
   message: string;
   token?: string;
   expires_at?: string;
+  license_type?: 'trial' | 'paid';
 }

@@ -11,6 +11,7 @@ export interface LicenseStatus {
     message: string;
     expiresAt?: string;
     licenseKey?: string;
+    licenseType?: 'trial' | 'paid';
 }
 
 export const licenseService = {
@@ -65,6 +66,7 @@ export const licenseService = {
                     message: data.message,
                     expiresAt: data.expires_at,
                     licenseKey: licenseKey,
+                    licenseType: data.license_type,
                 };
             } else {
                 // No license found, attempt to start trial
@@ -93,7 +95,8 @@ export const licenseService = {
                     valid: true,
                     message: 'Trial started successfully.',
                     expiresAt: data.expires_at,
-                    licenseKey: data.license_key
+                    licenseKey: data.license_key,
+                    licenseType: data.license_type || 'trial',
                 };
             } else {
                 // Trial failed (e.g., machine already used)
@@ -122,7 +125,8 @@ export const licenseService = {
         return {
             valid: data.valid,
             message: data.message,
-            expiresAt: data.expires_at
+            expiresAt: data.expires_at,
+            licenseType: data.license_type,
         };
     }
 };

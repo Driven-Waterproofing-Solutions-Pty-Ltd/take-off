@@ -8,6 +8,7 @@ pub struct LicenseResponse {
     message: String,
     token: Option<String>,
     expires_at: Option<String>,
+    license_type: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -22,6 +23,7 @@ struct RpcResponse {
     valid: bool,
     message: String,
     expires_at: Option<String>,
+    license_type: Option<String>,
 }
 
 const SUPABASE_URL: &str = "https://poyashauvewhifohkxeg.supabase.co";
@@ -63,6 +65,7 @@ pub async fn verify_license(key: String) -> Result<LicenseResponse, String> {
                             message: rpc_data.message,
                             token: None, // We aren't using this token field much, but keeping for compatibility
                             expires_at: rpc_data.expires_at,
+                            license_type: rpc_data.license_type,
                         });
                     },
                     Err(_) => {
@@ -71,16 +74,18 @@ pub async fn verify_license(key: String) -> Result<LicenseResponse, String> {
                             message: "Failed to parse license server response".to_string(),
                             token: None,
                             expires_at: None,
+                            license_type: None,
                         });
                     }
                 }
-            } else {
+             } else {
                  // Try to get error text
                  return Ok(LicenseResponse {
                     valid: false,
                     message: "Server returned error".to_string(),
                     token: None,
                     expires_at: None,
+                    license_type: None,
                 });
             }
         }
@@ -98,5 +103,6 @@ pub async fn verify_license(key: String) -> Result<LicenseResponse, String> {
         message: "Could not verify license (Network error and offline check failed)".to_string(),
         token: None,
         expires_at: None,
+        license_type: None,
     })
 }

@@ -1,16 +1,24 @@
-import React, { useState } from 'react';
-import { ShieldCheck, Key, Loader2, AlertCircle } from 'lucide-react';
-import { licenseService } from '../services/licenseService';
+import React, { useState, useEffect } from 'react';
+import { ShieldCheck, Key, Loader2, AlertCircle, Crown, AlertTriangle, Clock } from 'lucide-react';
+import { licenseService, LicenseStatus } from '../services/licenseService';
 
 interface LicenseModalProps {
     onSuccess: () => void;
     initialMessage?: string | null;
+    currentLicenseStatus?: LicenseStatus | null;
 }
 
-const LicenseModal: React.FC<LicenseModalProps> = ({ onSuccess, initialMessage }) => {
+const LicenseModal: React.FC<LicenseModalProps> = ({ onSuccess, initialMessage, currentLicenseStatus }) => {
     const [key, setKey] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(initialMessage || null);
+    const [licenseStatus, setLicenseStatus] = useState<LicenseStatus | null>(currentLicenseStatus || null);
+
+    useEffect(() => {
+        if (currentLicenseStatus) {
+            setLicenseStatus(currentLicenseStatus);
+        }
+    }, [currentLicenseStatus]);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -23,6 +31,7 @@ const LicenseModal: React.FC<LicenseModalProps> = ({ onSuccess, initialMessage }
             const response = await licenseService.activateKey(key.trim());
 
             if (response.valid) {
+                setLicenseStatus(response);
                 onSuccess();
             } else {
                 setError(response.message || "Invalid License Key.");
@@ -35,17 +44,78 @@ const LicenseModal: React.FC<LicenseModalProps> = ({ onSuccess, initialMessage }
         }
     };
 
+    // Calculate days until expiration
+    const getDaysUntilExpiration = () => {
+        if (!licenseStatus?.expiresAt) return null;
+        const expiryDate = new Date(licenseStatus.expiresAt);
+        const now = new Date();
+        const diffTime = expiryDate.getTime() - now.getTime();
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        return diffDays;
+    };
+
+    const daysLeft = getDaysUntilExpiration();
+    const isExpiringSoon = daysLeft !== null && daysLeft > 0 && daysLeft <= 7;
+    const isExpired = daysLeft !== null && daysLeft <= 0;
+    const isTrial = licenseStatus?.licenseType === 'trial';
+    const isPaid = licenseStatus?.licenseType === 'paid';
+
     return (
         <div className="fixed inset-0 z-[200] bg-slate-900 flex items-center justify-center p-4">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8 animate-in zoom-in-95 duration-300">
                 <div className="flex flex-col items-center mb-6">
-                    <div className="bg-blue-100 p-4 rounded-full text-blue-600 mb-4">
-                        <ShieldCheck size={48} />
+                    <div className={`p-4 rounded-full mb-4 ${isPaid ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'}`}>
+                        {isPaid ? <Crown size={48} /> : <ShieldCheck size={48} />}
                     </div>
                     <h1 className="text-2xl font-bold text-slate-900">ProTakeoff Activation</h1>
-                    <p className="text-slate-500 text-center mt-2">
-                        Please enter your serial key to activate the software.
-                    </p>
+
+                    {/* License Type Badge */}
+                    {licenseStatus?.valid && (
+                        <div className="mt-3 flex items-center gap-2">
+                            <span className={`px-3 py-1 rounded-full text-xs font-semibold ${isPaid ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'
+                                }`}>
+                                {isPaid ? '✓ Paid License' : '⏱ Trial License'}
+                            </span>
+                        </div>
+                    )}
+
+                    {/* Expiration Warning */}
+                    {licenseStatus?.valid && isTrial && (
+                        <div className="mt-3 w-full">
+                            {isExpired ? (
+                                <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-2">
+                                    <AlertCircle className="text-red-600 flex-shrink-0 mt-0.5" size={18} />
+                                    <div className="text-sm">
+                                        <p className="font-semibold text-red-800">Trial Expired</p>
+                                        <p className="text-red-600">Your trial has ended. Upgrade to continue using ProTakeoff.</p>
+                                    </div>
+                                </div>
+                            ) : isExpiringSoon ? (
+                                <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 flex items-start gap-2">
+                                    <AlertTriangle className="text-orange-600 flex-shrink-0 mt-0.5" size={18} />
+                                    <div className="text-sm">
+                                        <p className="font-semibold text-orange-800">Trial Expiring Soon</p>
+                                        <p className="text-orange-600">
+                                            {daysLeft} {daysLeft === 1 ? 'day' : 'days'} remaining. Upgrade to keep access.
+                                        </p>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center gap-2">
+                                    <Clock className="text-blue-600 flex-shrink-0" size={16} />
+                                    <p className="text-sm text-blue-700">
+                                        Trial expires in <strong>{daysLeft} days</strong>
+                                    </p>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {!licenseStatus?.valid && (
+                        <p className="text-slate-500 text-center mt-2">
+                            Please enter your serial key to activate the software.
+                        </p>
+                    )}
                 </div>
 
                 <form onSubmit={handleSubmit} className="space-y-4">
@@ -86,9 +156,30 @@ const LicenseModal: React.FC<LicenseModalProps> = ({ onSuccess, initialMessage }
                     </button>
                 </form>
 
-                <div className="mt-6 text-center">
-                    <a href="#" className="text-sm text-blue-600 hover:underline">Purchase a license key</a>
-                </div>
+                {/* Upgrade CTA for Trial Users */}
+                {isTrial && (
+                    <div className="mt-6 p-4 bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg border border-blue-100">
+                        <div className="flex items-center gap-2 mb-2">
+                            <Crown className="text-purple-600" size={20} />
+                            <h3 className="font-semibold text-slate-900">Upgrade to Paid License</h3>
+                        </div>
+                        <p className="text-sm text-slate-600 mb-3">
+                            Get lifetime access and unlock premium templates from our library.
+                        </p>
+                        <a
+                            href="#"
+                            className="block text-center bg-gradient-to-r from-blue-600 to-purple-600 text-white py-2 rounded-lg font-semibold hover:from-blue-700 hover:to-purple-700 transition-all"
+                        >
+                            Purchase License Key
+                        </a>
+                    </div>
+                )}
+
+                {!licenseStatus?.valid && (
+                    <div className="mt-6 text-center">
+                        <a href="#" className="text-sm text-blue-600 hover:underline">Purchase a license key</a>
+                    </div>
+                )}
             </div>
         </div>
     );
