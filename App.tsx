@@ -586,6 +586,24 @@ const App: React.FC = () => {
     setHistory({ ...historyState, items: newItems });
   };
 
+  const handleDeleteShapes = (shapesToDelete: { itemId: string, shapeId: string }[]) => {
+    // Create a Set of shape IDs for fast lookup
+    const shapeIdSet = new Set(shapesToDelete.map(s => s.shapeId));
+
+    // Process all deletions in a single pass
+    const newItems = items.map(item => {
+      const newShapes = item.shapes.filter(shape => !shapeIdSet.has(shape.id));
+      if (newShapes.length !== item.shapes.length) {
+        // This item had shapes deleted, recalculate total
+        const newTotal = calculateTotalValue(newShapes);
+        return { ...item, shapes: newShapes, totalValue: newTotal };
+      }
+      return item;
+    });
+
+    setHistory({ ...historyState, items: newItems });
+  };
+
   const handleResumeTakeoff = (id: string) => {
     const item = items.find(i => i.id === id);
     if (item) {
@@ -716,7 +734,7 @@ const App: React.FC = () => {
               onPageWidthChange={setPdfPageWidth} activeTool={activeTool} items={items} activeTakeoffId={activeTakeoffId} isDeductionMode={isDeductionMode}
               onEnableDeduction={handleEnableDeductionMode} onSelectTakeoffItem={setActiveTakeoffId} onShapeCreated={handleShapeCreated}
               onUpdateShape={handleUpdateShape} onUpdateShapeTransient={handleUpdateShapeTransient} onSplitShape={handleSplitShape}
-              onUpdateScale={handleUpdateScale} onUpdateLegend={handleUpdateLegend} legendSettings={currentLegend} onDeleteShape={handleDeleteShape}
+              onUpdateScale={handleUpdateScale} onUpdateLegend={handleUpdateLegend} legendSettings={currentLegend} onDeleteShape={handleDeleteShape} onDeleteShapes={handleDeleteShapes}
               onStopRecording={handleStopTakeoff} onInteractionEnd={commitHistory}
               scaleInfo={{ isSet: currentScale.isSet, ppu: currentScale.pixelsPerUnit, unit: currentScale.unit }}
               zoomLevel={zoomLevel} setZoomLevel={setZoomLevel} pendingPreset={pendingPreset} clearPendingPreset={() => setPendingPreset(null)} />

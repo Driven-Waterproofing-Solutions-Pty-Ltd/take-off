@@ -34,6 +34,7 @@ interface BlueprintCanvasProps {
     onUpdateLegend: (settings: Partial<LegendSettings>) => void;
     legendSettings: LegendSettings;
     onDeleteShape: (itemId: string, shapeId: string) => void;
+    onDeleteShapes?: (shapes: { itemId: string, shapeId: string }[]) => void;
     onStopRecording: () => void;
     scaleInfo: { isSet: boolean, ppu: number, unit: Unit };
     zoomLevel: number;
@@ -74,6 +75,75 @@ const getClosestPointOnSegment = (p: Point, a: Point, b: Point): Point => {
     };
 };
 
+// Helper: Check if a point is inside a rectangle
+const isPointInRect = (point: Point, rectStart: Point, rectEnd: Point): boolean => {
+    const minX = Math.min(rectStart.x, rectEnd.x);
+    const maxX = Math.max(rectStart.x, rectEnd.x);
+    const minY = Math.min(rectStart.y, rectEnd.y);
+    const maxY = Math.max(rectStart.y, rectEnd.y);
+    return point.x >= minX && point.x <= maxX && point.y >= minY && point.y <= maxY;
+};
+
+// Helper: Check if a line segment intersects with a rectangle
+const isSegmentIntersectingRect = (p1: Point, p2: Point, rectStart: Point, rectEnd: Point): boolean => {
+    // If either endpoint is inside the rectangle, it intersects
+    if (isPointInRect(p1, rectStart, rectEnd) || isPointInRect(p2, rectStart, rectEnd)) {
+        return true;
+    }
+
+    // Check if the segment crosses any of the rectangle's edges
+    const minX = Math.min(rectStart.x, rectEnd.x);
+    const maxX = Math.max(rectStart.x, rectEnd.x);
+    const minY = Math.min(rectStart.y, rectEnd.y);
+    const maxY = Math.max(rectStart.y, rectEnd.y);
+
+    const rectCorners = [
+        { x: minX, y: minY },
+        { x: maxX, y: minY },
+        { x: maxX, y: maxY },
+        { x: minX, y: maxY }
+    ];
+
+    // Check intersection with each edge of the rectangle
+    for (let i = 0; i < 4; i++) {
+        const r1 = rectCorners[i];
+        const r2 = rectCorners[(i + 1) % 4];
+
+        // Line segment intersection check
+        const denom = (p2.y - p1.y) * (r2.x - r1.x) - (p2.x - p1.x) * (r2.y - r1.y);
+        if (Math.abs(denom) > 0.0001) {
+            const ua = ((p2.x - p1.x) * (r1.y - p1.y) - (p2.y - p1.y) * (r1.x - p1.x)) / denom;
+            const ub = ((r2.x - r1.x) * (r1.y - p1.y) - (r2.y - r1.y) * (r1.x - p1.x)) / denom;
+            if (ua >= 0 && ua <= 1 && ub >= 0 && ub <= 1) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+};
+
+// Helper: Check if a shape intersects with the selection rectangle
+const isShapeIntersectingRect = (shape: Shape, rectStart: Point, rectEnd: Point): boolean => {
+    // Check if any point is inside the rectangle
+    for (const point of shape.points) {
+        if (isPointInRect(point, rectStart, rectEnd)) {
+            return true;
+        }
+    }
+
+    // For shapes with multiple points, check if any segment intersects
+    if (shape.points.length > 1) {
+        for (let i = 0; i < shape.points.length - 1; i++) {
+            if (isSegmentIntersectingRect(shape.points[i], shape.points[i + 1], rectStart, rectEnd)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+};
+
 const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     file,
     localPageIndex,
@@ -93,6 +163,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     onUpdateLegend,
     legendSettings,
     onDeleteShape,
+    onDeleteShapes,
     onStopRecording,
     scaleInfo,
     zoomLevel,
@@ -140,6 +211,19 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     const [noteModal, setNoteModal] = useState<{ isOpen: boolean, text: string, itemId?: string, shapeId?: string, points?: Point[] }>({ isOpen: false, text: '' });
     // Context Menu State
     const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+
+    // Rectangle Selection State
+    const [selectionRect, setSelectionRect] = useState<{ start: Point, end: Point, active: boolean } | null>(null);
+    const [selectedItems, setSelectedItems] = useState<{ itemId: string, shapeId: string }[]>([]);
+    const [isRectSelecting, setIsRectSelecting] = useState(false);
+    const justCompletedRectSelection = useRef(false);
+    const isDeletingRef = useRef(false);
+    const selectedItemsRef = useRef<{ itemId: string, shapeId: string }[]>([]);
+
+    // Keep ref in sync with state
+    useEffect(() => {
+        selectedItemsRef.current = selectedItems;
+    }, [selectedItems]);
 
     // Calculate visual scale factor to keep lines/markers constant size on screen
     const currentScale = zoomLevel / RENDER_SCALE;
@@ -192,7 +276,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             setFileUrl(null);
             return;
         }
-        
+
         // If it's already a URL string (unlikely given types but possible), use it
         if (typeof file === 'string') {
             setFileUrl(file);
@@ -270,16 +354,65 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 return;
             }
 
-            if ((e.key === 'Delete' || e.key === 'Backspace') && selectedShape) {
-                e.preventDefault();
-                e.stopPropagation();
-                onDeleteShape(selectedShape.itemId, selectedShape.shapeId);
-                setSelectedShape(null);
+            // Delete selected items (either single or multiple)
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                // Use ref to get current value and avoid stale closures
+                const currentSelectedItems = selectedItemsRef.current;
+
+                if (currentSelectedItems.length > 0) {
+                    // Prevent multiple rapid deletions
+                    if (isDeletingRef.current) {
+                        console.log('[BATCH DELETE] Already deleting, ignoring duplicate event');
+                        e.preventDefault();
+                        e.stopPropagation();
+                        return;
+                    }
+
+                    e.preventDefault();
+                    e.stopPropagation();
+                    isDeletingRef.current = true;
+
+                    console.log('[BATCH DELETE] Starting batch deletion');
+                    console.log('[BATCH DELETE] Selected items count:', currentSelectedItems.length);
+                    console.log('[BATCH DELETE] Selected items:', currentSelectedItems);
+
+                    // Clear selection first
+                    setSelectedItems([]);
+
+                    // Use batch delete if available, otherwise fall back to individual deletes
+                    if (onDeleteShapes) {
+                        console.log('[BATCH DELETE] Using batch delete API');
+                        onDeleteShapes(currentSelectedItems);
+                        console.log('[BATCH DELETE] Batch delete completed');
+                    } else {
+                        console.log('[BATCH DELETE] No batch API, using individual deletes');
+                        currentSelectedItems.forEach(({ itemId, shapeId }, index) => {
+                            console.log(`[BATCH DELETE] Deleting item ${index + 1}/${currentSelectedItems.length}:`, { itemId, shapeId });
+                            onDeleteShape(itemId, shapeId);
+                        });
+                        console.log('[BATCH DELETE] Individual deletes completed');
+                    }
+
+                    // Reset the deletion flag
+                    setTimeout(() => {
+                        isDeletingRef.current = false;
+                        console.log('[BATCH DELETE] Deletion flag reset');
+                    }, 100);
+                } else if (selectedShape) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('[SINGLE DELETE] Deleting single shape:', selectedShape);
+                    onDeleteShape(selectedShape.itemId, selectedShape.shapeId);
+                    setSelectedShape(null);
+                }
             }
 
             if (e.key === 'Escape') {
                 if (contextMenu) {
                     setContextMenu(null);
+                } else if (selectedItems.length > 0) {
+                    // Clear rectangle selection
+                    setSelectedItems([]);
                 } else if (activeTool !== ToolType.SELECT) {
                     onStopRecording();
                 } else if (selectedShape) {
@@ -306,7 +439,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         // Use capture: true to ensure this handler runs before global shortcuts
         window.addEventListener('keydown', handleKeyDown, { capture: true });
         return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
-    }, [selectedShape, drawingPoints, showScaleModal, activeTool, onStopRecording, contextMenu]);
+    }, [selectedShape, selectedItems, drawingPoints, showScaleModal, activeTool, onStopRecording, contextMenu]);
 
     useEffect(() => {
         if (activeTool !== ToolType.SELECT) {
@@ -319,7 +452,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     const updateTransform = (x: number, y: number, scale: number) => {
         transform.current = { x, y, scale };
         const transformString = `translate(${x}px, ${y}px) scale(${scale})`;
-        
+
         // Apply CSS transform to PDF for performance
         if (containerRef.current) {
             containerRef.current.style.transform = transformString;
@@ -376,14 +509,24 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         const isMiddleClick = e.button === 1;
         const isSelectToolLeftClick = activeTool === ToolType.SELECT && e.button === 0;
 
-        // If dragging vertex, we don't pan
+        // If dragging vertex, we don't pan or select
         if (draggedVertex) return;
 
-        // Panning condition
-        if ((isSelectToolLeftClick || isMiddleClick) && viewportRef.current) {
-            // Check if clicking on shape or blank area is handled by SVG events falling through
-            // because SVG has pointer-events-none but shapes have pointer-events-auto.
-            // If e.target is the SVG background (which we don't have now since it's transparent/none), it falls through to viewport.
+        // For SELECT tool with left click, we need to determine if this is:
+        // 1. Clicking on a shape (handled by shape's onClick)
+        // 2. Dragging to create selection rectangle (handled here)
+        // 3. Panning (middle click or after rectangle selection fails)
+
+        if (isSelectToolLeftClick && viewportRef.current) {
+            // Start tracking for potential rectangle selection
+            const point = getInternalCoordinates(e.clientX, e.clientY);
+            setSelectionRect({ start: point, end: point, active: true });
+            setIsRectSelecting(false); // Not yet confirmed as rect selection
+            dragStart.current = { x: e.clientX, y: e.clientY };
+            transformStart.current = { x: transform.current.x, y: transform.current.y };
+            e.preventDefault();
+        } else if (isMiddleClick && viewportRef.current) {
+            // Middle click always pans
             setIsDragging(true);
             dragStart.current = { x: e.clientX, y: e.clientY };
             transformStart.current = { x: transform.current.x, y: transform.current.y };
@@ -445,6 +588,23 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             return;
         }
 
+        // Handle rectangle selection dragging
+        if (selectionRect && selectionRect.active && activeTool === ToolType.SELECT) {
+            const currentPoint = getInternalCoordinates(e.clientX, e.clientY);
+            setSelectionRect({ ...selectionRect, end: currentPoint });
+
+            // If we've moved more than a few pixels, confirm this is a rectangle selection
+            const dx = e.clientX - dragStart.current.x;
+            const dy = e.clientY - dragStart.current.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            if (distance > 5 && !isRectSelecting) {
+                setIsRectSelecting(true);
+                setIsDragging(false); // Not panning
+            }
+            return;
+        }
+
         if (isDragging) {
             const dx = e.clientX - dragStart.current.x;
             const dy = e.clientY - dragStart.current.y;
@@ -469,6 +629,42 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     };
 
     const handleMouseUp = () => {
+        // Handle rectangle selection finalization
+        if (isRectSelecting && selectionRect && selectionRect.active) {
+            const { start, end } = selectionRect;
+            const selected: { itemId: string, shapeId: string }[] = [];
+
+            // Find all shapes that intersect with the selection rectangle
+            items.forEach(item => {
+                if (item.visible === false) return;
+
+                item.shapes
+                    .filter(shape => shape.pageIndex === globalPageIndex)
+                    .forEach(shape => {
+                        if (isShapeIntersectingRect(shape, start, end)) {
+                            selected.push({ itemId: item.id, shapeId: shape.id });
+                        }
+                    });
+            });
+
+            setSelectedItems(selected);
+            setSelectionRect(null);
+            setIsRectSelecting(false);
+
+            // Set flag to prevent immediate clearing by handleSvgClick
+            justCompletedRectSelection.current = true;
+            setTimeout(() => {
+                justCompletedRectSelection.current = false;
+            }, 100);
+
+            return;
+        }
+
+        // Clear selection rect if it was just a click (not a drag)
+        if (selectionRect && selectionRect.active && !isRectSelecting) {
+            setSelectionRect(null);
+        }
+
         if (draggedVertex) {
             // Do NOT clear selectedShape here, as that would deselect the item after dragging a point
             // setSelectedShape(null); 
@@ -555,9 +751,22 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 
         if (activeTool === ToolType.SELECT) {
             if (draggedVertex) return;
-            // Clicking on empty SVG space clears selection
-            setSelectedShape(null);
-            onSelectTakeoffItem(null);
+
+            // Don't clear if we just completed a rectangle selection
+            if (justCompletedRectSelection.current) return;
+
+            // Only clear selection if:
+            // 1. We have items already selected (not during the selection process)
+            // 2. We're not currently doing a rectangle selection
+            if (selectedItems.length > 0 && !isRectSelecting && !selectionRect?.active) {
+                setSelectedItems([]);
+            }
+
+            // Also clear single shape selection
+            if (selectedShape && !isRectSelecting && !selectionRect?.active) {
+                setSelectedShape(null);
+                onSelectTakeoffItem(null);
+            }
             return;
         }
 
@@ -947,442 +1156,535 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                         <g ref={svgLayerRef} onClick={handleSvgClick}>
                             <rect width={contentWidth} height={pdfAspectRatio ? contentWidth * pdfAspectRatio : '100%'} fill="transparent" style={{ pointerEvents: 'auto' }} />
                             <defs>
-                                    {items.filter(i => i.type === ToolType.AREA && i.visible !== false).map(item => {
-                                        const pageShapes = item.shapes.filter(s => s.pageIndex === globalPageIndex);
-                                        if (pageShapes.length === 0) return null;
-
-                                        const deductions = pageShapes.filter(s => s.deduction);
-                                        if (deductions.length === 0 && !isDeductionMode) return null;
-
-                                        return (
-                                            <mask 
-                                                key={`mask-${item.id}`} 
-                                                id={`mask-${item.id}`} 
-                                                maskUnits="userSpaceOnUse"
-                                                maskContentUnits="userSpaceOnUse"
-                                                x="-50000" y="-50000" width="100000" height="100000"
-                                            >
-                                                {/* White background: reveal everything */}
-                                                <rect x="-50000" y="-50000" width="100000" height="100000" fill="white" />
-                                                
-                                                {/* Black shapes: hide these parts (deductions) */}
-                                                {deductions.map(shape => (
-                                                    <polygon
-                                                        key={shape.id}
-                                                        points={shape.points.map(p => `${p.x},${p.y}`).join(' ')}
-                                                        fill="black"
-                                                    />
-                                                ))}
-                                                
-                                                {/* Live deduction preview */}
-                                                {isDeductionMode && activeTakeoffId === item.id && drawingPoints.length > 0 && (
-                                                    <polygon
-                                                        points={[...drawingPoints, tempPoint].filter(Boolean).map(p => `${p!.x},${p!.y}`).join(' ')}
-                                                        fill="black"
-                                                    />
-                                                )}
-                                            </mask>
-                                        );
-                                    })}
-
-                                    {items.filter(i => i.type === ToolType.NOTE).map(item => (
-                                        <marker
-                                            key={`arrowhead-${item.id}`}
-                                            id={`arrowhead-${item.id}`}
-                                            markerWidth="10"
-                                            markerHeight="7"
-                                            refX="9"
-                                            refY="3.5"
-                                            orient="auto"
-                                        >
-                                            <polygon points="0 0, 10 3.5, 0 7" fill={item.color} />
-                                        </marker>
-                                    ))}
-                                </defs>
-
-                                {sortedItems.map(item => {
-                                    if (item.visible === false) return null;
+                                {items.filter(i => i.type === ToolType.AREA && i.visible !== false).map(item => {
                                     const pageShapes = item.shapes.filter(s => s.pageIndex === globalPageIndex);
                                     if (pageShapes.length === 0) return null;
 
-                                    const positiveShapes = pageShapes.filter(s => !s.deduction);
-                                    const negativeShapes = pageShapes.filter(s => s.deduction);
-                                    const hasMask = negativeShapes.length > 0 || (isDeductionMode && activeTakeoffId === item.id);
-                                    const isItemActive = activeTakeoffId === item.id;
+                                    const deductions = pageShapes.filter(s => s.deduction);
+                                    if (deductions.length === 0 && !isDeductionMode) return null;
 
                                     return (
-                                        <g key={item.id} style={{ pointerEvents: 'auto' }}>
-                                            <g mask={hasMask ? `url(#mask-${item.id})` : undefined}>
-                                                {positiveShapes.map(shape => {
-                                                    const isShapeSelected = selectedShape?.shapeId === shape.id; // Specific shape selected
-                                                    
-                                                    // Highlighting logic:
-                                                    // If no specific shape selected (sidebar selection), highlight all shapes of active item.
-                                                    // If specific shape selected, highlight only that shape (and its holes via focusedShapeIds).
-                                                    const inFocus = focusedShapeIds.has(shape.id);
-                                                    const isHighlighted = isItemActive && (selectedShape ? inFocus : true);
+                                        <mask
+                                            key={`mask-${item.id}`}
+                                            id={`mask-${item.id}`}
+                                            maskUnits="userSpaceOnUse"
+                                            maskContentUnits="userSpaceOnUse"
+                                            x="-50000" y="-50000" width="100000" height="100000"
+                                        >
+                                            {/* White background: reveal everything */}
+                                            <rect x="-50000" y="-50000" width="100000" height="100000" fill="white" />
 
-                                                    const opacity = isHighlighted ? 1 : 0.6;
-                                                    const strokeWidth = (isHighlighted ? 6 : 4) * visualScaleFactor;
-                                                    const markerStrokeWidth = 2 * visualScaleFactor;
-                                                    const radius = (isHighlighted ? 12 : 8) * visualScaleFactor;
+                                            {/* Black shapes: hide these parts (deductions) */}
+                                            {deductions.map(shape => (
+                                                <polygon
+                                                    key={shape.id}
+                                                    points={shape.points.map(p => `${p.x},${p.y}`).join(' ')}
+                                                    fill="black"
+                                                />
+                                            ))}
 
-                                                    const handleShapeClick = (e: React.MouseEvent) => {
-                                                        if (activeTool === ToolType.SELECT) {
-                                                            e.stopPropagation();
-                                                            // Select specific shape
-                                                            setSelectedShape({ itemId: item.id, shapeId: shape.id });
-                                                            onSelectTakeoffItem(item.id);
-                                                        }
-                                                    };
-
-                                                    const handleShapeMouseDown = (e: React.MouseEvent) => {
-                                                        if (activeTool === ToolType.SELECT && !draggedVertex) {
-                                                            e.stopPropagation();
-                                                        }
-                                                    };
-
-                                                    if (item.type === ToolType.DIMENSION) {
-                                                        return (
-                                                            <g key={shape.id}>
-                                                                <polyline
-                                                                    points={shape.points.map(p => `${p.x},${p.y}`).join(' ')}
-                                                                    fill="none"
-                                                                    stroke={item.color}
-                                                                    strokeWidth={2 * visualScaleFactor}
-                                                                    style={{ cursor: activeTool === ToolType.SELECT ? 'pointer' : 'crosshair' }}
-                                                                    onClick={handleShapeClick}
-                                                                    onMouseDown={handleShapeMouseDown}
-                                                                    onContextMenu={(e) => activeTool === ToolType.SELECT && handleShapeContextMenu(e, item.id, shape.id)}
-                                                                />
-
-                                                                {shape.points.length >= 2 && (() => {
-                                                                    const p1 = shape.points[0];
-                                                                    const p2 = shape.points[1];
-                                                                    const dx = p2.x - p1.x;
-                                                                    const dy = p2.y - p1.y;
-                                                                    const len = Math.sqrt(dx * dx + dy * dy);
-
-                                                                    if (len === 0) return null;
-
-                                                                    const nx = -dy / len;
-                                                                    const ny = dx / len;
-                                                                    const tickLen = 10 * visualScaleFactor;
-
-                                                                    const t1a = { x: p1.x + nx * tickLen, y: p1.y + ny * tickLen };
-                                                                    const t1b = { x: p1.x - nx * tickLen, y: p1.y - ny * tickLen };
-                                                                    const t2a = { x: p2.x + nx * tickLen, y: p2.y + ny * tickLen };
-                                                                    const t2b = { x: p2.x - nx * tickLen, y: p2.y - ny * tickLen };
-
-                                                                    const mx = (p1.x + p2.x) / 2;
-                                                                    const my = (p1.y + p2.y) / 2;
-
-                                                                    return (
-                                                                        <>
-                                                                            <line x1={t1a.x} y1={t1a.y} x2={t1b.x} y2={t1b.y} stroke={item.color} strokeWidth={2 * visualScaleFactor} />
-                                                                            <line x1={t2a.x} y1={t2a.y} x2={t2b.x} y2={t2b.y} stroke={item.color} strokeWidth={2 * visualScaleFactor} />
-
-                                                                            <foreignObject
-                                                                                x={mx} y={my}
-                                                                                width={120 * visualScaleFactor} height={40 * visualScaleFactor}
-                                                                                className="overflow-visible pointer-events-none"
-                                                                            >
-                                                                                <div className="flex justify-center items-center" style={{ transform: `translate(-50%, -50%) scale(${visualScaleFactor})`, transformOrigin: 'center center' }}>
-                                                                                    <span className="px-1 py-0.5 text-[10px] font-bold bg-white text-slate-800 border border-slate-300 rounded shadow-sm whitespace-nowrap">
-                                                                                        {shape.value.toFixed(2)} {item.unit}
-                                                                                    </span>
-                                                                                </div>
-                                                                            </foreignObject>
-                                                                        </>
-                                                                    );
-                                                                })()}
-                                                            </g>
-                                                        );
-                                                    }
-
-                                                    const TagName = item.type === ToolType.AREA ? 'polygon' : 'polyline';
-
-                                                    return (
-                                                        <React.Fragment key={shape.id}>
-                                                            {item.type === ToolType.COUNT ? (
-                                                                shape.points.map((pt, pIdx) => (
-                                                                    <circle
-                                                                        key={pIdx}
-                                                                        cx={pt.x} cy={pt.y}
-                                                                        r={radius}
-                                                                        fill={item.color}
-                                                                        stroke="white"
-                                                                        strokeWidth={markerStrokeWidth}
-                                                                        strokeOpacity={isHighlighted ? 1 : 0}
-                                                                        fillOpacity={opacity}
-                                                                        style={{ cursor: activeTool === ToolType.SELECT ? 'move' : 'crosshair' }}
-                                                                        onClick={handleShapeClick}
-                                                                        onContextMenu={(e) => activeTool === ToolType.SELECT && handlePointContextMenu(e, item.id, shape.id, pIdx)}
-                                                                        onMouseDown={(e) => {
-                                                                            if (activeTool === ToolType.SELECT && e.button === 0) {
-                                                                                e.stopPropagation();
-                                                                                setSelectedShape({ itemId: item.id, shapeId: shape.id });
-                                                                                setDraggedVertex({ itemId: item.id, shapeId: shape.id, pointIndex: pIdx });
-                                                                                onSelectTakeoffItem(item.id);
-                                                                            }
-                                                                        }}
-                                                                    />
-                                                                ))
-                                                            ) : (
-                                                                <TagName
-                                                                    points={shape.points.map(p => `${p.x},${p.y}`).join(' ')}
-                                                                    fill={item.type === ToolType.AREA ? item.color : 'none'}
-                                                                    fillOpacity={0.2}
-                                                                    stroke={item.color}
-                                                                    strokeWidth={strokeWidth}
-                                                                    strokeOpacity={opacity}
-                                                                    style={{ cursor: activeTool === ToolType.SELECT ? 'pointer' : 'crosshair' }}
-                                                                    onClick={handleShapeClick}
-                                                                    onMouseDown={handleShapeMouseDown}
-                                                                    onContextMenu={(e) => activeTool === ToolType.SELECT && handleShapeContextMenu(e, item.id, shape.id)}
-                                                                />
-                                                            )}
-                                                        </React.Fragment>
-                                                    )
-                                                })}
-                                            </g>
-
-                                            {negativeShapes.map(shape => {
-                                                // Handle cutout selection
-                                                const inFocus = focusedShapeIds.has(shape.id);
-                                                const isHighlighted = isItemActive && (selectedShape ? inFocus : true);
-                                                
-                                                return (
-                                                    <polygon
-                                                        key={shape.id}
-                                                        points={shape.points.map(p => `${p.x},${p.y}`).join(' ')}
-                                                        fill="transparent"
-                                                        stroke={item.color} // Use same color as item
-                                                        strokeWidth={2 * visualScaleFactor}
-                                                        strokeDasharray={`${4 * visualScaleFactor},${4 * visualScaleFactor}`}
-                                                        strokeOpacity={isHighlighted ? 1 : 0.6}
-                                                        style={{ cursor: activeTool === ToolType.SELECT ? 'pointer' : 'crosshair' }}
-                                                        onClick={(e) => {
-                                                            if (activeTool === ToolType.SELECT) {
-                                                                e.stopPropagation();
-                                                                // Select specific cutout shape
-                                                                setSelectedShape({ itemId: item.id, shapeId: shape.id });
-                                                                onSelectTakeoffItem(item.id);
-                                                            }
-                                                        }}
-                                                        onContextMenu={(e) => activeTool === ToolType.SELECT && handleShapeContextMenu(e, item.id, shape.id)}
-                                                    />
-                                                );
-                                            })}
-
-                                            {/* Show handles for all shapes if item is active (Unified Selection) */}
-                                            {pageShapes.filter(s => activeTakeoffId === item.id && item.type !== ToolType.COUNT).map(shape => {
-                                                // Only show handles if this shape is in the focused set (or all are focused if none selected)
-                                                if (selectedShape && !focusedShapeIds.has(shape.id)) return null;
-
-                                                return shape.points.map((pt, idx) => (
-                                                    <circle
-                                                        key={`handle-${shape.id}-${idx}`}
-                                                        cx={pt.x} cy={pt.y}
-                                                        r={6 * visualScaleFactor}
-                                                        fill="white"
-                                                        stroke={item.color} // Use same color as item for both main and deduction shapes
-                                                        strokeWidth={2 * visualScaleFactor}
-                                                        style={{ cursor: 'move' }}
-                                                        onContextMenu={(e) => activeTool === ToolType.SELECT && handlePointContextMenu(e, item.id, shape.id, idx)}
-                                                        onMouseDown={(e) => {
-                                                            if (activeTool === ToolType.SELECT && e.button === 0) {
-                                                                e.stopPropagation();
-                                                                setDraggedVertex({ itemId: item.id, shapeId: shape.id, pointIndex: idx });
-                                                            }
-                                                        }}
-                                                    />
-                                                ))
-                                            })}
-
-                                            {item.type !== ToolType.DIMENSION && positiveShapes.map(shape => {
-                                                // Highlight label if item is active
-                                                const inFocus = focusedShapeIds.has(shape.id);
-                                                const isHighlighted = isItemActive && (selectedShape ? inFocus : true);
-
-                                                if (!isHighlighted || item.type === ToolType.COUNT || shape.points.length === 0) return null;
-
-                                                let labelPos = { x: 0, y: 0 };
-                                                let labelValue = shape.value;
-
-                                                if (item.type === ToolType.AREA) {
-                                                    const cx = shape.points.reduce((s, p) => s + p.x, 0) / shape.points.length;
-                                                    const cy = shape.points.reduce((s, p) => s + p.y, 0) / shape.points.length;
-                                                    labelPos = { x: cx, y: cy };
-
-                                                    const containedDeductions = negativeShapes.filter(d =>
-                                                        d.points.length > 0 && isPointInPolygon(d.points[0], shape.points)
-                                                    );
-                                                    const deductionTotal = containedDeductions.reduce((sum, d) => sum + d.value, 0);
-                                                    labelValue = Math.max(0, shape.value - deductionTotal);
-
-                                                } else {
-                                                    let totalDist = 0;
-                                                    const dists: number[] = [];
-                                                    for (let i = 0; i < shape.points.length - 1; i++) {
-                                                        const d = calculateDistance(shape.points[i], shape.points[i + 1]);
-                                                        totalDist += d;
-                                                        dists.push(d);
-                                                    }
-                                                    let target = totalDist / 2;
-                                                    let found = false;
-                                                    for (let i = 0; i < dists.length; i++) {
-                                                        if (target <= dists[i]) {
-                                                            const ratio = target / dists[i];
-                                                            const p1 = shape.points[i];
-                                                            const p2 = shape.points[i + 1];
-                                                            labelPos = {
-                                                                x: p1.x + (p2.x - p1.x) * ratio,
-                                                                y: p1.y + (p2.y - p1.y) * ratio
-                                                            };
-                                                            found = true;
-                                                            break;
-                                                        }
-                                                        target -= dists[i];
-                                                    }
-                                                    if (!found && shape.points.length > 0) labelPos = shape.points[0];
-                                                }
-
-                                                return (
-                                                    <foreignObject
-                                                        key={`label-${shape.id}`}
-                                                        x={labelPos.x} y={labelPos.y}
-                                                        width={100 * visualScaleFactor} height={30 * visualScaleFactor}
-                                                        className="overflow-visible pointer-events-none"
-                                                    >
-                                                        <div className="flex justify-center items-center" style={{ transform: `translate(-50%, -50%) scale(${visualScaleFactor})`, transformOrigin: 'center center' }}>
-                                                            <span className={`px-1 py-0.5 text-[10px] font-bold text-white rounded shadow-sm whitespace-nowrap ${isItemActive ? 'ring-2 ring-white ring-offset-2 ring-offset-black' : ''}`} style={{ backgroundColor: item.color }}>
-                                                                {labelValue.toFixed(2)}
-                                                            </span>
-                                                        </div>
-                                                    </foreignObject>
-                                                );
-                                            })}
-                                        </g>
-                                    )
+                                            {/* Live deduction preview */}
+                                            {isDeductionMode && activeTakeoffId === item.id && drawingPoints.length > 0 && (
+                                                <polygon
+                                                    points={[...drawingPoints, tempPoint].filter(Boolean).map(p => `${p!.x},${p!.y}`).join(' ')}
+                                                    fill="black"
+                                                />
+                                            )}
+                                        </mask>
+                                    );
                                 })}
 
-                                {items.filter(i => i.type === ToolType.NOTE && i.visible !== false).map(item => {
-                                    const pageShapes = item.shapes.filter(s => s.pageIndex === globalPageIndex);
-                                    return pageShapes.map(shape => {
-                                        const isSelected = selectedShape?.shapeId === shape.id;
-                                        const p1 = shape.points[0];
-                                        const p2 = shape.points.length > 1 ? shape.points[1] : p1;
+                                {items.filter(i => i.type === ToolType.NOTE).map(item => (
+                                    <marker
+                                        key={`arrowhead-${item.id}`}
+                                        id={`arrowhead-${item.id}`}
+                                        markerWidth="10"
+                                        markerHeight="7"
+                                        refX="9"
+                                        refY="3.5"
+                                        orient="auto"
+                                    >
+                                        <polygon points="0 0, 10 3.5, 0 7" fill={item.color} />
+                                    </marker>
+                                ))}
+                            </defs>
 
-                                        // If 2 points, draw arrow from p2 (text) to p1 (target)
-                                        const isArrow = shape.points.length > 1;
+                            {sortedItems.map(item => {
+                                if (item.visible === false) return null;
+                                const pageShapes = item.shapes.filter(s => s.pageIndex === globalPageIndex);
+                                if (pageShapes.length === 0) return null;
 
-                                        return (
-                                            <g key={shape.id}
-                                                onClick={(e) => {
+                                const positiveShapes = pageShapes.filter(s => !s.deduction);
+                                const negativeShapes = pageShapes.filter(s => s.deduction);
+                                const hasMask = negativeShapes.length > 0 || (isDeductionMode && activeTakeoffId === item.id);
+                                const isItemActive = activeTakeoffId === item.id;
+
+                                return (
+                                    <g key={item.id} style={{ pointerEvents: 'auto' }}>
+                                        <g mask={hasMask ? `url(#mask-${item.id})` : undefined}>
+                                            {positiveShapes.map(shape => {
+                                                const isShapeSelected = selectedShape?.shapeId === shape.id; // Specific shape selected
+
+                                                // Highlighting logic:
+                                                // If no specific shape selected (sidebar selection), highlight all shapes of active item.
+                                                // If specific shape selected, highlight only that shape (and its holes via focusedShapeIds).
+                                                const inFocus = focusedShapeIds.has(shape.id);
+                                                const isHighlighted = isItemActive && (selectedShape ? inFocus : true);
+
+                                                const opacity = isHighlighted ? 1 : 0.6;
+                                                const strokeWidth = (isHighlighted ? 6 : 4) * visualScaleFactor;
+                                                const markerStrokeWidth = 2 * visualScaleFactor;
+                                                const radius = (isHighlighted ? 12 : 8) * visualScaleFactor;
+
+                                                const handleShapeClick = (e: React.MouseEvent) => {
                                                     if (activeTool === ToolType.SELECT) {
                                                         e.stopPropagation();
+                                                        // Select specific shape
                                                         setSelectedShape({ itemId: item.id, shapeId: shape.id });
                                                         onSelectTakeoffItem(item.id);
                                                     }
-                                                }}
-                                                style={{ cursor: activeTool === ToolType.SELECT ? 'pointer' : 'default' }}
-                                            >
-                                                {isArrow && (
-                                                    <>
-                                                        <line
-                                                            x1={p2.x} y1={p2.y} x2={p1.x} y2={p1.y}
-                                                            stroke={item.color}
-                                                            strokeWidth={2 * visualScaleFactor}
-                                                            markerEnd={`url(#arrowhead-${item.id})`}
-                                                        />
-                                                        <circle cx={p1.x} cy={p1.y} r={3 * visualScaleFactor} fill={item.color} />
-                                                    </>
-                                                )}
+                                                };
 
-                                                <g transform={`translate(${p2.x}, ${p2.y}) scale(${visualScaleFactor})`}>
-                                                    <foreignObject
-                                                        x={0} y={0}
-                                                        width={200} height={100}
-                                                        className="overflow-visible"
-                                                        style={{ pointerEvents: 'none' }} // Allow clicks to pass through wrapper
-                                                    >
-                                                        <div
-                                                            className={`bg-white/90 border shadow-sm rounded p-1 text-xs inline-block cursor-pointer hover:ring-2 hover:ring-blue-300 transition-all ${isSelected ? 'ring-2 ring-blue-500' : 'border-slate-300'}`}
-                                                            style={{
-                                                                transformOrigin: 'top left',
-                                                                color: item.color,
-                                                                borderColor: item.color,
-                                                                pointerEvents: 'auto' // Re-enable clicks on the note itself
-                                                            }}
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                if (activeTool === ToolType.SELECT || activeTool === ToolType.NOTE) {
-                                                                    setNoteModal({
-                                                                        isOpen: true,
-                                                                        text: shape.text || '',
-                                                                        itemId: item.id,
-                                                                        shapeId: shape.id
-                                                                    });
-                                                                }
-                                                            }}
-                                                        >
-                                                            {shape.text}
-                                                        </div>
-                                                    </foreignObject>
-                                                </g>
-                                            </g>
-                                        );
-                                    });
-                                })}
+                                                const handleShapeMouseDown = (e: React.MouseEvent) => {
+                                                    if (activeTool === ToolType.SELECT && !draggedVertex) {
+                                                        e.stopPropagation();
+                                                    }
+                                                };
 
-                                {drawingPoints.length > 0 && (
-                                    <g className="pointer-events-none">
-                                        {activeTool === ToolType.AREA ? (
-                                            <polygon
-                                                points={[...drawingPoints, tempPoint].filter(Boolean).map(p => `${p!.x},${p!.y}`).join(' ')}
-                                                fill={isDeductionMode ? 'black' : (items.find(i => i.id === activeTakeoffId)?.color || '#3b82f6')}
-                                                fillOpacity={isDeductionMode ? 0.2 : 0.1}
-                                                stroke={isDeductionMode ? 'red' : (items.find(i => i.id === activeTakeoffId)?.color || '#3b82f6')}
-                                                strokeWidth={2 * visualScaleFactor}
-                                                strokeDasharray={`${5 * visualScaleFactor},${5 * visualScaleFactor}`}
-                                            />
-                                        ) : (
-                                            <polyline
-                                                points={[...drawingPoints, tempPoint].filter(Boolean).map(p => `${p!.x},${p!.y}`).join(' ')}
-                                                fill="none"
-                                                stroke={items.find(i => i.id === activeTakeoffId)?.color || '#3b82f6'}
-                                                strokeWidth={2 * visualScaleFactor}
-                                                strokeDasharray={`${5 * visualScaleFactor},${5 * visualScaleFactor}`}
-                                            />
-                                        )}
+                                                if (item.type === ToolType.DIMENSION) {
+                                                    return (
+                                                        <g key={shape.id}>
+                                                            <polyline
+                                                                points={shape.points.map(p => `${p.x},${p.y}`).join(' ')}
+                                                                fill="none"
+                                                                stroke={item.color}
+                                                                strokeWidth={2 * visualScaleFactor}
+                                                                style={{ cursor: activeTool === ToolType.SELECT ? 'pointer' : 'crosshair' }}
+                                                                onClick={handleShapeClick}
+                                                                onMouseDown={handleShapeMouseDown}
+                                                                onContextMenu={(e) => activeTool === ToolType.SELECT && handleShapeContextMenu(e, item.id, shape.id)}
+                                                            />
 
-                                        {drawingPoints.map((p, i) => (
-                                            <circle key={i} cx={p.x} cy={p.y} r={4 * visualScaleFactor} fill={isDeductionMode ? 'red' : (items.find(i => i.id === activeTakeoffId)?.color || '#3b82f6')} />
-                                        ))}
-                                        {getLiveLabel()}
+                                                            {shape.points.length >= 2 && (() => {
+                                                                const p1 = shape.points[0];
+                                                                const p2 = shape.points[1];
+                                                                const dx = p2.x - p1.x;
+                                                                const dy = p2.y - p1.y;
+                                                                const len = Math.sqrt(dx * dx + dy * dy);
+
+                                                                if (len === 0) return null;
+
+                                                                const nx = -dy / len;
+                                                                const ny = dx / len;
+                                                                const tickLen = 10 * visualScaleFactor;
+
+                                                                const t1a = { x: p1.x + nx * tickLen, y: p1.y + ny * tickLen };
+                                                                const t1b = { x: p1.x - nx * tickLen, y: p1.y - ny * tickLen };
+                                                                const t2a = { x: p2.x + nx * tickLen, y: p2.y + ny * tickLen };
+                                                                const t2b = { x: p2.x - nx * tickLen, y: p2.y - ny * tickLen };
+
+                                                                const mx = (p1.x + p2.x) / 2;
+                                                                const my = (p1.y + p2.y) / 2;
+
+                                                                return (
+                                                                    <>
+                                                                        <line x1={t1a.x} y1={t1a.y} x2={t1b.x} y2={t1b.y} stroke={item.color} strokeWidth={2 * visualScaleFactor} />
+                                                                        <line x1={t2a.x} y1={t2a.y} x2={t2b.x} y2={t2b.y} stroke={item.color} strokeWidth={2 * visualScaleFactor} />
+
+                                                                        <foreignObject
+                                                                            x={mx} y={my}
+                                                                            width={120 * visualScaleFactor} height={40 * visualScaleFactor}
+                                                                            className="overflow-visible pointer-events-none"
+                                                                        >
+                                                                            <div className="flex justify-center items-center" style={{ transform: `translate(-50%, -50%) scale(${visualScaleFactor})`, transformOrigin: 'center center' }}>
+                                                                                <span className="px-1 py-0.5 text-[10px] font-bold bg-white text-slate-800 border border-slate-300 rounded shadow-sm whitespace-nowrap">
+                                                                                    {shape.value.toFixed(2)} {item.unit}
+                                                                                </span>
+                                                                            </div>
+                                                                        </foreignObject>
+                                                                    </>
+                                                                );
+                                                            })()}
+                                                        </g>
+                                                    );
+                                                }
+
+                                                const TagName = item.type === ToolType.AREA ? 'polygon' : 'polyline';
+
+                                                return (
+                                                    <React.Fragment key={shape.id}>
+                                                        {item.type === ToolType.COUNT ? (
+                                                            shape.points.map((pt, pIdx) => (
+                                                                <circle
+                                                                    key={pIdx}
+                                                                    cx={pt.x} cy={pt.y}
+                                                                    r={radius}
+                                                                    fill={item.color}
+                                                                    stroke="white"
+                                                                    strokeWidth={markerStrokeWidth}
+                                                                    strokeOpacity={isHighlighted ? 1 : 0}
+                                                                    fillOpacity={opacity}
+                                                                    style={{ cursor: activeTool === ToolType.SELECT ? 'move' : 'crosshair' }}
+                                                                    onClick={handleShapeClick}
+                                                                    onContextMenu={(e) => activeTool === ToolType.SELECT && handlePointContextMenu(e, item.id, shape.id, pIdx)}
+                                                                    onMouseDown={(e) => {
+                                                                        if (activeTool === ToolType.SELECT && e.button === 0) {
+                                                                            e.stopPropagation();
+                                                                            setSelectedShape({ itemId: item.id, shapeId: shape.id });
+                                                                            setDraggedVertex({ itemId: item.id, shapeId: shape.id, pointIndex: pIdx });
+                                                                            onSelectTakeoffItem(item.id);
+                                                                        }
+                                                                    }}
+                                                                />
+                                                            ))
+                                                        ) : (
+                                                            <TagName
+                                                                points={shape.points.map(p => `${p.x},${p.y}`).join(' ')}
+                                                                fill={item.type === ToolType.AREA ? item.color : 'none'}
+                                                                fillOpacity={0.2}
+                                                                stroke={item.color}
+                                                                strokeWidth={strokeWidth}
+                                                                strokeOpacity={opacity}
+                                                                style={{ cursor: activeTool === ToolType.SELECT ? 'pointer' : 'crosshair' }}
+                                                                onClick={handleShapeClick}
+                                                                onMouseDown={handleShapeMouseDown}
+                                                                onContextMenu={(e) => activeTool === ToolType.SELECT && handleShapeContextMenu(e, item.id, shape.id)}
+                                                            />
+                                                        )}
+                                                    </React.Fragment>
+                                                )
+                                            })}
+                                        </g>
+
+                                        {negativeShapes.map(shape => {
+                                            // Handle cutout selection
+                                            const inFocus = focusedShapeIds.has(shape.id);
+                                            const isHighlighted = isItemActive && (selectedShape ? inFocus : true);
+
+                                            return (
+                                                <polygon
+                                                    key={shape.id}
+                                                    points={shape.points.map(p => `${p.x},${p.y}`).join(' ')}
+                                                    fill="transparent"
+                                                    stroke={item.color} // Use same color as item
+                                                    strokeWidth={2 * visualScaleFactor}
+                                                    strokeDasharray={`${4 * visualScaleFactor},${4 * visualScaleFactor}`}
+                                                    strokeOpacity={isHighlighted ? 1 : 0.6}
+                                                    style={{ cursor: activeTool === ToolType.SELECT ? 'pointer' : 'crosshair' }}
+                                                    onClick={(e) => {
+                                                        if (activeTool === ToolType.SELECT) {
+                                                            e.stopPropagation();
+                                                            // Select specific cutout shape
+                                                            setSelectedShape({ itemId: item.id, shapeId: shape.id });
+                                                            onSelectTakeoffItem(item.id);
+                                                        }
+                                                    }}
+                                                    onContextMenu={(e) => activeTool === ToolType.SELECT && handleShapeContextMenu(e, item.id, shape.id)}
+                                                />
+                                            );
+                                        })}
+
+                                        {/* Show handles for all shapes if item is active (Unified Selection) */}
+                                        {pageShapes.filter(s => activeTakeoffId === item.id && item.type !== ToolType.COUNT).map(shape => {
+                                            // Only show handles if this shape is in the focused set (or all are focused if none selected)
+                                            if (selectedShape && !focusedShapeIds.has(shape.id)) return null;
+
+                                            return shape.points.map((pt, idx) => (
+                                                <circle
+                                                    key={`handle-${shape.id}-${idx}`}
+                                                    cx={pt.x} cy={pt.y}
+                                                    r={6 * visualScaleFactor}
+                                                    fill="white"
+                                                    stroke={item.color} // Use same color as item for both main and deduction shapes
+                                                    strokeWidth={2 * visualScaleFactor}
+                                                    style={{ cursor: 'move' }}
+                                                    onContextMenu={(e) => activeTool === ToolType.SELECT && handlePointContextMenu(e, item.id, shape.id, idx)}
+                                                    onMouseDown={(e) => {
+                                                        if (activeTool === ToolType.SELECT && e.button === 0) {
+                                                            e.stopPropagation();
+                                                            setDraggedVertex({ itemId: item.id, shapeId: shape.id, pointIndex: idx });
+                                                        }
+                                                    }}
+                                                />
+                                            ))
+                                        })}
+
+                                        {item.type !== ToolType.DIMENSION && positiveShapes.map(shape => {
+                                            // Highlight label if item is active
+                                            const inFocus = focusedShapeIds.has(shape.id);
+                                            const isHighlighted = isItemActive && (selectedShape ? inFocus : true);
+
+                                            if (!isHighlighted || item.type === ToolType.COUNT || shape.points.length === 0) return null;
+
+                                            let labelPos = { x: 0, y: 0 };
+                                            let labelValue = shape.value;
+
+                                            if (item.type === ToolType.AREA) {
+                                                const cx = shape.points.reduce((s, p) => s + p.x, 0) / shape.points.length;
+                                                const cy = shape.points.reduce((s, p) => s + p.y, 0) / shape.points.length;
+                                                labelPos = { x: cx, y: cy };
+
+                                                const containedDeductions = negativeShapes.filter(d =>
+                                                    d.points.length > 0 && isPointInPolygon(d.points[0], shape.points)
+                                                );
+                                                const deductionTotal = containedDeductions.reduce((sum, d) => sum + d.value, 0);
+                                                labelValue = Math.max(0, shape.value - deductionTotal);
+
+                                            } else {
+                                                let totalDist = 0;
+                                                const dists: number[] = [];
+                                                for (let i = 0; i < shape.points.length - 1; i++) {
+                                                    const d = calculateDistance(shape.points[i], shape.points[i + 1]);
+                                                    totalDist += d;
+                                                    dists.push(d);
+                                                }
+                                                let target = totalDist / 2;
+                                                let found = false;
+                                                for (let i = 0; i < dists.length; i++) {
+                                                    if (target <= dists[i]) {
+                                                        const ratio = target / dists[i];
+                                                        const p1 = shape.points[i];
+                                                        const p2 = shape.points[i + 1];
+                                                        labelPos = {
+                                                            x: p1.x + (p2.x - p1.x) * ratio,
+                                                            y: p1.y + (p2.y - p1.y) * ratio
+                                                        };
+                                                        found = true;
+                                                        break;
+                                                    }
+                                                    target -= dists[i];
+                                                }
+                                                if (!found && shape.points.length > 0) labelPos = shape.points[0];
+                                            }
+
+                                            return (
+                                                <foreignObject
+                                                    key={`label-${shape.id}`}
+                                                    x={labelPos.x} y={labelPos.y}
+                                                    width={100 * visualScaleFactor} height={30 * visualScaleFactor}
+                                                    className="overflow-visible pointer-events-none"
+                                                >
+                                                    <div className="flex justify-center items-center" style={{ transform: `translate(-50%, -50%) scale(${visualScaleFactor})`, transformOrigin: 'center center' }}>
+                                                        <span className={`px-1 py-0.5 text-[10px] font-bold text-white rounded shadow-sm whitespace-nowrap ${isItemActive ? 'ring-2 ring-white ring-offset-2 ring-offset-black' : ''}`} style={{ backgroundColor: item.color }}>
+                                                            {labelValue.toFixed(2)}
+                                                        </span>
+                                                    </div>
+                                                </foreignObject>
+                                            );
+                                        })}
                                     </g>
-                                )}
+                                )
+                            })}
 
-                                {snapPoint && activeTool !== ToolType.SELECT && (
-                                    <circle
-                                        cx={snapPoint.x}
-                                        cy={snapPoint.y}
-                                        r={8 * visualScaleFactor}
-                                        stroke="#d946ef"
-                                        strokeWidth={2 * visualScaleFactor}
-                                        fill="transparent"
-                                        className="pointer-events-none animate-pulse"
-                                    />
-                                )}
+                            {items.filter(i => i.type === ToolType.NOTE && i.visible !== false).map(item => {
+                                const pageShapes = item.shapes.filter(s => s.pageIndex === globalPageIndex);
+                                return pageShapes.map(shape => {
+                                    const isSelected = selectedShape?.shapeId === shape.id;
+                                    const p1 = shape.points[0];
+                                    const p2 = shape.points.length > 1 ? shape.points[1] : p1;
+
+                                    // If 2 points, draw arrow from p2 (text) to p1 (target)
+                                    const isArrow = shape.points.length > 1;
+
+                                    return (
+                                        <g key={shape.id}
+                                            onClick={(e) => {
+                                                if (activeTool === ToolType.SELECT) {
+                                                    e.stopPropagation();
+                                                    setSelectedShape({ itemId: item.id, shapeId: shape.id });
+                                                    onSelectTakeoffItem(item.id);
+                                                }
+                                            }}
+                                            style={{ cursor: activeTool === ToolType.SELECT ? 'pointer' : 'default' }}
+                                        >
+                                            {isArrow && (
+                                                <>
+                                                    <line
+                                                        x1={p2.x} y1={p2.y} x2={p1.x} y2={p1.y}
+                                                        stroke={item.color}
+                                                        strokeWidth={2 * visualScaleFactor}
+                                                        markerEnd={`url(#arrowhead-${item.id})`}
+                                                    />
+                                                    <circle cx={p1.x} cy={p1.y} r={3 * visualScaleFactor} fill={item.color} />
+                                                </>
+                                            )}
+
+                                            <g transform={`translate(${p2.x}, ${p2.y}) scale(${visualScaleFactor})`}>
+                                                <foreignObject
+                                                    x={0} y={0}
+                                                    width={200} height={100}
+                                                    className="overflow-visible"
+                                                    style={{ pointerEvents: 'none' }} // Allow clicks to pass through wrapper
+                                                >
+                                                    <div
+                                                        className={`bg-white/90 border shadow-sm rounded p-1 text-xs inline-block cursor-pointer hover:ring-2 hover:ring-blue-300 transition-all ${isSelected ? 'ring-2 ring-blue-500' : 'border-slate-300'}`}
+                                                        style={{
+                                                            transformOrigin: 'top left',
+                                                            color: item.color,
+                                                            borderColor: item.color,
+                                                            pointerEvents: 'auto' // Re-enable clicks on the note itself
+                                                        }}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            if (activeTool === ToolType.SELECT || activeTool === ToolType.NOTE) {
+                                                                setNoteModal({
+                                                                    isOpen: true,
+                                                                    text: shape.text || '',
+                                                                    itemId: item.id,
+                                                                    shapeId: shape.id
+                                                                });
+                                                            }
+                                                        }}
+                                                    >
+                                                        {shape.text}
+                                                    </div>
+                                                </foreignObject>
+                                            </g>
+                                        </g>
+                                    );
+                                });
+                            })}
+
+                            {drawingPoints.length > 0 && (
+                                <g className="pointer-events-none">
+                                    {activeTool === ToolType.AREA ? (
+                                        <polygon
+                                            points={[...drawingPoints, tempPoint].filter(Boolean).map(p => `${p!.x},${p!.y}`).join(' ')}
+                                            fill={isDeductionMode ? 'black' : (items.find(i => i.id === activeTakeoffId)?.color || '#3b82f6')}
+                                            fillOpacity={isDeductionMode ? 0.2 : 0.1}
+                                            stroke={isDeductionMode ? 'red' : (items.find(i => i.id === activeTakeoffId)?.color || '#3b82f6')}
+                                            strokeWidth={2 * visualScaleFactor}
+                                            strokeDasharray={`${5 * visualScaleFactor},${5 * visualScaleFactor}`}
+                                        />
+                                    ) : (
+                                        <polyline
+                                            points={[...drawingPoints, tempPoint].filter(Boolean).map(p => `${p!.x},${p!.y}`).join(' ')}
+                                            fill="none"
+                                            stroke={items.find(i => i.id === activeTakeoffId)?.color || '#3b82f6'}
+                                            strokeWidth={2 * visualScaleFactor}
+                                            strokeDasharray={`${5 * visualScaleFactor},${5 * visualScaleFactor}`}
+                                        />
+                                    )}
+
+                                    {drawingPoints.map((p, i) => (
+                                        <circle key={i} cx={p.x} cy={p.y} r={4 * visualScaleFactor} fill={isDeductionMode ? 'red' : (items.find(i => i.id === activeTakeoffId)?.color || '#3b82f6')} />
+                                    ))}
+                                    {getLiveLabel()}
+                                </g>
+                            )}
+
+                            {snapPoint && activeTool !== ToolType.SELECT && (
+                                <circle
+                                    cx={snapPoint.x}
+                                    cy={snapPoint.y}
+                                    r={8 * visualScaleFactor}
+                                    stroke="#d946ef"
+                                    strokeWidth={2 * visualScaleFactor}
+                                    fill="transparent"
+                                    className="pointer-events-none animate-pulse"
+                                />
+                            )}
+
+                            {/* Rectangle Selection Visual */}
+                            {selectionRect && selectionRect.active && isRectSelecting && (
+                                <rect
+                                    x={Math.min(selectionRect.start.x, selectionRect.end.x)}
+                                    y={Math.min(selectionRect.start.y, selectionRect.end.y)}
+                                    width={Math.abs(selectionRect.end.x - selectionRect.start.x)}
+                                    height={Math.abs(selectionRect.end.y - selectionRect.start.y)}
+                                    fill="rgba(59, 130, 246, 0.1)"
+                                    stroke="#3b82f6"
+                                    strokeWidth={2 * visualScaleFactor}
+                                    strokeDasharray={`${8 * visualScaleFactor},${4 * visualScaleFactor}`}
+                                    className="pointer-events-none"
+                                />
+                            )}
+
+                            {/* Highlight selected items from rectangle selection */}
+                            {selectedItems.length > 0 && selectedItems.map(({ itemId, shapeId }) => {
+                                const item = items.find(i => i.id === itemId);
+                                const shape = item?.shapes.find(s => s.id === shapeId);
+
+                                if (!item || !shape || shape.pageIndex !== globalPageIndex) return null;
+
+                                const strokeWidth = 6 * visualScaleFactor;
+                                const handleRadius = 6 * visualScaleFactor;
+
+                                // Render highlight based on shape type
+                                if (item.type === ToolType.AREA) {
+                                    return (
+                                        <g key={`highlight-${shapeId}`}>
+                                            <polygon
+                                                points={shape.points.map(p => `${p.x},${p.y}`).join(' ')}
+                                                fill="none"
+                                                stroke={item.color}
+                                                strokeWidth={strokeWidth}
+                                                className="pointer-events-none"
+                                            />
+                                            {/* Vertex handles */}
+                                            {shape.points.map((pt, idx) => (
+                                                <circle
+                                                    key={`handle-${shapeId}-${idx}`}
+                                                    cx={pt.x}
+                                                    cy={pt.y}
+                                                    r={handleRadius}
+                                                    fill="white"
+                                                    stroke={item.color}
+                                                    strokeWidth={2 * visualScaleFactor}
+                                                    className="pointer-events-none"
+                                                />
+                                            ))}
+                                        </g>
+                                    );
+                                } else if (item.type === ToolType.LINEAR || item.type === ToolType.SEGMENT || item.type === ToolType.DIMENSION) {
+                                    return (
+                                        <g key={`highlight-${shapeId}`}>
+                                            <polyline
+                                                points={shape.points.map(p => `${p.x},${p.y}`).join(' ')}
+                                                fill="none"
+                                                stroke={item.color}
+                                                strokeWidth={strokeWidth}
+                                                className="pointer-events-none"
+                                            />
+                                            {/* Vertex handles */}
+                                            {shape.points.map((pt, idx) => (
+                                                <circle
+                                                    key={`handle-${shapeId}-${idx}`}
+                                                    cx={pt.x}
+                                                    cy={pt.y}
+                                                    r={handleRadius}
+                                                    fill="white"
+                                                    stroke={item.color}
+                                                    strokeWidth={2 * visualScaleFactor}
+                                                    className="pointer-events-none"
+                                                />
+                                            ))}
+                                        </g>
+                                    );
+                                } else if (item.type === ToolType.COUNT) {
+                                    return shape.points.map((p, idx) => (
+                                        <circle
+                                            key={`highlight-${shapeId}-${idx}`}
+                                            cx={p.x}
+                                            cy={p.y}
+                                            r={12 * visualScaleFactor}
+                                            fill="none"
+                                            stroke={item.color}
+                                            strokeWidth={strokeWidth}
+                                            className="pointer-events-none"
+                                        />
+                                    ));
+                                }
+                                return null;
+                            })}
                         </g>
                     </svg>
                 )}
 
                 {/* Legend Layer - Separated to sit on top of SVG */}
                 {file && contentWidth > 0 && (
-                    <div 
-                        ref={legendContainerRef} 
+                    <div
+                        ref={legendContainerRef}
                         className="absolute top-0 left-0 origin-top-left pointer-events-none"
                         style={{ width: contentWidth, height: pdfAspectRatio ? contentWidth * pdfAspectRatio : 'auto' }}
                     >
