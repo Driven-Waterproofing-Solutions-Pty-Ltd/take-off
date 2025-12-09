@@ -508,6 +508,51 @@ const App: React.FC = () => {
 
   const calculateTotalValue = (shapes: Shape[]) => shapes.reduce((sum, s) => s.deduction ? sum - s.value : sum + s.value, 0);
 
+  const handleBatchCreateItems = (itemsToCreate: { sourceItemId: string, shapes: Shape[] }[]) => {
+    const newItemsList: TakeoffItem[] = [];
+    let lastItemId = activeTakeoffId;
+
+    itemsToCreate.forEach(({ sourceItemId, shapes }) => {
+      const sourceItem = items.find(i => i.id === sourceItemId);
+      if (!sourceItem) return;
+
+      const newItem: TakeoffItem = {
+        ...sourceItem,
+        id: crypto.randomUUID(),
+        label: `${sourceItem.label} (Copy)`,
+        shapes: shapes, // These shapes already have new IDs and positions from Canvas
+        totalValue: calculateTotalValue(shapes)
+      };
+      newItemsList.push(newItem);
+      lastItemId = newItem.id;
+    });
+
+    if (newItemsList.length > 0) {
+      setHistory({ ...historyState, items: [...items, ...newItemsList] });
+      setActiveTakeoffId(lastItemId);
+      addToast(`Created ${newItemsList.length} new item(s)`, 'success');
+    }
+  };
+
+  const handleBatchAddShapes = (shapesToAdd: { itemId: string, shape: Shape }[]) => {
+    const shapesByItem = shapesToAdd.reduce((acc, { itemId, shape }) => {
+      if (!acc[itemId]) acc[itemId] = [];
+      acc[itemId].push(shape);
+      return acc;
+    }, {} as Record<string, Shape[]>);
+
+    const newItems = items.map(item => {
+      if (shapesByItem[item.id]) {
+        const newShapes = [...item.shapes, ...shapesByItem[item.id]];
+        const newTotal = calculateTotalValue(newShapes);
+        return { ...item, shapes: newShapes, totalValue: newTotal };
+      }
+      return item;
+    });
+
+    setHistory({ ...historyState, items: newItems });
+    addToast(`Added ${shapesToAdd.length} shapes`, 'success');
+  };
   const handleShapeCreated = (shape: Shape) => {
     if (!activeTakeoffId) return;
     if (isDeductionMode) shape.deduction = true;
@@ -735,6 +780,8 @@ const App: React.FC = () => {
               onEnableDeduction={handleEnableDeductionMode} onSelectTakeoffItem={setActiveTakeoffId} onShapeCreated={handleShapeCreated}
               onUpdateShape={handleUpdateShape} onUpdateShapeTransient={handleUpdateShapeTransient} onSplitShape={handleSplitShape}
               onUpdateScale={handleUpdateScale} onUpdateLegend={handleUpdateLegend} legendSettings={currentLegend} onDeleteShape={handleDeleteShape} onDeleteShapes={handleDeleteShapes}
+              onBatchCreateItems={handleBatchCreateItems}
+              onBatchAddShapes={handleBatchAddShapes}
               onStopRecording={handleStopTakeoff} onInteractionEnd={commitHistory}
               scaleInfo={{ isSet: currentScale.isSet, ppu: currentScale.pixelsPerUnit, unit: currentScale.unit }}
               zoomLevel={zoomLevel} setZoomLevel={setZoomLevel} pendingPreset={pendingPreset} clearPendingPreset={() => setPendingPreset(null)} />

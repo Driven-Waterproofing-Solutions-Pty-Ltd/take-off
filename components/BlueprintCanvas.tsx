@@ -8,6 +8,7 @@ import '../utils/pdfWorker';
 import { useToast } from '../contexts/ToastContext';
 import DraggableLegend from './DraggableLegend';
 import NoteInputModal from './NoteInputModal';
+import PasteOptionsModal from './PasteOptionsModal';
 
 // Removed html2canvas import as we now use pdf-lib for vector export
 
@@ -35,6 +36,8 @@ interface BlueprintCanvasProps {
     legendSettings: LegendSettings;
     onDeleteShape: (itemId: string, shapeId: string) => void;
     onDeleteShapes?: (shapes: { itemId: string, shapeId: string }[]) => void;
+    onBatchCreateItems?: (itemsToCreate: { sourceItemId: string, shapes: Shape[] }[]) => void;
+    onBatchAddShapes?: (shapes: { itemId: string, shape: Shape }[]) => void;
     onStopRecording: () => void;
     scaleInfo: { isSet: boolean, ppu: number, unit: Unit };
     zoomLevel: number;
@@ -144,6 +147,195 @@ const isShapeIntersectingRect = (shape: Shape, rectStart: Point, rectEnd: Point)
     return false;
 };
 
+// Helper function to copy selected items to clipboard
+const copySelectedItems = (
+    items: TakeoffItem[],
+    selectedItems: { itemId: string, shapeId: string }[],
+    selectedShape: { itemId: string, shapeId: string } | null
+): { itemId: string, shapeId: string, offset: Point }[] => {
+    const itemsToCopy: { itemId: string, shapeId: string, offset: Point }[] = [];
+
+    // If we have rectangle-selected items, copy those
+    if (selectedItems.length > 0) {
+        // Find the minimum coordinates to calculate relative offsets
+        let minX = Infinity;
+        let minY = Infinity;
+
+        // First pass: find the minimum coordinates
+        selectedItems.forEach(({ itemId, shapeId }) => {
+            const item = items.find(i => i.id === itemId);
+            const shape = item?.shapes.find(s => s.id === shapeId);
+            if (shape) {
+                shape.points.forEach(point => {
+                    minX = Math.min(minX, point.x);
+                    minY = Math.min(minY, point.y);
+                });
+            }
+        });
+
+        // Second pass: calculate relative offsets from the minimum point
+        selectedItems.forEach(({ itemId, shapeId }) => {
+            const item = items.find(i => i.id === itemId);
+            const shape = item?.shapes.find(s => s.id === shapeId);
+            if (shape) {
+                // Find the shape's minimum point
+                let shapeMinX = Infinity;
+                let shapeMinY = Infinity;
+                shape.points.forEach(point => {
+                    shapeMinX = Math.min(shapeMinX, point.x);
+                    shapeMinY = Math.min(shapeMinY, point.y);
+                });
+
+                // Calculate offset from the global minimum
+                const offset = {
+                    x: shapeMinX - minX,
+                    y: shapeMinY - minY
+                };
+
+                itemsToCopy.push({ itemId, shapeId, offset });
+            }
+        });
+    }
+    // If we have a single selected shape, copy that
+    else if (selectedShape) {
+        const item = items.find(i => i.id === selectedShape.itemId);
+        const shape = item?.shapes.find(s => s.id === selectedShape.shapeId);
+        if (shape) {
+            // For single shape, offset is relative to its own position
+            let minX = Infinity;
+            let minY = Infinity;
+            shape.points.forEach(point => {
+                minX = Math.min(minX, point.x);
+                minY = Math.min(minY, point.y);
+            });
+
+            itemsToCopy.push({
+                itemId: selectedShape.itemId,
+                shapeId: selectedShape.shapeId,
+                offset: { x: 0, y: 0 } // Single shape has no relative offset
+            });
+        }
+    }
+
+    return itemsToCopy;
+};
+
+// Helper function to paste items from clipboard back to their original items
+const pasteToOriginalItems = (
+    items: TakeoffItem[],
+    clipboardItems: { itemId: string, shapeId: string, offset: Point }[],
+    pasteOffset: Point,
+    globalPageIndex: number,
+    onBatchAddShapes: (shapes: { itemId: string, shape: Shape }[]) => void
+): Point => {
+    if (clipboardItems.length === 0) {
+        return pasteOffset;
+    }
+
+    const shapesToAdd: { itemId: string, shape: Shape }[] = [];
+
+    // Find the original items to get their properties
+    clipboardItems.forEach(clipboardItem => {
+        const originalItem = items.find(i => i.id === clipboardItem.itemId);
+        const originalShape = originalItem?.shapes.find(s => s.id === clipboardItem.shapeId);
+
+        if (originalItem && originalShape) {
+            // Create a new shape with the same properties but offset position
+            const newPoints = originalShape.points.map(point => ({
+                x: point.x + clipboardItem.offset.x + pasteOffset.x,
+                y: point.y + clipboardItem.offset.y + pasteOffset.y
+            }));
+
+            const newShape: Shape = {
+                id: crypto.randomUUID(),
+                pageIndex: globalPageIndex,
+                points: newPoints,
+                value: originalShape.value,
+                deduction: originalShape.deduction,
+                text: originalShape.text
+            };
+
+            shapesToAdd.push({ itemId: clipboardItem.itemId, shape: newShape });
+        }
+    });
+
+    if (shapesToAdd.length > 0) {
+        onBatchAddShapes(shapesToAdd);
+    }
+
+    // Update paste offset for next paste operation (incremental offset)
+    const newPasteOffset = {
+        x: pasteOffset.x + 10,
+        y: pasteOffset.y + 10
+    };
+
+    return newPasteOffset;
+};
+
+// Helper function to prepare payload for pasting as new items
+const getPasteAsNewItemsPayload = (
+    items: TakeoffItem[],
+    clipboardItems: { itemId: string, shapeId: string, offset: Point }[],
+    pasteOffset: Point,
+    globalPageIndex: number
+): { payload: { sourceItemId: string, shapes: Shape[] }[], newOffset: Point } => {
+    if (clipboardItems.length === 0) {
+        return { payload: [], newOffset: pasteOffset };
+    }
+
+    // Group clipboard items by their source item ID
+    const itemsBySource = clipboardItems.reduce((acc, clipboardItem) => {
+        if (!acc[clipboardItem.itemId]) {
+            acc[clipboardItem.itemId] = [];
+        }
+        acc[clipboardItem.itemId].push(clipboardItem);
+        return acc;
+    }, {} as Record<string, typeof clipboardItems>);
+
+    const payload: { sourceItemId: string, shapes: Shape[] }[] = [];
+
+    // Process each source group
+    Object.entries(itemsBySource).forEach(([sourceItemId, groupItems]) => {
+        const sourceItem = items.find(i => i.id === sourceItemId);
+        if (!sourceItem) return;
+
+        const newShapes: Shape[] = [];
+
+        groupItems.forEach(clipboardItem => {
+            const originalShape = sourceItem.shapes.find(s => s.id === clipboardItem.shapeId);
+            if (originalShape) {
+                // Create a new shape with offset position
+                const newPoints = originalShape.points.map(point => ({
+                    x: point.x + clipboardItem.offset.x + pasteOffset.x,
+                    y: point.y + clipboardItem.offset.y + pasteOffset.y
+                }));
+
+                const newShape: Shape = {
+                    id: crypto.randomUUID(),
+                    pageIndex: globalPageIndex,
+                    points: newPoints,
+                    value: originalShape.value,
+                    deduction: originalShape.deduction,
+                    text: originalShape.text
+                };
+                newShapes.push(newShape);
+            }
+        });
+
+        if (newShapes.length > 0) {
+            payload.push({ sourceItemId, shapes: newShapes });
+        }
+    });
+
+    // Update paste offset for next paste operation
+    const newPasteOffset = {
+        x: pasteOffset.x + 10,
+        y: pasteOffset.y + 10
+    };
+
+    return { payload, newOffset: newPasteOffset };
+};
+
 const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     file,
     localPageIndex,
@@ -165,6 +357,8 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     onDeleteShape,
     onDeleteShapes,
     onStopRecording,
+    onBatchCreateItems,
+    onBatchAddShapes,
     scaleInfo,
     zoomLevel,
     setZoomLevel,
@@ -208,6 +402,9 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     const [selectedShape, setSelectedShape] = useState<{ itemId: string, shapeId: string } | null>(null);
     // State for dragging a specific point of an existing shape
     const [draggedVertex, setDraggedVertex] = useState<{ itemId: string, shapeId: string, pointIndex: number } | null>(null);
+    // State for dragging entire shapes (all points together) - supports single or multiple shapes
+    const [draggedShapes, setDraggedShapes] = useState<{ itemId: string, shapeId: string, initialPoints: Point[] }[]>([]);
+    const dragStartPoint = useRef<Point | null>(null);
     const [noteModal, setNoteModal] = useState<{ isOpen: boolean, text: string, itemId?: string, shapeId?: string, points?: Point[] }>({ isOpen: false, text: '' });
     // Context Menu State
     const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -219,6 +416,13 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     const justCompletedRectSelection = useRef(false);
     const isDeletingRef = useRef(false);
     const selectedItemsRef = useRef<{ itemId: string, shapeId: string }[]>([]);
+
+    // Clipboard state for copy/paste functionality
+    const [clipboardItems, setClipboardItems] = useState<{ itemId: string, shapeId: string, offset: Point }[]>([]);
+    const [pasteOffset, setPasteOffset] = useState<Point>({ x: 10, y: 10 });
+
+    // Paste options modal state
+    const [showPasteOptions, setShowPasteOptions] = useState(false);
 
     // Keep ref in sync with state
     useEffect(() => {
@@ -345,12 +549,40 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         }
     }, [pendingPreset, originalPdfWidth]);
 
-    // Handle deletion via keyboard
+    // Handle keyboard shortcuts including copy/paste
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             // Ignore key events when target is an input, textarea, or contenteditable element
             const target = e.target as HTMLElement;
             if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+                return;
+            }
+
+            // Copy selected items (Ctrl+C)
+            if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+                e.preventDefault();
+                e.stopPropagation();
+
+                const itemsToCopy = copySelectedItems(items, selectedItems, selectedShape);
+                if (itemsToCopy.length > 0) {
+                    setClipboardItems(itemsToCopy);
+                    addToast(`${itemsToCopy.length} item(s) copied to clipboard`, 'success');
+                } else {
+                    addToast('No items selected to copy', 'info');
+                }
+                return;
+            }
+
+            // Paste items (Ctrl+V) - now shows options modal
+            if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+                e.preventDefault();
+                e.stopPropagation();
+
+                if (clipboardItems.length > 0) {
+                    setShowPasteOptions(true);
+                } else {
+                    addToast('Clipboard is empty', 'info');
+                }
                 return;
             }
 
@@ -421,7 +653,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 }
             }
 
-            if (e.key === 'Enter') {
+            if (e.key === 'Enter' || e.key === 'n' || e.key === 'N') {
                 if (activeTool === ToolType.COUNT) {
                     e.preventDefault();
                     onStopRecording();
@@ -445,6 +677,8 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         if (activeTool !== ToolType.SELECT) {
             setSelectedShape(null);
             setDraggedVertex(null);
+            setDraggedShapes([]);
+            dragStartPoint.current = null;
             setContextMenu(null);
         }
     }, [activeTool]);
@@ -569,6 +803,30 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     };
 
     const handleMouseMove = (e: React.MouseEvent) => {
+        // Handle entire shape dragging (all points together) - supports multiple shapes
+        if (draggedShapes.length > 0 && activeTool === ToolType.SELECT && dragStartPoint.current) {
+            const currentPoint = getInternalCoordinates(e.clientX, e.clientY);
+            const dx = currentPoint.x - dragStartPoint.current.x;
+            const dy = currentPoint.y - dragStartPoint.current.y;
+
+            // Move all dragged shapes by the same offset
+            draggedShapes.forEach(draggedShape => {
+                const item = items.find(i => i.id === draggedShape.itemId);
+                const shape = item?.shapes.find(s => s.id === draggedShape.shapeId);
+
+                if (item && shape && draggedShape.initialPoints) {
+                    // Move all points by the same offset
+                    const newPoints = draggedShape.initialPoints.map(pt => ({
+                        x: pt.x + dx,
+                        y: pt.y + dy
+                    }));
+
+                    updateShapeValue(item, shape, newPoints, true);
+                }
+            });
+            return;
+        }
+
         if (draggedVertex && activeTool === ToolType.SELECT) {
             const rawPoint = getInternalCoordinates(e.clientX, e.clientY);
 
@@ -671,6 +929,13 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             setDraggedVertex(null);
             if (onInteractionEnd) onInteractionEnd();
         }
+
+        if (draggedShapes.length > 0) {
+            setDraggedShapes([]);
+            dragStartPoint.current = null;
+            if (onInteractionEnd) onInteractionEnd();
+        }
+
         setIsDragging(false);
     };
 
@@ -985,7 +1250,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         setDrawingPoints([]);
         setTempPoint(null);
         setSnapPoint(null);
-    }, [activeTool, globalPageIndex, activeTakeoffId]);
+    }, [activeTool, globalPageIndex]);
 
     const finalizeMeasurement = (points: Point[]) => {
         let value = 0;
@@ -1111,7 +1376,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 
             <div
                 ref={viewportRef}
-                className={`w-full h-full relative overflow-hidden select-none ${isDragging ? 'cursor-grabbing' : (activeTool === ToolType.SELECT ? 'cursor-default' : 'cursor-crosshair')}`}
+                className={`w-full h-full relative overflow-hidden select-none ${isDragging || draggedShapes.length > 0 ? 'cursor-grabbing' : (activeTool === ToolType.SELECT ? 'cursor-default' : 'cursor-crosshair')}`}
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
@@ -1245,9 +1510,41 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                                     }
                                                 };
 
+
                                                 const handleShapeMouseDown = (e: React.MouseEvent) => {
-                                                    if (activeTool === ToolType.SELECT && !draggedVertex) {
+                                                    if (activeTool === ToolType.SELECT && !draggedVertex && e.button === 0) {
                                                         e.stopPropagation();
+                                                        // Select the shape
+                                                        setSelectedShape({ itemId: item.id, shapeId: shape.id });
+                                                        onSelectTakeoffItem(item.id);
+
+                                                        // Start shape dragging (entire shape movement)
+                                                        const startPoint = getInternalCoordinates(e.clientX, e.clientY);
+                                                        dragStartPoint.current = startPoint;
+
+                                                        // Check if this shape is part of the selected items (from rectangle selection)
+                                                        const isInSelection = selectedItems.some(s => s.itemId === item.id && s.shapeId === shape.id);
+
+                                                        if (isInSelection && selectedItems.length > 0) {
+                                                            // Drag all selected shapes together
+                                                            const shapesToDrag = selectedItems.map(selected => {
+                                                                const selectedItem = items.find(i => i.id === selected.itemId);
+                                                                const selectedShape = selectedItem?.shapes.find(s => s.id === selected.shapeId);
+                                                                return {
+                                                                    itemId: selected.itemId,
+                                                                    shapeId: selected.shapeId,
+                                                                    initialPoints: selectedShape ? [...selectedShape.points] : []
+                                                                };
+                                                            });
+                                                            setDraggedShapes(shapesToDrag);
+                                                        } else {
+                                                            // Drag only this shape
+                                                            setDraggedShapes([{
+                                                                itemId: item.id,
+                                                                shapeId: shape.id,
+                                                                initialPoints: [...shape.points]
+                                                            }]);
+                                                        }
                                                     }
                                                 };
 
@@ -1377,6 +1674,23 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                                             // Select specific cutout shape
                                                             setSelectedShape({ itemId: item.id, shapeId: shape.id });
                                                             onSelectTakeoffItem(item.id);
+                                                        }
+                                                    }}
+                                                    onMouseDown={(e) => {
+                                                        if (activeTool === ToolType.SELECT && !draggedVertex && e.button === 0) {
+                                                            e.stopPropagation();
+                                                            // Select the shape
+                                                            setSelectedShape({ itemId: item.id, shapeId: shape.id });
+                                                            onSelectTakeoffItem(item.id);
+
+                                                            // Start shape dragging (entire shape movement)
+                                                            const startPoint = getInternalCoordinates(e.clientX, e.clientY);
+                                                            dragStartPoint.current = startPoint;
+                                                            setDraggedShapes([{
+                                                                itemId: item.id,
+                                                                shapeId: shape.id,
+                                                                initialPoints: [...shape.points] // Store copy of initial points
+                                                            }]);
                                                         }
                                                     }}
                                                     onContextMenu={(e) => activeTool === ToolType.SELECT && handleShapeContextMenu(e, item.id, shape.id)}
@@ -1802,6 +2116,33 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 initialText={noteModal.text}
                 onSave={handleSaveNote}
                 onClose={() => setNoteModal({ ...noteModal, isOpen: false })}
+            />
+
+            {/* Paste Options Modal */}
+            <PasteOptionsModal
+                isOpen={showPasteOptions}
+                onClose={() => setShowPasteOptions(false)}
+                onPasteToOriginal={() => {
+                    setShowPasteOptions(false);
+                    if (onBatchAddShapes) {
+                        const newPasteOffset = pasteToOriginalItems(items, clipboardItems, pasteOffset, globalPageIndex, onBatchAddShapes);
+                        setPasteOffset(newPasteOffset);
+                    } else {
+                        addToast('Paste to original items is not supported', 'error');
+                    }
+                }}
+                onPasteAsNewItems={() => {
+                    setShowPasteOptions(false);
+                    if (onBatchCreateItems) {
+                        const { payload, newOffset } = getPasteAsNewItemsPayload(items, clipboardItems, pasteOffset, globalPageIndex);
+                        onBatchCreateItems(payload);
+                        setPasteOffset(newOffset);
+                    } else {
+                        addToast('Paste as new items is not supported in this version', 'error');
+                    }
+                }}
+                items={items}
+                clipboardItemCount={clipboardItems.length}
             />
         </div>
     );
