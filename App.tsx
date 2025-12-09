@@ -110,6 +110,7 @@ const App: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
+  const [isUploadingPdf, setIsUploadingPdf] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("Loading Project...");
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
 
@@ -402,6 +403,9 @@ const App: React.FC = () => {
   };
 
   const handleUpload = async (files: File[], names: string[]) => {
+    setShowUploadModal(false);
+    setIsUploadingPdf(true);
+    setLoadingMessage("Uploading PDF Plans...");
     try {
       let newPlanSets = [...planSets];
       let currentTotalPages = totalPages;
@@ -439,11 +443,13 @@ const App: React.FC = () => {
         setActiveTakeoffId(null);
         setViewMode('canvas');
       }
-      setShowUploadModal(false);
       addToast(`Added ${files.length} plan(s)`, 'success');
     } catch (error) {
       console.error("Error loading PDF metadata:", error);
       addToast("Failed to load PDF file", 'error');
+    } finally {
+      setIsUploadingPdf(false);
+      setLoadingMessage("Loading Project...");
     }
   };
 
@@ -661,7 +667,7 @@ const App: React.FC = () => {
     return <LicenseModal onSuccess={() => setIsLicensed(true)} initialMessage={licenseError} />;
   }
 
-  if (isInitializing) {
+  if (isInitializing || isUploadingPdf) {
     return (
       <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 gap-6">
         <div className="relative">
