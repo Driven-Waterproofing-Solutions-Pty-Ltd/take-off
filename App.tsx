@@ -224,7 +224,9 @@ const App: React.FC = () => {
     if (activeTakeoffId) {
       const activeItem = items.find(i => i.id === activeTakeoffId);
       const hasShapesOnCurrentPage = activeItem?.shapes.some(s => s.pageIndex === pageIndex);
-      if (!hasShapesOnCurrentPage) {
+      // Only deselect if the item has shapes elsewhere but not on the current page.
+      // A new item will have shapes.length === 0, so it won't be deselected.
+      if (activeItem && activeItem.shapes.length > 0 && !hasShapesOnCurrentPage) {
         setActiveTakeoffId(null);
         setSelectedShapes([]);
       }

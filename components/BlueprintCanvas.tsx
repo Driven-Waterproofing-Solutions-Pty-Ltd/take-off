@@ -1034,31 +1034,22 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             return;
         }
 
-        // Clear selection when clicking empty canvas (regardless of active tool)
         if (draggedVertex) return;
 
-        // Don't clear if we just completed a rectangle selection
         if (justCompletedRectSelection.current) return;
 
-        // Only clear selection if not currently doing a rectangle selection
-        if (!isRectSelecting && !selectionRect?.active) {
-            // Clear multiple selected shapes
-            if (selectedItems.length > 0) {
-                setSelectedItems([]);
-            }
-
-            // Clear single item selection (from sidebar click or canvas shape click)
-            if (selectedShape) {
-                setSelectedShape(null);
-            }
-            
-            // Always clear active takeoff when clicking empty canvas
-            if (activeTakeoffId) {
-                onSelectTakeoffItem(null);
-            }
-        }
-
         if (activeTool === ToolType.SELECT) {
+            if (!isRectSelecting && !selectionRect?.active) {
+                if (selectedItems.length > 0) {
+                    setSelectedItems([]);
+                }
+                if (selectedShape) {
+                    setSelectedShape(null);
+                }
+                if (activeTakeoffId) {
+                    onSelectTakeoffItem(null);
+                }
+            }
             return;
         }
 
@@ -2266,3 +2257,4 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 });
 
 export default BlueprintCanvas;
+
