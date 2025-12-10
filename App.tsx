@@ -1,15 +1,7 @@
-
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import React, { useState, useRef, useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { Store } from '@tauri-apps/plugin-store';
-import { save, open } from '@tauri-apps/plugin-dialog';
-import { writeFile, readFile } from '@tauri-apps/plugin-fs';
-import { useHistory } from './hooks/useHistory';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { pdfjs } from 'react-pdf';
-// @ts-ignore
-import { jsPDF } from 'jspdf';
 import Sidebar from './components/Sidebar';
 import BlueprintCanvas, { BlueprintCanvasRef } from './components/BlueprintCanvas';
 import Tools from './components/Tools';
@@ -21,69 +13,58 @@ import EstimatesView from './components/EstimatesView';
 import ConfirmModal from './components/ConfirmModal';
 import PromptModal from './components/PromptModal';
 import ExportModal from './components/ExportModal';
-import LicenseModal from './components/LicenseModal';
-import { ToolType, ProjectData, TakeoffItem, Shape, Unit, PlanSet, FileSystemFileHandle, LegendSettings, LicenseResponse } from './types';
+import { ToolType, ProjectData, TakeoffItem, Shape, Unit, PlanSet, LegendSettings } from './types';
 import { PresetScale, getAreaUnitFromLinear } from './utils/geometry';
 import { useToast } from './contexts/ToastContext';
-import {
-  saveProjectData,
-  savePlanFile,
-  loadProjectFromStorage,
-  clearProjectData,
-  exportProjectToZip,
-  importProjectFromZip,
-  getLicenseKey,
-  saveLicenseKey
-} from './utils/storage';
 import { generateMarkupPDF } from './utils/pdfExport';
 import { Loader2 } from 'lucide-react';
-import { licenseService } from './services/licenseService';
-
-type ViewMode = 'canvas' | 'estimates';
+import { useProjectManager } from './hooks/useProjectManager';
+import { useLicense } from './contexts/LicenseContext';
+import { useViewRouter } from './components/Router';
+import { savePlanFile } from './utils/storage';
 
 const App: React.FC = () => {
   const { addToast } = useToast();
+  const { isLicensed } = useLicense();
+  const { viewMode, setViewMode } = useViewRouter();
 
-  // License State
-  const [isLicensed, setIsLicensed] = useState(false);
-  const [checkingLicense, setCheckingLicense] = useState(true);
-  const [licenseExpiration, setLicenseExpiration] = useState<Date | null>(null);
-  const [licenseError, setLicenseError] = useState<string | null>(null);
-
-  // History State
   const {
-    state: historyState,
-    set: setHistory,
-    setTransient: setHistoryTransient,
-    commit: commitHistory,
+    projectName,
+    items,
+    projectData,
+    planSets,
+    totalPages,
+    isSaving,
+    lastSavedAt,
+    isInitializing,
+    loadingMessage,
+    showImportConfirm,
+    showNewProjectPrompt,
+    setShowNewProjectPrompt,
+    setProjectName,
+    setHistory,
+    setHistoryTransient,
+    commitHistory,
     undo,
     redo,
     canUndo,
     canRedo,
-    clear: clearHistory
-  } = useHistory<{
-    items: TakeoffItem[];
-    projectData: ProjectData;
-    planSets: PlanSet[];
-    totalPages: number;
-  }>({
-    items: [],
-    projectData: {},
-    planSets: [],
-    totalPages: 0
-  });
+    handleNewProjectRequest,
+    handleNewProjectConfirmed,
+    handleSaveProject,
+    handleLoadProjectClick,
+    handleImportConfirmed,
+    setShowImportConfirm,
+    setPendingImportPath,
+  } = useProjectManager(isLicensed);
 
-  const { items, projectData, planSets, totalPages } = historyState;
+  const historyState = { items, projectData, planSets, totalPages };
 
-  // Current View State
-  const [projectName, setProjectName] = useState("Untitled Project");
   const [pageIndex, setPageIndex] = useState<number>(0);
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
-  const [pdfPageWidth, setPdfPageWidth] = useState<number>(0);
 
   const [activeTool, setActiveTool] = useState<ToolType>(ToolType.SELECT);
   const [activeTakeoffId, setActiveTakeoffId] = useState<string | null>(null);
-  const [clipboard, setClipboard] = useState<TakeoffItem | null>(null);
   const [selectedShapes, setSelectedShapes] = useState<{ itemId: string, shapeId: string }[]>([]);
 
   const [isDeductionMode, setIsDeductionMode] = useState(false);
@@ -96,142 +77,27 @@ const App: React.FC = () => {
   const [editingItem, setEditingItem] = useState<TakeoffItem | null>(null);
   const [pendingTool, setPendingTool] = useState<ToolType | null>(null);
 
-  const [viewMode, setViewMode] = useState<ViewMode>('canvas');
-
-  const [showNewProjectPrompt, setShowNewProjectPrompt] = useState(false);
-  const [showImportConfirm, setShowImportConfirm] = useState(false);
   const [showDeletePageConfirm, setShowDeletePageConfirm] = useState(false);
   const [pageToDelete, setPageToDelete] = useState<number | null>(null);
-  const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
 
   const [showExportModal, setShowExportModal] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState({ current: 0, total: 0 });
 
-  const [isSaving, setIsSaving] = useState(false);
-  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
-  const [isInitializing, setIsInitializing] = useState(true);
   const [isUploadingPdf, setIsUploadingPdf] = useState(false);
-  const [loadingMessage, setLoadingMessage] = useState("Loading Project...");
-  const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
+  const [uploadLoadingMessage, setUploadLoadingMessage] = useState("Uploading PDF Plans...");
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<BlueprintCanvasRef>(null);
 
-  // --- License Check & Startup File ---
-  useEffect(() => {
-    const init = async () => {
-      // Check License
-      try {
-        const res = await licenseService.checkLicense();
-
-        if (res.valid) {
-          setIsLicensed(true);
-          if (res.expiresAt) setLicenseExpiration(new Date(res.expiresAt));
-        } else {
-          if (res.message) {
-            addToast(res.message, 'error');
-            setLicenseError(res.message);
-          }
-        }
-      } catch (e) {
-        console.error("Failed to load license", e);
-        setLicenseError("Failed to check license status.");
-      } finally {
-        setCheckingLicense(false);
-      }
-
-      // Check Startup Args (File Association)
-      try {
-        const args = await invoke<string[]>('get_startup_args');
-        // Args[0] is binary, Args[1] might be file path if double-clicked
-        if (args && args.length > 1) {
-          const possiblePath = args[1];
-          if (possiblePath.toLowerCase().endsWith('.takeoff')) {
-            setPendingImportPath(possiblePath);
-            setShowImportConfirm(true);
-          }
-        }
-      } catch (e) {
-        console.error("Failed to get startup args", e);
-      }
-    };
-    init();
-  }, []);
-
-  // --- Persistence Logic ---
-
-  useEffect(() => {
-    if (!isLicensed) return;
-
-    const init = async () => {
-      try {
-        const state = await loadProjectFromStorage();
-        if (state) {
-          const patchedItems = state.items.map(item => {
-            if (item.type === ToolType.AREA) {
-              const correctedUnit = getAreaUnitFromLinear(item.unit);
-              if (correctedUnit !== item.unit) {
-                return { ...item, unit: correctedUnit };
-              }
-            }
-            return item;
-          });
-
-          clearHistory({
-            items: patchedItems,
-            projectData: state.projectData,
-            planSets: state.planSets,
-            totalPages: state.totalPages
-          });
-
-          if (state.projectName) setProjectName(state.projectName);
-
-          setLastSavedAt(new Date());
-          addToast("Project loaded successfully", 'success');
-        }
-      } catch (e) {
-        console.error("Failed to load project", e);
-        addToast("Failed to load existing project", 'error');
-      } finally {
-        setIsInitializing(false);
-      }
-    };
-    init();
-  }, [isLicensed]);
-
-  useEffect(() => {
-    if (isInitializing || !isLicensed) return;
-
-    const saveData = async () => {
-      setIsSaving(true);
-      try {
-        await saveProjectData(items, projectData, planSets, totalPages, projectName);
-        setLastSavedAt(new Date());
-      } catch (e) {
-        console.error("Autosave failed", e);
-      } finally {
-        setIsSaving(false);
-      }
-    };
-
-    const timeout = setTimeout(saveData, 1000);
-    return () => clearTimeout(timeout);
-  }, [items, projectData, totalPages, planSets.length, isInitializing, projectName, isLicensed]);
-
-  // Clear selection when navigating to a page without shapes for active item
   useEffect(() => {
     if (activeTakeoffId) {
       const activeItem = items.find(i => i.id === activeTakeoffId);
       const hasShapesOnCurrentPage = activeItem?.shapes.some(s => s.pageIndex === pageIndex);
-      // Only deselect if the item has shapes elsewhere but not on the current page.
-      // A new item will have shapes.length === 0, so it won't be deselected.
       if (activeItem && activeItem.shapes.length > 0 && !hasShapesOnCurrentPage) {
         setActiveTakeoffId(null);
         setSelectedShapes([]);
       }
     } else if (selectedShapes.length > 0) {
-      // Also clear multi-selected shapes if they don't exist on current page
       const validSelectedShapes = selectedShapes.filter(sel => {
         const item = items.find(i => i.id === sel.itemId);
         const shape = item?.shapes.find(s => s.id === sel.shapeId);
@@ -243,7 +109,6 @@ const App: React.FC = () => {
     }
   }, [pageIndex, activeTakeoffId, selectedShapes, items]);
 
-  // Re-implementing simplified handlers for brevity, copying key logic from original App.tsx
   const handleExportPDF = async (pageIndices: number[], includeLegend: boolean, includeNotes: boolean) => {
     setIsExporting(true);
     setExportProgress({ current: 0, total: pageIndices.length });
@@ -270,146 +135,8 @@ const App: React.FC = () => {
     }
   };
 
-  const handleNewProjectRequest = () => setShowNewProjectPrompt(true);
-  const handleNewProjectConfirmed = async (name: string) => {
-    setShowNewProjectPrompt(false);
-    await clearProjectData();
-    clearHistory({ items: [], projectData: {}, planSets: [], totalPages: 0 });
-    setPageIndex(0);
-    setActiveTakeoffId(null);
-    setViewMode('canvas');
-    setIsDeductionMode(false);
-    setProjectName(name);
-    setCurrentFilePath(null);
-    addToast(`Created project: ${name}`, 'success');
-  };
-
-  const handleSaveProject = async () => {
-    setIsSaving(true);
-    try {
-      const blob = await exportProjectToZip(items, projectData, planSets, totalPages, projectName);
-      const buffer = await blob.arrayBuffer();
-      const uint8Array = new Uint8Array(buffer);
-
-      let savePath = currentFilePath;
-
-      if (!savePath) {
-        const sanitizedName = projectName.replace(/[^a-z0-9]/gi, '_');
-        savePath = await save({
-          filters: [{
-            name: 'Takeoff Project',
-            extensions: ['takeoff']
-          }],
-          defaultPath: `${sanitizedName}.takeoff`
-        });
-      }
-
-      if (savePath) {
-        await writeFile(savePath, uint8Array);
-        setCurrentFilePath(savePath);
-        addToast("Project saved to file", 'success');
-      }
-    } catch (e) {
-      console.error("Export failed", e);
-      addToast("Failed to save project", 'error');
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleLoadProjectClick = async () => {
-    try {
-      const selected = await open({
-        multiple: false,
-        filters: [{
-          name: 'Takeoff Project',
-          extensions: ['takeoff']
-        }]
-      });
-
-      if (selected && typeof selected === 'string') {
-        // Store path temporarily or just use it directly if we want to skip confirmation
-        // But sticking to existing flow:
-        // We need to pass something to handleImportConfirmed.
-        // Let's use a new state or repurpose pendingImportFile (which is File | null).
-        // Since we can't easily create a File object with full path in browser env,
-        // we'll read it here or in confirmed.
-        // Let's read it here to ensure it's valid? No, better to just store path.
-        // But pendingImportFile expects File.
-        // I'll add a new state pendingImportPath.
-        setPendingImportPath(selected);
-        setShowImportConfirm(true);
-      }
-    } catch (e) {
-      console.error("Failed to open file dialog", e);
-    }
-  };
-
-  // Kept for backward compatibility if needed, but unused for project load now
-  const handleImportFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (fileInputRef.current) fileInputRef.current.value = '';
-    setPendingImportFile(file);
-    setShowImportConfirm(true);
-  };
-
-  const [pendingImportPath, setPendingImportPath] = useState<string | null>(null);
-
-  const handleImportConfirmed = async () => {
-    if (!pendingImportFile && !pendingImportPath) return;
-    setShowImportConfirm(false);
-    setIsInitializing(true);
-    setLoadingMessage("Importing Project...");
-    try {
-      await clearProjectData();
-
-      let importData: File | Uint8Array;
-      let name: string;
-
-      if (pendingImportPath) {
-        // Use Rust backend to read file to bypass frontend FS scope restrictions for arbitrary paths
-        const data = await invoke<number[]>('read_file_binary', { path: pendingImportPath });
-        importData = new Uint8Array(data);
-
-        // Extract filename from path for default name
-        // Simple split for windows/unix
-        const filename = pendingImportPath.split(/[\\/]/).pop() || "Project";
-        name = filename.replace(/\.[^/.]+$/, "");
-        setCurrentFilePath(pendingImportPath);
-      } else if (pendingImportFile) {
-        importData = pendingImportFile;
-        name = pendingImportFile.name.replace(/\.[^/.]+$/, "");
-        setCurrentFilePath(null); // Web import doesn't give us a path to save back to
-      } else {
-        throw new Error("No file to import");
-      }
-
-      const state = await importProjectFromZip(importData);
-      clearHistory({ items: state.items, projectData: state.projectData, planSets: state.planSets, totalPages: state.totalPages });
-
-      // Use name from project file if available, else filename
-      const finalName = state.projectName || name;
-      setProjectName(finalName);
-
-      await saveProjectData(state.items, state.projectData, state.planSets, state.totalPages, finalName);
-      for (const plan of state.planSets) {
-        await savePlanFile(plan.id, plan.file);
-      }
-      setLastSavedAt(new Date());
-      addToast("Project imported successfully", 'success');
-    } catch (err) {
-      console.error("Import failed", err);
-      addToast("Failed to import project.", 'error');
-    } finally {
-      setIsInitializing(false);
-      setLoadingMessage("Loading Project...");
-      setPendingImportFile(null);
-      setPendingImportPath(null);
-    }
-  };
-
   const getCurrentPageScale = () => projectData[pageIndex]?.scale || { isSet: false, pixelsPerUnit: 0, unit: Unit.FEET };
+
   const getActivePlanDetails = () => {
     if (planSets.length === 0) return null;
     for (const set of planSets) {
@@ -430,7 +157,7 @@ const App: React.FC = () => {
   const handleUpload = async (files: File[], names: string[]) => {
     setShowUploadModal(false);
     setIsUploadingPdf(true);
-    setLoadingMessage("Uploading PDF Plans...");
+    setUploadLoadingMessage("Uploading PDF Plans...");
     try {
       let newPlanSets = [...planSets];
       let currentTotalPages = totalPages;
@@ -438,12 +165,10 @@ const App: React.FC = () => {
         const file = files[i];
         const name = names[i];
 
-        // Create a copy of the file to ensure we have a fresh blob that hasn't been read/detached
         const fileBlob = new Blob([file], { type: 'application/pdf' });
         const fileCopy = new File([fileBlob], file.name, { type: 'application/pdf', lastModified: file.lastModified });
 
         const buffer = await fileCopy.arrayBuffer();
-        // We need to copy the buffer because pdfjs might detach it
         const bufferCopy = buffer.slice(0);
 
         const pdf = await pdfjs.getDocument(bufferCopy).promise;
@@ -451,7 +176,7 @@ const App: React.FC = () => {
 
         const newPlanSet: PlanSet = {
           id: crypto.randomUUID(),
-          file: fileCopy, // Use the fresh copy
+          file: fileCopy,
           name,
           pageCount: numPages,
           startPageIndex: currentTotalPages,
@@ -474,7 +199,7 @@ const App: React.FC = () => {
       addToast("Failed to load PDF file", 'error');
     } finally {
       setIsUploadingPdf(false);
-      setLoadingMessage("Loading Project...");
+      setUploadLoadingMessage("Loading Project...");
     }
   };
 
@@ -545,7 +270,7 @@ const App: React.FC = () => {
         ...sourceItem,
         id: newItemId || crypto.randomUUID(),
         label: `${sourceItem.label} (Copy)`,
-        shapes: shapes, // These shapes already have new IDs and positions from Canvas
+        shapes: shapes,
         totalValue: calculateTotalValue(shapes)
       };
       newItemsList.push(newItem);
@@ -578,6 +303,7 @@ const App: React.FC = () => {
     setHistory({ ...historyState, items: newItems });
     addToast(`Added ${shapesToAdd.length} shapes`, 'success');
   };
+
   const handleShapeCreated = (shape: Shape) => {
     if (!activeTakeoffId) return;
     if (isDeductionMode) shape.deduction = true;
@@ -622,23 +348,23 @@ const App: React.FC = () => {
 
   const handleBatchUpdateShapesTransient = (updates: { itemId: string, shape: Shape }[]) => {
     const updatesByItemId = updates.reduce((acc, { itemId, shape }) => {
-        if (!acc[itemId]) {
-            acc[itemId] = [];
-        }
-        acc[itemId].push(shape);
-        return acc;
+      if (!acc[itemId]) {
+        acc[itemId] = [];
+      }
+      acc[itemId].push(shape);
+      return acc;
     }, {} as Record<string, Shape[]>);
 
     const newItems = items.map(item => {
-        if (updatesByItemId[item.id]) {
-            const itemUpdates = updatesByItemId[item.id];
-            const updatedShapes = item.shapes.map(shape => {
-                const update = itemUpdates.find(u => u.id === shape.id);
-                return update || shape;
-            });
-            return { ...item, shapes: updatedShapes };
-        }
-        return item;
+      if (updatesByItemId[item.id]) {
+        const itemUpdates = updatesByItemId[item.id];
+        const updatedShapes = item.shapes.map(shape => {
+          const update = itemUpdates.find(u => u.id === shape.id);
+          return update || shape;
+        });
+        return { ...item, shapes: updatedShapes };
+      }
+      return item;
     });
 
     setHistoryTransient({ ...historyState, items: newItems });
@@ -681,20 +407,15 @@ const App: React.FC = () => {
   };
 
   const handleDeleteShapes = (shapesToDelete: { itemId: string, shapeId: string }[]) => {
-    // Create a Set of shape IDs for fast lookup
     const shapeIdSet = new Set(shapesToDelete.map(s => s.shapeId));
-
-    // Process all deletions in a single pass
     const newItems = items.map(item => {
       const newShapes = item.shapes.filter(shape => !shapeIdSet.has(shape.id));
       if (newShapes.length !== item.shapes.length) {
-        // This item had shapes deleted, recalculate total
         const newTotal = calculateTotalValue(newShapes);
         return { ...item, shapes: newShapes, totalValue: newTotal };
       }
       return item;
     });
-
     setHistory({ ...historyState, items: newItems });
   };
 
@@ -715,7 +436,7 @@ const App: React.FC = () => {
 
     const sourceItemIds = Object.keys(shapesBySource);
     const movedShapes: Shape[] = [];
-    
+
     let newItems = items.map(item => {
       if (sourceItemIds.includes(item.id)) {
         const shapeIdsToRemove = new Set(shapesBySource[item.id]);
@@ -743,7 +464,7 @@ const App: React.FC = () => {
       }
       return item;
     });
-    
+
     const sourceItemsAfterChange = newItems.filter(item => sourceItemIds.includes(item.id));
     const emptySourceItemIds = new Set<string>();
     sourceItemsAfterChange.forEach(item => {
@@ -810,24 +531,15 @@ const App: React.FC = () => {
       setShowHelpModal(true);
     }));
 
-    unlisteners.push(listen('new_project', () => {
-      handleNewProjectRequest();
-    }));
-
-    unlisteners.push(listen('open_project', () => {
-      handleLoadProjectClick();
-    }));
-
-    unlisteners.push(listen('save_project', () => {
-      handleSaveProject();
-    }));
+    unlisteners.push(listen('new_project', handleNewProjectRequest));
+    unlisteners.push(listen('open_project', handleLoadProjectClick));
+    unlisteners.push(listen('save_project', handleSaveProject));
 
     return () => {
       unlisteners.forEach(u => u.then(f => f()));
     };
   }, [handleNewProjectRequest, handleLoadProjectClick, handleSaveProject]);
 
-  // Keyboard Shortcuts (simplified for this file block)
   useKeyboardShortcuts({
     undo, redo, setTool: (t) => { setActiveTool(t); if (t === ToolType.SELECT) setActiveTakeoffId(null); },
     toggleDeductionMode: () => { if (activeTakeoffId) setIsDeductionMode(p => !p); },
@@ -836,17 +548,9 @@ const App: React.FC = () => {
     zoomIn: () => setZoomLevel(z => Math.min(10, z + 0.25)), zoomOut: () => setZoomLevel(z => Math.max(0.1, z - 0.25)),
     saveProject: handleSaveProject, nextPage: () => pageIndex < totalPages - 1 && setPageIndex(p => p + 1),
     prevPage: () => pageIndex > 0 && setPageIndex(p => p - 1), zoomToFit: () => setZoomLevel(1.0),
-    toggleRecord: () => activeTakeoffId && handleStopTakeoff(), toggleViewMode: () => setViewMode(v => v === 'canvas' ? 'estimates' : 'canvas'),
+    toggleRecord: () => activeTakeoffId && handleStopTakeoff(), toggleViewMode: () => setViewMode(viewMode === 'canvas' ? 'estimates' : 'canvas'),
     finishShape: () => activeTakeoffId && handleStopTakeoff(), copyItem: () => { }, pasteItem: () => { }
   });
-
-  if (checkingLicense) {
-    return <div className="h-screen w-screen bg-slate-50 flex items-center justify-center"><Loader2 className="animate-spin text-slate-400" size={32} /></div>;
-  }
-
-  if (!isLicensed) {
-    return <LicenseModal onSuccess={() => setIsLicensed(true)} initialMessage={licenseError} />;
-  }
 
   if (isInitializing || isUploadingPdf) {
     return (
@@ -854,7 +558,7 @@ const App: React.FC = () => {
         <div className="relative">
           <div className="w-16 h-16 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin"></div>
         </div>
-        <div className="text-center space-y-2"><h2 className="text-xl font-semibold text-slate-800">{loadingMessage}</h2></div>
+        <div className="text-center space-y-2"><h2 className="text-xl font-semibold text-slate-800">{isUploadingPdf ? uploadLoadingMessage : loadingMessage}</h2></div>
       </div>
     );
   }
@@ -864,8 +568,7 @@ const App: React.FC = () => {
   const activePlan = getActivePlanDetails();
 
   return (
-    <div className="flex h-screen w-screen bg-slate-50 overflow-hidden font-sans" onDragOver={(e) => { e.preventDefault(); console.log('[DRAG] App root onDragOver'); }}>
-      <input type="file" ref={fileInputRef} onChange={handleImportFileSelect} className="hidden" accept=".zip,.takeoff" />
+    <div className="flex h-screen w-screen bg-slate-50 overflow-hidden font-sans">
       <Sidebar
         items={items} activeTakeoffId={activeTakeoffId} selectedShapes={selectedShapes} onDelete={handleDeleteItem} onResume={handleResumeTakeoff} onStop={handleStopTakeoff}
         onSelect={setActiveTakeoffId} onOpenUploadModal={() => setShowUploadModal(true)} planSets={planSets} pageIndex={pageIndex}
@@ -895,7 +598,7 @@ const App: React.FC = () => {
                 isPageScaled={currentScale.isSet} />
             )}
             <BlueprintCanvas ref={canvasRef} file={activePlan?.file || null} localPageIndex={activePlan?.localPageIndex || 0} globalPageIndex={pageIndex}
-              onPageWidthChange={setPdfPageWidth} activeTool={activeTool} items={items} activeTakeoffId={activeTakeoffId} isDeductionMode={isDeductionMode}
+              onPageWidthChange={() => { }} activeTool={activeTool} items={items} activeTakeoffId={activeTakeoffId} isDeductionMode={isDeductionMode}
               onEnableDeduction={handleEnableDeductionMode} onSelectTakeoffItem={setActiveTakeoffId} onSelectionChanged={setSelectedShapes} onShapeCreated={handleShapeCreated}
               onUpdateShape={handleUpdateShape} onUpdateShapeTransient={handleUpdateShapeTransient} onBatchUpdateShapesTransient={handleBatchUpdateShapesTransient} onSplitShape={handleSplitShape}
               onUpdateScale={handleUpdateScale} onUpdateLegend={handleUpdateLegend} legendSettings={currentLegend} onDeleteShape={handleDeleteShape} onDeleteShapes={handleDeleteShapes}
@@ -913,9 +616,9 @@ const App: React.FC = () => {
       {editingItem && <PropertiesModal item={editingItem} items={items} onSave={handleUpdateItem} onClose={() => setEditingItem(null)} />}
       <HelpModal isOpen={showHelpModal} onClose={() => setShowHelpModal(false)} initialTab={helpModalTab} />
       <ExportModal isOpen={showExportModal} planSets={planSets} projectData={projectData} currentPageIndex={pageIndex} isExporting={isExporting} progress={exportProgress} onClose={() => setShowExportModal(false)} onExport={handleExportPDF} />
-      <PromptModal isOpen={showNewProjectPrompt} title="Create New Project" message="Enter a name for the new project." placeholder="My Project" onConfirm={handleNewProjectConfirmed} onCancel={() => setShowNewProjectPrompt(false)} confirmText="Create Project" />
-      <ConfirmModal isOpen={showImportConfirm} title="Import Project?" message="Loading a project will replace the current workspace." onConfirm={handleImportConfirmed} onCancel={() => { setShowImportConfirm(false); setPendingImportFile(null); setPendingImportPath(null); }} confirmText="Import Project" isDestructive />
-      <ConfirmModal isOpen={showDeletePageConfirm} title="Delete Page?" message="Are you sure you want to delete this page?" onConfirm={() => { /* Logic needed in component to match prev implementation */ setShowDeletePageConfirm(false); }} onCancel={() => setShowDeletePageConfirm(false)} confirmText="Delete Page" isDestructive />
+      <PromptModal isOpen={showNewProjectPrompt} title="Create New Project" message="Enter a name for the new project." placeholder="My Project" onConfirm={(name) => handleNewProjectConfirmed(name).then(() => setViewMode('canvas'))} onCancel={() => setShowNewProjectPrompt(false)} confirmText="Create Project" />
+      <ConfirmModal isOpen={showImportConfirm} title="Import Project?" message="Loading a project will replace the current workspace." onConfirm={() => handleImportConfirmed().then(() => setViewMode('canvas'))} onCancel={() => { setShowImportConfirm(false); setPendingImportPath(null); }} confirmText="Import Project" isDestructive />
+      <ConfirmModal isOpen={showDeletePageConfirm} title="Delete Page?" message="Are you sure you want to delete this page?" onConfirm={() => { /* Logic to be implemented */ setShowDeletePageConfirm(false); }} onCancel={() => setShowDeletePageConfirm(false)} confirmText="Delete Page" isDestructive />
     </div>
   );
 };
