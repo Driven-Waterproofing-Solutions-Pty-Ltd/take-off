@@ -4,6 +4,7 @@ import { TakeoffItem, ToolType, ProjectData, PlanSet } from '../types';
 import { Trash2, Upload, ChevronDown, ChevronRight, FilePlus, FolderOpen, Save, RefreshCw, Settings, Edit2, Table, Eye, EyeOff, FileDown, MoreHorizontal, Plus, HelpCircle } from 'lucide-react';
 import { evaluateFormula } from '../utils/math';
 import Logo from './Logo';
+import ChangeItemModal from './ChangeItemModal';
 
 interface SidebarProps {
     items: TakeoffItem[];
@@ -26,6 +27,7 @@ interface SidebarProps {
     onDeletePage: (index: number) => void;
     onEditItem: (item: TakeoffItem) => void;
     onRenameItem: (itemId: string, newName: string) => void;
+    onMoveShapesToItem?: (shapesToMove: { itemId: string, shapeId: string }[], targetItemId: string) => void;
 
     // Project Actions
     projectName: string;
@@ -58,6 +60,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     onDeletePage,
     onEditItem,
     onRenameItem,
+    onMoveShapesToItem,
     projectName,
     onNewProject,
     onSaveProject,
@@ -66,7 +69,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     lastSavedAt,
     activeTool,
     onOpenExportModal,
-    onOpenHelp
+    onOpenHelp,
 }) => {
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
     const [expandedPages, setExpandedPages] = useState<Set<number>>(new Set());
@@ -81,6 +84,10 @@ const Sidebar: React.FC<SidebarProps> = ({
 
     // Context Menu State
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: TakeoffItem } | null>(null);
+
+    // Change Item Modal State
+    const [showChangeItemModal, setShowChangeItemModal] = useState(false);
+    const [selectedShapeIdsForChange, setSelectedShapeIdsForChange] = useState<string[]>([]);
 
     // Sidebar Resizing State
     const [sidebarWidth, setSidebarWidth] = useState<number>(280);
@@ -491,6 +498,20 @@ const Sidebar: React.FC<SidebarProps> = ({
                         </button>
                         <div className="border-t border-slate-100 my-1"></div>
                         <button
+                            onClick={() => {
+                                // Get all shape IDs for this item on the current page
+                                const currentPageShapes = contextMenu.item.shapes
+                                    .filter(s => s.pageIndex === pageIndex)
+                                    .map(s => s.id);
+                                setSelectedShapeIdsForChange(currentPageShapes);
+                                setShowChangeItemModal(true);
+                                setContextMenu(null);
+                            }}
+                            className="px-3 py-2 text-left hover:bg-slate-50 flex items-center gap-2 text-slate-700"
+                        >
+                            <Edit2 size={14} /> Change Item
+                        </button>
+                        <button
                             onClick={() => { onDelete(contextMenu.item.id); setContextMenu(null); }}
                             className="px-3 py-2 text-left hover:bg-red-50 flex items-center gap-2 text-red-600"
                         >
@@ -499,6 +520,24 @@ const Sidebar: React.FC<SidebarProps> = ({
                     </div>
                 </>
             )}
+
+            {/* Change Item Modal */}
+            <ChangeItemModal
+                isOpen={showChangeItemModal}
+                onClose={() => setShowChangeItemModal(false)}
+                onChangeItem={(targetItemId) => {
+                    if (onMoveShapesToItem && contextMenu) {
+                        const shapesToMove = contextMenu.item.shapes
+                            .filter(s => s.pageIndex === pageIndex)
+                            .map(s => ({ itemId: contextMenu.item.id, shapeId: s.id }));
+                        onMoveShapesToItem(shapesToMove, targetItemId);
+                    }
+                    setShowChangeItemModal(false);
+                }}
+                items={items}
+                sourceItemId={contextMenu?.item.id || ''}
+                shapeIds={selectedShapeIdsForChange}
+            />
         </div>
     );
 };

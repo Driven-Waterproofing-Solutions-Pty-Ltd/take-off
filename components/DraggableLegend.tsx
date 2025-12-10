@@ -29,6 +29,7 @@ const DraggableLegend: React.FC<DraggableLegendProps> = ({
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
+  const resizeDirection = useRef<'n' | 's' | 'e' | 'w' | 'se' | 'sw' | 'ne' | 'nw' | null>(null);
   
   const dragStart = useRef({ x: 0, y: 0 });
   const initialPos = useRef({ x: 0, y: 0 });
@@ -55,12 +56,14 @@ const DraggableLegend: React.FC<DraggableLegendProps> = ({
     initialPos.current = { x, y };
   };
 
-  const handleResizeDown = (e: React.MouseEvent) => {
+  const handleResizeDown = (e: React.MouseEvent, direction: 'n' | 's' | 'e' | 'w' | 'se' | 'sw' | 'ne' | 'nw') => {
       e.stopPropagation();
       e.preventDefault();
       setIsResizing(true);
+      resizeDirection.current = direction;
       dragStart.current = { x: e.clientX, y: e.clientY };
       initialLegendScale.current = scale;
+      initialPos.current = { x, y };
       
       if (containerRef.current) {
           initialSize.current = {
@@ -91,28 +94,55 @@ const DraggableLegend: React.FC<DraggableLegendProps> = ({
       }
       
       if (isResizing) {
-          const dx = (e.clientX - dragStart.current.x) / current.zoomLevel;
-          const dy = (e.clientY - dragStart.current.y) / current.zoomLevel;
+        let dx = (e.clientX - dragStart.current.x) / current.zoomLevel;
+        let dy = (e.clientY - dragStart.current.y) / current.zoomLevel;
+        const dir = resizeDirection.current;
 
-          const startWidth = initialSize.current.width * initialLegendScale.current;
-          const startHeight = initialSize.current.height * initialLegendScale.current;
+        if (dir?.includes('w')) dx = -dx;
+        if (dir?.includes('n')) dy = -dy;
 
-          const newWidth = Math.max(50, startWidth + dx);
-          const newHeight = Math.max(50, startHeight + dy);
-          
-          const scaleX = newWidth / initialSize.current.width;
-          const scaleY = newHeight / initialSize.current.height;
+        const startWidth = initialSize.current.width * initialLegendScale.current;
+        const startHeight = initialSize.current.height * initialLegendScale.current;
 
-          // Uniform scaling based on max dimension change
-          const newScale = Math.max(0.2, Math.max(scaleX, scaleY));
-          
-          onUpdate({ scale: newScale });
+        // Use a small epsilon to prevent division by zero for very small legends
+        const safeStartWidth = startWidth > 1 ? startWidth : 1;
+        const safeStartHeight = startHeight > 1 ? startHeight : 1;
+
+        // Calculate the percentage change requested for each dimension
+        const changeX = (safeStartWidth + dx) / safeStartWidth;
+        const changeY = (safeStartHeight + dy) / safeStartHeight;
+
+        let scaleChangeFactor;
+        
+        // For cardinal directions, only the change in that direction is relevant
+        if (dir === 'n' || dir === 's') {
+            scaleChangeFactor = changeY;
+        } else if (dir === 'e' || dir === 'w') {
+            scaleChangeFactor = changeX;
+        } else { // For corners, use the one that implies a larger scale to maintain aspect ratio
+            scaleChangeFactor = Math.max(changeX, changeY);
+        }
+
+        const newScale = Math.max(0.2, initialLegendScale.current * scaleChangeFactor);
+        
+        const updates: Partial<LegendSettings> = { scale: newScale };
+        const scaleChange = newScale - initialLegendScale.current;
+
+        if (dir?.includes('w')) {
+            updates.x = initialPos.current.x - (initialSize.current.width * scaleChange);
+        }
+        if (dir?.includes('n')) {
+            updates.y = initialPos.current.y - (initialSize.current.height * scaleChange);
+        }
+        
+        onUpdate(updates);
       }
     };
 
     const handleMouseUp = () => {
       setIsDragging(false);
       setIsResizing(false);
+      resizeDirection.current = null;
     };
 
     if (isDragging || isResizing) {
@@ -134,7 +164,7 @@ const DraggableLegend: React.FC<DraggableLegendProps> = ({
       style={{ 
         left: x,
         top: y,
-        width: 220, // Reduced base width for better default size
+        width: 350, // Reduced base width for better default size
         transform: `scale(${scale})`
       }}
       onMouseDown={(e) => e.stopPropagation()} 
@@ -168,7 +198,7 @@ const DraggableLegend: React.FC<DraggableLegendProps> = ({
              <div key={item.id} className="flex items-center justify-between gap-2 text-xs">
                 <div className="flex-1 flex items-center gap-2 overflow-hidden">
                    <div className="w-3 h-3 border border-slate-400 shrink-0" style={{ backgroundColor: item.color }}></div>
-                   <span className="font-medium text-slate-800 truncate">{item.label}</span>
+                   <span className="font-medium text-slate-800" title={item.label}>{item.label.length > 50 ? `${item.label.substring(0, 50)}...` : item.label}</span>
                 </div>
                 <div className="font-mono font-bold text-slate-700 whitespace-nowrap">
                   {displayQty.toLocaleString(undefined, {maximumFractionDigits: 1})} {item.unit}
@@ -178,12 +208,19 @@ const DraggableLegend: React.FC<DraggableLegendProps> = ({
         })}
       </div>
       
-      {/* Resize Handle */}
-      <div 
-        className="absolute bottom-0 right-0 p-1 cursor-nwse-resize text-slate-400 hover:text-slate-600"
-        onMouseDown={handleResizeDown}
-      >
-          <Scaling size={12} />
+      {/* Resize Handles */}
+      <div className="absolute -top-1 left-0 w-full h-2 cursor-ns-resize" onMouseDown={(e) => handleResizeDown(e, 'n')} />
+      <div className="absolute -bottom-1 left-0 w-full h-2 cursor-ns-resize" onMouseDown={(e) => handleResizeDown(e, 's')} />
+      <div className="absolute top-0 -left-1 h-full w-2 cursor-ew-resize" onMouseDown={(e) => handleResizeDown(e, 'w')} />
+      <div className="absolute top-0 -right-1 h-full w-2 cursor-ew-resize" onMouseDown={(e) => handleResizeDown(e, 'e')} />
+
+      <div className="absolute -top-1 -left-1 w-3 h-3 cursor-nwse-resize" onMouseDown={(e) => handleResizeDown(e, 'nw')} />
+      <div className="absolute -top-1 -right-1 w-3 h-3 cursor-nesw-resize" onMouseDown={(e) => handleResizeDown(e, 'ne')} />
+      <div className="absolute -bottom-1 -left-1 w-3 h-3 cursor-nesw-resize" onMouseDown={(e) => handleResizeDown(e, 'sw')} />
+      <div className="absolute -bottom-1 -right-1 w-3 h-3 cursor-nwse-resize" onMouseDown={(e) => handleResizeDown(e, 'se')}>
+          <div className="absolute bottom-0 right-0 p-1 text-slate-400 hover:text-slate-600 pointer-events-none">
+              <Scaling size={12} />
+          </div>
       </div>
     </div>
   );

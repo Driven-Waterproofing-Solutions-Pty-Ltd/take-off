@@ -3,12 +3,13 @@ import React, { useState, useRef, useEffect, useImperativeHandle, forwardRef, us
 import { Document, Page } from 'react-pdf';
 import { Point, ToolType, TakeoffItem, Shape, Unit, LegendSettings } from '../types';
 import { calculateDistance, calculatePolylineLength, calculatePolygonArea, getScaledValue, getScaledArea, parseDimensionInput, PresetScale, isPointInPolygon, PRESET_SCALES } from '../utils/geometry';
-import { AlertCircle, Trash2, Scissors, Plus, Eraser, MessageSquare, Ruler } from 'lucide-react';
+import { AlertCircle, Trash2, Scissors, Plus, Eraser, MessageSquare, Ruler, Edit2 } from 'lucide-react';
 import '../utils/pdfWorker';
 import { useToast } from '../contexts/ToastContext';
 import DraggableLegend from './DraggableLegend';
 import NoteInputModal from './NoteInputModal';
 import PasteOptionsModal from './PasteOptionsModal';
+import ChangeItemModal from './ChangeItemModal';
 
 // Removed html2canvas import as we now use pdf-lib for vector export
 
@@ -31,6 +32,7 @@ interface BlueprintCanvasProps {
     onShapeCreated: (shape: Shape) => void;
     onUpdateShape?: (itemId: string, shapeId: string, updates: Partial<Shape>) => void;
     onUpdateShapeTransient?: (itemId: string, shape: Shape) => void;
+    onBatchUpdateShapesTransient?: (updates: { itemId: string, shape: Shape }[]) => void;
     onSplitShape: (itemId: string, existingShape: Shape, newShape: Shape) => void;
     onUpdateScale: (pixels: number, realValue: number, unit: Unit) => void;
     onUpdateLegend: (settings: Partial<LegendSettings>) => void;
@@ -39,6 +41,7 @@ interface BlueprintCanvasProps {
     onDeleteShapes?: (shapes: { itemId: string, shapeId: string }[]) => void;
     onBatchCreateItems?: (itemsToCreate: { newItemId?: string, sourceItemId: string, shapes: Shape[] }[]) => void;
     onBatchAddShapes?: (shapes: { itemId: string, shape: Shape }[]) => void;
+    onMoveShapesToItem?: (shapesToMove: { itemId: string, shapeId: string }[], targetItemId: string) => void;
     onStopRecording: () => void;
     scaleInfo: { isSet: boolean, ppu: number, unit: Unit };
     zoomLevel: number;
@@ -305,6 +308,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     onShapeCreated,
     onUpdateShape,
     onUpdateShapeTransient,
+    onBatchUpdateShapesTransient,
     onSplitShape,
     onUpdateScale,
     onUpdateLegend,
@@ -314,6 +318,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     onStopRecording,
     onBatchCreateItems,
     onBatchAddShapes,
+    onMoveShapesToItem,
     scaleInfo,
     zoomLevel,
     setZoomLevel,
@@ -380,6 +385,10 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     
     // State to track pending selection after paste
     const [pendingSelection, setPendingSelection] = useState<{ itemId: string, shapeId: string }[] | null>(null);
+
+    // Change Item Modal State
+    const [showChangeItemModal, setShowChangeItemModal] = useState(false);
+    const [selectedShapeIdsForChange, setSelectedShapeIdsForChange] = useState<string[]>([]);
 
     // Keep ref in sync with state
     useEffect(() => {
@@ -814,21 +823,27 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             const dx = currentPoint.x - dragStartPoint.current.x;
             const dy = currentPoint.y - dragStartPoint.current.y;
 
-            // Move all dragged shapes by the same offset
+            const updates: { itemId: string, shape: Shape }[] = [];
             draggedShapes.forEach(draggedShape => {
                 const item = items.find(i => i.id === draggedShape.itemId);
                 const shape = item?.shapes.find(s => s.id === draggedShape.shapeId);
 
                 if (item && shape && draggedShape.initialPoints) {
-                    // Move all points by the same offset
                     const newPoints = draggedShape.initialPoints.map(pt => ({
                         x: pt.x + dx,
                         y: pt.y + dy
                     }));
 
-                    updateShapeValue(item, shape, newPoints, true);
+                    const { updatedShape } = updateShapeValue(item, shape, newPoints, true);
+                    if (updatedShape) {
+                        updates.push({ itemId: item.id, shape: updatedShape });
+                    }
                 }
             });
+
+            if (updates.length > 0 && onBatchUpdateShapesTransient) {
+                onBatchUpdateShapesTransient(updates);
+            }
             return;
         }
 
@@ -1103,9 +1118,31 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         });
     };
 
+    const handleCanvasContextMenu = (e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        // If we have multiple shapes selected, show context menu for changing multiple items
+        if (selectedItems.length > 0) {
+            setContextMenu({
+                x: e.clientX,
+                y: e.clientY,
+                itemId: selectedItems[0].itemId, // Use first item as reference
+                shapeId: selectedItems[0].shapeId
+            });
+        }
+    };
+
     const handleShapeContextMenu = (e: React.MouseEvent, itemId: string, shapeId: string) => {
         e.preventDefault();
         e.stopPropagation();
+
+        // If a multi-selection is active, but user right-clicks a shape *outside* of it,
+        // clear the multi-selection and treat this as a single shape action.
+        const isInSelection = selectedItems.some(s => s.itemId === itemId && s.shapeId === shapeId);
+        if (selectedItems.length > 0 && !isInSelection) {
+            setSelectedItems([]);
+        }
 
         const clickPt = getInternalCoordinates(e.clientX, e.clientY);
         const item = items.find(i => i.id === itemId);
@@ -1230,7 +1267,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         setContextMenu(null);
     };
 
-    const updateShapeValue = (item: TakeoffItem, shape: Shape, newPoints: Point[], isTransient = false) => {
+    const updateShapeValue = (item: TakeoffItem, shape: Shape, newPoints: Point[], isTransient = false): { updatedShape: Shape | null } => {
         let newValue = 0;
         const ppu = scaleInfo.ppu;
         const pdfScale = originalPdfWidth > 0 && contentWidth > 0 ? originalPdfWidth / contentWidth : 1;
@@ -1255,6 +1292,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         } else if (onUpdateShape) {
             onUpdateShape(item.id, updatedShape.id, updatedShape);
         }
+        return { updatedShape };
     };
 
 
@@ -1393,7 +1431,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
                 onMouseLeave={() => { handleMouseUp(); setShowLoupe(false); }}
-                onContextMenu={(e) => e.preventDefault()}
+                onContextMenu={handleCanvasContextMenu}
             >
                 {/* PDF Container - Scaled via CSS for performance */}
                 <div
@@ -2061,6 +2099,50 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                         </button>
                     )}
 
+                    {/* Change Item Button */}
+                    {contextMenu.shapeId && (
+                        <button
+                            onClick={() => {
+                                if (!contextMenu?.itemId) return;
+
+                                const rightClickedItem = items.find(i => i.id === contextMenu.itemId);
+                                if (!rightClickedItem) return;
+                                const rightClickedItemType = rightClickedItem.type;
+
+                                const selectionPool = selectedItems.length > 0
+                                    ? selectedItems
+                                    : [{ itemId: contextMenu.itemId, shapeId: contextMenu.shapeId! }];
+
+                                const shapeIdsToChange: string[] = [];
+                                let incompatibleCount = 0;
+
+                                selectionPool.forEach(sel => {
+                                    const item = items.find(i => i.id === sel.itemId);
+                                    if (item && item.type === rightClickedItemType) {
+                                        shapeIdsToChange.push(sel.shapeId);
+                                    } else {
+                                        incompatibleCount++;
+                                    }
+                                });
+
+                                if (incompatibleCount > 0) {
+                                    addToast(`${incompatibleCount} selected item(s) will not be changed due to incompatible types.`, 'info');
+                                }
+
+                                if (shapeIdsToChange.length > 0) {
+                                    setSelectedShapeIdsForChange(shapeIdsToChange);
+                                    setShowChangeItemModal(true);
+                                } else {
+                                    // If no compatible shapes, still close the menu
+                                    setContextMenu(null);
+                                }
+                            }}
+                            className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 flex items-center gap-2"
+                        >
+                            <Edit2 size={14} /> Change Item
+                        </button>
+                    )}
+
                     {(() => {
                         const item = items.find(i => i.id === contextMenu.itemId);
                         if (item && item.type === ToolType.AREA) {
@@ -2154,6 +2236,30 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 }}
                 items={items}
                 clipboardItemCount={clipboardItems.length}
+            />
+
+            {/* Change Item Modal */}
+            <ChangeItemModal
+                isOpen={showChangeItemModal}
+                onClose={() => {
+                    setShowChangeItemModal(false);
+                    setContextMenu(null); // Clear context menu state when modal closes
+                }}
+                onChangeItem={(targetItemId) => {
+                    if (onMoveShapesToItem) {
+                        const shapesToMove = selectedShapeIdsForChange.map(shapeId => {
+                            // Find the item ID for each shape ID
+                            const item = items.find(i => i.shapes.some(s => s.id === shapeId));
+                            return { itemId: item!.id, shapeId };
+                        });
+                        onMoveShapesToItem(shapesToMove, targetItemId);
+                    }
+                    setShowChangeItemModal(false);
+                    setContextMenu(null); // Also clear on success
+                }}
+                items={items}
+                sourceItemId={contextMenu?.itemId || ''}
+                shapeIds={selectedShapeIdsForChange}
             />
         </div>
     );

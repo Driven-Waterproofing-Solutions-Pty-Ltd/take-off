@@ -618,6 +618,30 @@ const App: React.FC = () => {
     setHistoryTransient({ ...historyState, items: newItems });
   };
 
+  const handleBatchUpdateShapesTransient = (updates: { itemId: string, shape: Shape }[]) => {
+    const updatesByItemId = updates.reduce((acc, { itemId, shape }) => {
+        if (!acc[itemId]) {
+            acc[itemId] = [];
+        }
+        acc[itemId].push(shape);
+        return acc;
+    }, {} as Record<string, Shape[]>);
+
+    const newItems = items.map(item => {
+        if (updatesByItemId[item.id]) {
+            const itemUpdates = updatesByItemId[item.id];
+            const updatedShapes = item.shapes.map(shape => {
+                const update = itemUpdates.find(u => u.id === shape.id);
+                return update || shape;
+            });
+            return { ...item, shapes: updatedShapes };
+        }
+        return item;
+    });
+
+    setHistoryTransient({ ...historyState, items: newItems });
+  };
+
   const handleSplitShape = (itemId: string, updatedShape: Shape, newShape: Shape) => {
     const newItems = items.map(item => {
       if (item.id === itemId) {
@@ -670,6 +694,75 @@ const App: React.FC = () => {
     });
 
     setHistory({ ...historyState, items: newItems });
+  };
+
+  const handleMoveShapesToItem = (shapesToMove: { itemId: string, shapeId: string }[], targetItemId: string) => {
+    const targetItem = items.find(item => item.id === targetItemId);
+    if (!targetItem) {
+      addToast("Target item not found", 'error');
+      return;
+    }
+
+    const shapesBySource = shapesToMove.reduce((acc, shape) => {
+      if (!acc[shape.itemId]) {
+        acc[shape.itemId] = [];
+      }
+      acc[shape.itemId].push(shape.shapeId);
+      return acc;
+    }, {} as Record<string, string[]>);
+
+    const sourceItemIds = Object.keys(shapesBySource);
+    const movedShapes: Shape[] = [];
+    
+    let newItems = items.map(item => {
+      if (sourceItemIds.includes(item.id)) {
+        const shapeIdsToRemove = new Set(shapesBySource[item.id]);
+        const itemShapesToMove = item.shapes.filter(s => shapeIdsToRemove.has(s.id));
+        movedShapes.push(...itemShapesToMove);
+
+        const remainingShapes = item.shapes.filter(s => !shapeIdsToRemove.has(s.id));
+        return {
+          ...item,
+          shapes: remainingShapes,
+          totalValue: calculateTotalValue(remainingShapes)
+        };
+      }
+      return item;
+    });
+
+    newItems = newItems.map(item => {
+      if (item.id === targetItemId) {
+        const updatedShapes = [...item.shapes, ...movedShapes];
+        return {
+          ...item,
+          shapes: updatedShapes,
+          totalValue: calculateTotalValue(updatedShapes)
+        };
+      }
+      return item;
+    });
+    
+    const sourceItemsAfterChange = newItems.filter(item => sourceItemIds.includes(item.id));
+    const emptySourceItemIds = new Set<string>();
+    sourceItemsAfterChange.forEach(item => {
+      if (item.shapes.length === 0) {
+        emptySourceItemIds.add(item.id);
+      }
+    });
+
+    if (emptySourceItemIds.size > 0) {
+      newItems = newItems.filter(item => !emptySourceItemIds.has(item.id));
+      if (activeTakeoffId && emptySourceItemIds.has(activeTakeoffId)) {
+        setActiveTakeoffId(null);
+        setActiveTool(ToolType.SELECT);
+      }
+    }
+
+    const movedShapeIdSet = new Set(shapesToMove.map(s => s.shapeId));
+    setSelectedShapes(prev => prev.filter(sel => !movedShapeIdSet.has(sel.shapeId)));
+
+    setHistory({ ...historyState, items: newItems });
+    addToast(`Moved ${shapesToMove.length} shape(s) to ${targetItem.label}`, 'success');
   };
 
   const handleResumeTakeoff = (id: string) => {
@@ -781,6 +874,7 @@ const App: React.FC = () => {
         onRenamePage={(i, n) => setHistory({ ...historyState, projectData: { ...projectData, [i]: { ...projectData[i], name: n } } })}
         onDeletePage={(i) => { setPageToDelete(i); setShowDeletePageConfirm(true); }}
         onEditItem={setEditingItem} onRenameItem={(id, n) => handleUpdateItem(id, { label: n })}
+        onMoveShapesToItem={handleMoveShapesToItem}
         projectName={projectName} onNewProject={handleNewProjectRequest} onSaveProject={handleSaveProject} onLoadProject={handleLoadProjectClick}
         isSaving={isSaving} lastSavedAt={lastSavedAt} activeTool={activeTool} onOpenExportModal={() => setShowExportModal(true)}
         onOpenHelp={() => setShowHelpModal(true)}
@@ -801,10 +895,11 @@ const App: React.FC = () => {
             <BlueprintCanvas ref={canvasRef} file={activePlan?.file || null} localPageIndex={activePlan?.localPageIndex || 0} globalPageIndex={pageIndex}
               onPageWidthChange={setPdfPageWidth} activeTool={activeTool} items={items} activeTakeoffId={activeTakeoffId} isDeductionMode={isDeductionMode}
               onEnableDeduction={handleEnableDeductionMode} onSelectTakeoffItem={setActiveTakeoffId} onSelectionChanged={setSelectedShapes} onShapeCreated={handleShapeCreated}
-              onUpdateShape={handleUpdateShape} onUpdateShapeTransient={handleUpdateShapeTransient} onSplitShape={handleSplitShape}
+              onUpdateShape={handleUpdateShape} onUpdateShapeTransient={handleUpdateShapeTransient} onBatchUpdateShapesTransient={handleBatchUpdateShapesTransient} onSplitShape={handleSplitShape}
               onUpdateScale={handleUpdateScale} onUpdateLegend={handleUpdateLegend} legendSettings={currentLegend} onDeleteShape={handleDeleteShape} onDeleteShapes={handleDeleteShapes}
               onBatchCreateItems={handleBatchCreateItems}
               onBatchAddShapes={handleBatchAddShapes}
+              onMoveShapesToItem={handleMoveShapesToItem}
               onStopRecording={handleStopTakeoff} onInteractionEnd={commitHistory}
               scaleInfo={{ isSet: currentScale.isSet, ppu: currentScale.pixelsPerUnit, unit: currentScale.unit }}
               zoomLevel={zoomLevel} setZoomLevel={setZoomLevel} pendingPreset={pendingPreset} clearPendingPreset={() => setPendingPreset(null)} />
