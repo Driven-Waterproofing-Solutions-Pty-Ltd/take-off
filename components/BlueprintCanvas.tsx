@@ -27,6 +27,7 @@ interface BlueprintCanvasProps {
     isDeductionMode?: boolean; // Prop to indicate we are cutting out
     onEnableDeduction?: (itemId: string) => void;
     onSelectTakeoffItem: (id: string | null) => void;
+    onSelectionChanged?: (selectedShapes: { itemId: string, shapeId: string }[]) => void;
     onShapeCreated: (shape: Shape) => void;
     onUpdateShape?: (itemId: string, shapeId: string, updates: Partial<Shape>) => void;
     onUpdateShapeTransient?: (itemId: string, shape: Shape) => void;
@@ -36,7 +37,7 @@ interface BlueprintCanvasProps {
     legendSettings: LegendSettings;
     onDeleteShape: (itemId: string, shapeId: string) => void;
     onDeleteShapes?: (shapes: { itemId: string, shapeId: string }[]) => void;
-    onBatchCreateItems?: (itemsToCreate: { sourceItemId: string, shapes: Shape[] }[]) => void;
+    onBatchCreateItems?: (itemsToCreate: { newItemId?: string, sourceItemId: string, shapes: Shape[] }[]) => void;
     onBatchAddShapes?: (shapes: { itemId: string, shape: Shape }[]) => void;
     onStopRecording: () => void;
     scaleInfo: { isSet: boolean, ppu: number, unit: Unit };
@@ -187,10 +188,11 @@ const pasteToOriginalItems = (
     items: TakeoffItem[],
     clipboardItems: { itemId: string, shapeId: string, offset: Point }[],
     globalPageIndex: number,
-    onBatchAddShapes: (shapes: { itemId: string, shape: Shape }[]) => void
-): { itemId: string, shapeId: string }[] => {
+    onBatchAddShapes: (shapes: { itemId: string, shape: Shape }[]) => void,
+    setPendingSelection: (selection: { itemId: string, shapeId: string }[]) => void
+) => {
     if (clipboardItems.length === 0) {
-        return [];
+        return;
     }
 
     const shapesToAdd: { itemId: string, shape: Shape }[] = [];
@@ -224,9 +226,8 @@ const pasteToOriginalItems = (
 
     if (shapesToAdd.length > 0) {
         onBatchAddShapes(shapesToAdd);
+        setPendingSelection(newShapeIds);
     }
-
-    return newShapeIds;
 };
 
 // Helper function to prepare payload for pasting as new items
@@ -234,9 +235,9 @@ const getPasteAsNewItemsPayload = (
     items: TakeoffItem[],
     clipboardItems: { itemId: string, shapeId: string, offset: Point }[],
     globalPageIndex: number
-): { payload: { sourceItemId: string, shapes: Shape[] }[], newShapeIds: { itemId: string, shapeId: string }[] } => {
+): { payload: { newItemId: string, sourceItemId: string, shapes: Shape[] }[], newSelectedItems: { itemId: string, shapeId: string }[] } => {
     if (clipboardItems.length === 0) {
-        return { payload: [], newShapeIds: [] };
+        return { payload: [], newSelectedItems: [] };
     }
 
     // Group clipboard items by their source item ID
@@ -248,8 +249,8 @@ const getPasteAsNewItemsPayload = (
         return acc;
     }, {} as Record<string, typeof clipboardItems>);
 
-    const payload: { sourceItemId: string, shapes: Shape[] }[] = [];
-    const newShapeIds: { itemId: string, shapeId: string }[] = [];
+    const payload: { newItemId: string, sourceItemId: string, shapes: Shape[] }[] = [];
+    const newSelectedItems: { itemId: string, shapeId: string }[] = [];
 
     // Process each source group
     Object.entries(itemsBySource).forEach(([sourceItemId, groupItems]) => {
@@ -257,6 +258,7 @@ const getPasteAsNewItemsPayload = (
         if (!sourceItem) return;
 
         const newShapes: Shape[] = [];
+        const newItemId = crypto.randomUUID();
 
         groupItems.forEach(clipboardItem => {
             const originalShape = sourceItem.shapes.find(s => s.id === clipboardItem.shapeId);
@@ -276,16 +278,16 @@ const getPasteAsNewItemsPayload = (
                     text: originalShape.text
                 };
                 newShapes.push(newShape);
-                newShapeIds.push({ itemId: sourceItemId, shapeId: newShape.id });
+                newSelectedItems.push({ itemId: newItemId, shapeId: newShape.id });
             }
         });
 
         if (newShapes.length > 0) {
-            payload.push({ sourceItemId, shapes: newShapes });
+            payload.push({ newItemId, sourceItemId, shapes: newShapes });
         }
     });
 
-    return { payload, newShapeIds };
+    return { payload, newSelectedItems };
 };
 
 const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
@@ -299,6 +301,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     isDeductionMode = false,
     onEnableDeduction,
     onSelectTakeoffItem,
+    onSelectionChanged,
     onShapeCreated,
     onUpdateShape,
     onUpdateShapeTransient,
@@ -375,8 +378,8 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     // Paste options modal state
     const [showPasteOptions, setShowPasteOptions] = useState(false);
     
-    // Ref to track pending selection after paste
-    const pendingSelectionRef = useRef<{ itemId: string, shapeId: string }[] | null>(null);
+    // State to track pending selection after paste
+    const [pendingSelection, setPendingSelection] = useState<{ itemId: string, shapeId: string }[] | null>(null);
 
     // Keep ref in sync with state
     useEffect(() => {
@@ -385,30 +388,33 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 
     // Effect to maintain selection after items update (e.g., after pasting)
     useEffect(() => {
-        console.log('[SELECTION EFFECT] Items updated, checking for pending selection');
         // Check if we have a pending selection to apply after items update
-        if (pendingSelectionRef.current) {
-            console.log('[SELECTION EFFECT] Found pending selection:', pendingSelectionRef.current);
+        if (pendingSelection) {
+            console.log('[SELECTION EFFECT] Items updated, applying pending selection:', pendingSelection);
+            
             // Verify that all selected items exist in the new items array
-            const validSelections = pendingSelectionRef.current.filter(({ itemId, shapeId }) => {
+            const validSelections = pendingSelection.filter(({ itemId, shapeId }) => {
                 const item = items.find(i => i.id === itemId);
                 const exists = item && item.shapes.some(s => s.id === shapeId);
-                console.log(`[SELECTION EFFECT] Checking shape ${shapeId} in item ${itemId}:`, exists);
                 return exists;
             });
             
             if (validSelections.length > 0) {
                 console.log('[SELECTION EFFECT] Setting selected items:', validSelections);
                 setSelectedItems(validSelections);
+                
+                // If only one item is selected, we can also set selectedShape for backward compatibility
+                // (though rectangular selection logic handles arrays of shapes)
+                if (validSelections.length === 1) {
+                    setSelectedShape(validSelections[0]);
+                }
+                setPendingSelection(null);
             } else {
-                console.log('[SELECTION EFFECT] No valid selections found');
+                console.log('[SELECTION EFFECT] No valid selections found after update');
             }
-            // Clear the pending selection
-            pendingSelectionRef.current = null;
         } else if (selectedItems.length > 0) {
-            // This effect ensures that when items prop changes (like after pasting),
-            // the selectedItems state is preserved if those shapes still exist
-            // Verify that all selected items still exist in the new items array
+            // This block handles cases where we didn't just paste, but items updated
+            // We want to preserve existing selection if possible
             const validSelections = selectedItems.filter(({ itemId, shapeId }) => {
                 const item = items.find(i => i.id === itemId);
                 return item && item.shapes.some(s => s.id === shapeId);
@@ -419,7 +425,14 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 setSelectedItems(validSelections);
             }
         }
-    }, [items]);
+    }, [items, pendingSelection]); // Add pendingSelection to dependencies
+
+    // Notify parent when selection changes
+    useEffect(() => {
+        if (onSelectionChanged) {
+            onSelectionChanged(selectedItems);
+        }
+    }, [selectedItems, onSelectionChanged]);
 
     // Calculate visual scale factor to keep lines/markers constant size on screen
     const currentScale = zoomLevel / RENDER_SCALE;
@@ -1006,24 +1019,31 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             return;
         }
 
-        if (activeTool === ToolType.SELECT) {
-            if (draggedVertex) return;
+        // Clear selection when clicking empty canvas (regardless of active tool)
+        if (draggedVertex) return;
 
-            // Don't clear if we just completed a rectangle selection
-            if (justCompletedRectSelection.current) return;
+        // Don't clear if we just completed a rectangle selection
+        if (justCompletedRectSelection.current) return;
 
-            // Only clear selection if:
-            // 1. We have items already selected (not during the selection process)
-            // 2. We're not currently doing a rectangle selection
-            if (selectedItems.length > 0 && !isRectSelecting && !selectionRect?.active) {
+        // Only clear selection if not currently doing a rectangle selection
+        if (!isRectSelecting && !selectionRect?.active) {
+            // Clear multiple selected shapes
+            if (selectedItems.length > 0) {
                 setSelectedItems([]);
             }
 
-            // Also clear single shape selection
-            if (selectedShape && !isRectSelecting && !selectionRect?.active) {
+            // Clear single item selection (from sidebar click or canvas shape click)
+            if (selectedShape) {
                 setSelectedShape(null);
+            }
+            
+            // Always clear active takeoff when clicking empty canvas
+            if (activeTakeoffId) {
                 onSelectTakeoffItem(null);
             }
+        }
+
+        if (activeTool === ToolType.SELECT) {
             return;
         }
 
@@ -2117,11 +2137,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 onPasteToOriginal={() => {
                     setShowPasteOptions(false);
                     if (onBatchAddShapes) {
-                        const newShapeIds = pasteToOriginalItems(items, clipboardItems, globalPageIndex, onBatchAddShapes);
-                        console.log('[PASTE] Generated new shape IDs:', newShapeIds);
-                        // Store the new shape IDs to be selected after the items update
-                        // Use a ref to track pending selection
-                        pendingSelectionRef.current = newShapeIds;
+                        pasteToOriginalItems(items, clipboardItems, globalPageIndex, onBatchAddShapes, setPendingSelection);
                     } else {
                         addToast('Paste to original items is not supported', 'error');
                     }
@@ -2129,9 +2145,9 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 onPasteAsNewItems={() => {
                     setShowPasteOptions(false);
                     if (onBatchCreateItems) {
-                        const { payload, newShapeIds } = getPasteAsNewItemsPayload(items, clipboardItems, globalPageIndex);
+                        const { payload, newSelectedItems } = getPasteAsNewItemsPayload(items, clipboardItems, globalPageIndex);
                         onBatchCreateItems(payload);
-                        // Note: Selection for new items requires additional work
+                        setPendingSelection(newSelectedItems);
                     } else {
                         addToast('Paste as new items is not supported in this version', 'error');
                     }

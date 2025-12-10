@@ -8,6 +8,7 @@ import Logo from './Logo';
 interface SidebarProps {
     items: TakeoffItem[];
     activeTakeoffId: string | null;
+    selectedShapes?: { itemId: string, shapeId: string }[];
     onDelete: (id: string) => void;
     onResume: (id: string) => void;
     onSelect: (id: string) => void;
@@ -41,6 +42,7 @@ interface SidebarProps {
 const Sidebar: React.FC<SidebarProps> = ({
     items,
     activeTakeoffId,
+    selectedShapes = [],
     onDelete,
     onResume,
     onSelect,
@@ -368,7 +370,15 @@ const Sidebar: React.FC<SidebarProps> = ({
                                                 {isPageExpanded && pageItems.length > 0 && (
                                                     <div className="pl-2 mt-0.5 space-y-0.5">
                                                         {pageItems.slice().reverse().map(item => {
-                                                            const isActive = activeTakeoffId === item.id;
+                                                            // Check if this item is active AND has shapes on the CURRENT active page only
+                                                            const hasActiveShapesOnThisPage = activeTakeoffId === item.id && pageIndex === globalIdx && item.shapes.some(s => s.pageIndex === globalIdx);
+                                                            // Only highlight if selected shapes are on THIS specific page AND it's the current page
+                                                            const hasSelectedShapesOnThisPage = pageIndex === globalIdx && selectedShapes.some(s => {
+                                                                if (s.itemId !== item.id) return false;
+                                                                const shape = item.shapes.find(sh => sh.id === s.shapeId);
+                                                                return shape && shape.pageIndex === globalIdx;
+                                                            });
+                                                            const isHighlighted = hasActiveShapesOnThisPage || hasSelectedShapesOnThisPage;
                                                             const pageShapes = item.shapes.filter(s => s.pageIndex === globalIdx);
                                                             const pageRawQty = pageShapes.reduce((sum, s) => {
                                                                 if (s.deduction) return sum - s.value;
@@ -382,7 +392,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                                                     key={item.id}
                                                                     onClick={() => onSelect(item.id)}
                                                                     onContextMenu={(e) => handleItemContextMenu(e, item)}
-                                                                    className={`group flex items-center gap-1.5 px-1 py-1 rounded-md cursor-pointer transition-all border border-transparent ${isActive ? 'bg-white border-blue-200 shadow-sm' : 'hover:bg-slate-50'}`}
+                                                                    className={`group flex items-center gap-1.5 px-1 py-1 rounded-md cursor-pointer transition-all border border-transparent ${isHighlighted ? 'bg-white border-blue-200 shadow-sm' : 'hover:bg-slate-50'}`}
                                                                 >
                                                                     <div
                                                                         className="w-2 h-2 rounded-full shrink-0"
@@ -400,7 +410,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                                                             className="flex-1 min-w-0 text-xs px-1 py-0.5 border border-blue-300 rounded bg-white text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-500"
                                                                         />
                                                                     ) : (
-                                                                        <span className={`text-xs truncate flex-1 ${isActive ? 'text-slate-900 font-medium' : 'text-slate-600'}`}>
+                                                                        <span className={`text-xs truncate flex-1 ${isHighlighted ? 'text-slate-900 font-medium' : 'text-slate-600'}`}>
                                                                             {item.label}
                                                                         </span>
                                                                     )}
@@ -424,15 +434,15 @@ const Sidebar: React.FC<SidebarProps> = ({
                                                                         <button
                                                                             onClick={(e) => {
                                                                                 e.stopPropagation();
-                                                                                if (isActive && activeTool !== ToolType.SELECT) {
+                                                                                if (hasActiveShapesOnThisPage && activeTool !== ToolType.SELECT) {
                                                                                     onStop();
                                                                                 } else {
                                                                                     onResume(item.id);
                                                                                 }
                                                                             }}
-                                                                            className={`p-1 rounded-full transition-all ${isActive && activeTool !== ToolType.SELECT ? 'text-red-500 bg-red-50' : 'text-slate-300 hover:text-green-600 hover:bg-green-50 opacity-0 group-hover:opacity-100'}`}
+                                                                            className={`p-1 rounded-full transition-all ${hasActiveShapesOnThisPage && activeTool !== ToolType.SELECT ? 'text-red-500 bg-red-50' : 'text-slate-300 hover:text-green-600 hover:bg-green-50 opacity-0 group-hover:opacity-100'}`}
                                                                         >
-                                                                            <div className={`w-2 h-2 rounded-full ${isActive && activeTool !== ToolType.SELECT ? 'bg-red-500 animate-pulse' : 'bg-current'}`} />
+                                                                            <div className={`w-2 h-2 rounded-full ${hasActiveShapesOnThisPage && activeTool !== ToolType.SELECT ? 'bg-red-500 animate-pulse' : 'bg-current'}`} />
                                                                         </button>
                                                                     </div>
                                                                 </div>

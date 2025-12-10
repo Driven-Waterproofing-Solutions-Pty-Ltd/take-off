@@ -84,6 +84,7 @@ const App: React.FC = () => {
   const [activeTool, setActiveTool] = useState<ToolType>(ToolType.SELECT);
   const [activeTakeoffId, setActiveTakeoffId] = useState<string | null>(null);
   const [clipboard, setClipboard] = useState<TakeoffItem | null>(null);
+  const [selectedShapes, setSelectedShapes] = useState<{ itemId: string, shapeId: string }[]>([]);
 
   const [isDeductionMode, setIsDeductionMode] = useState(false);
   const [pendingPreset, setPendingPreset] = useState<PresetScale | null>(null);
@@ -217,6 +218,28 @@ const App: React.FC = () => {
     const timeout = setTimeout(saveData, 1000);
     return () => clearTimeout(timeout);
   }, [items, projectData, totalPages, planSets.length, isInitializing, projectName, isLicensed]);
+
+  // Clear selection when navigating to a page without shapes for active item
+  useEffect(() => {
+    if (activeTakeoffId) {
+      const activeItem = items.find(i => i.id === activeTakeoffId);
+      const hasShapesOnCurrentPage = activeItem?.shapes.some(s => s.pageIndex === pageIndex);
+      if (!hasShapesOnCurrentPage) {
+        setActiveTakeoffId(null);
+        setSelectedShapes([]);
+      }
+    } else if (selectedShapes.length > 0) {
+      // Also clear multi-selected shapes if they don't exist on current page
+      const validSelectedShapes = selectedShapes.filter(sel => {
+        const item = items.find(i => i.id === sel.itemId);
+        const shape = item?.shapes.find(s => s.id === sel.shapeId);
+        return shape && shape.pageIndex === pageIndex;
+      });
+      if (validSelectedShapes.length !== selectedShapes.length) {
+        setSelectedShapes(validSelectedShapes);
+      }
+    }
+  }, [pageIndex, activeTakeoffId, selectedShapes, items]);
 
   // Re-implementing simplified handlers for brevity, copying key logic from original App.tsx
   const handleExportPDF = async (pageIndices: number[], includeLegend: boolean, includeNotes: boolean) => {
@@ -508,17 +531,17 @@ const App: React.FC = () => {
 
   const calculateTotalValue = (shapes: Shape[]) => shapes.reduce((sum, s) => s.deduction ? sum - s.value : sum + s.value, 0);
 
-  const handleBatchCreateItems = (itemsToCreate: { sourceItemId: string, shapes: Shape[] }[]) => {
+  const handleBatchCreateItems = (itemsToCreate: { newItemId?: string, sourceItemId: string, shapes: Shape[] }[]) => {
     const newItemsList: TakeoffItem[] = [];
     let lastItemId = activeTakeoffId;
 
-    itemsToCreate.forEach(({ sourceItemId, shapes }) => {
+    itemsToCreate.forEach(({ newItemId, sourceItemId, shapes }) => {
       const sourceItem = items.find(i => i.id === sourceItemId);
       if (!sourceItem) return;
 
       const newItem: TakeoffItem = {
         ...sourceItem,
-        id: crypto.randomUUID(),
+        id: newItemId || crypto.randomUUID(),
         label: `${sourceItem.label} (Copy)`,
         shapes: shapes, // These shapes already have new IDs and positions from Canvas
         totalValue: calculateTotalValue(shapes)
@@ -749,7 +772,7 @@ const App: React.FC = () => {
     <div className="flex h-screen w-screen bg-slate-50 overflow-hidden font-sans" onDragOver={(e) => { e.preventDefault(); console.log('[DRAG] App root onDragOver'); }}>
       <input type="file" ref={fileInputRef} onChange={handleImportFileSelect} className="hidden" accept=".zip,.takeoff" />
       <Sidebar
-        items={items} activeTakeoffId={activeTakeoffId} onDelete={handleDeleteItem} onResume={handleResumeTakeoff} onStop={handleStopTakeoff}
+        items={items} activeTakeoffId={activeTakeoffId} selectedShapes={selectedShapes} onDelete={handleDeleteItem} onResume={handleResumeTakeoff} onStop={handleStopTakeoff}
         onSelect={setActiveTakeoffId} onOpenUploadModal={() => setShowUploadModal(true)} planSets={planSets} pageIndex={pageIndex}
         setPageIndex={setPageIndex} totalPages={totalPages} projectData={projectData}
         scaleInfo={{ isSet: currentScale.isSet, unit: currentScale.unit, ppu: currentScale.pixelsPerUnit }}
@@ -777,7 +800,7 @@ const App: React.FC = () => {
             )}
             <BlueprintCanvas ref={canvasRef} file={activePlan?.file || null} localPageIndex={activePlan?.localPageIndex || 0} globalPageIndex={pageIndex}
               onPageWidthChange={setPdfPageWidth} activeTool={activeTool} items={items} activeTakeoffId={activeTakeoffId} isDeductionMode={isDeductionMode}
-              onEnableDeduction={handleEnableDeductionMode} onSelectTakeoffItem={setActiveTakeoffId} onShapeCreated={handleShapeCreated}
+              onEnableDeduction={handleEnableDeductionMode} onSelectTakeoffItem={setActiveTakeoffId} onSelectionChanged={setSelectedShapes} onShapeCreated={handleShapeCreated}
               onUpdateShape={handleUpdateShape} onUpdateShapeTransient={handleUpdateShapeTransient} onSplitShape={handleSplitShape}
               onUpdateScale={handleUpdateScale} onUpdateLegend={handleUpdateLegend} legendSettings={currentLegend} onDeleteShape={handleDeleteShape} onDeleteShapes={handleDeleteShapes}
               onBatchCreateItems={handleBatchCreateItems}

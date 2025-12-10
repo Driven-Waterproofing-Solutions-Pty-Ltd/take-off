@@ -1,7 +1,7 @@
 [package]
-name = "protakeoff-ai"
+name = "protakeoff_ai"
 version = "0.1.0"
-description = "ProTakeoff AI"
+description = "ProTakeoff"
 authors = ["you"]
 edition = "2021"
 rust-version = "1.77.2"

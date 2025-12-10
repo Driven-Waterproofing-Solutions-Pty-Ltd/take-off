@@ -3197,7 +3197,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "protakeoff-ai"
+name = "protakeoff_ai"
 version = "0.1.0"
 dependencies = [
  "base64 0.21.7",
