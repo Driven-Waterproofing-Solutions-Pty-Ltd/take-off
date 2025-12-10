@@ -1,5 +1,6 @@
 
 import { TakeoffItem, Unit, ToolType } from "../types";
+import { create, all } from 'mathjs';
 
 /**
  * Converts a human-readable label into a valid variable name.
@@ -113,10 +114,22 @@ export const convertValue = (value: number, fromUnit: Unit, toUnit: Unit, type: 
   return value;
 };
 
+const math = create(all);
+const limitedEvaluate = math.evaluate;
+
+math.import({
+  'import': function () { throw new Error('Function import is disabled') },
+  'createUnit': function () { throw new Error('Function createUnit is disabled') },
+  'evaluate': function () { throw new Error('Function evaluate is disabled') },
+  'parse': function () { throw new Error('Function parse is disabled') },
+  'simplify': function () { throw new Error('Function simplify is disabled') },
+  'derivative': function () { throw new Error('Function derivative is disabled') }
+}, { override: true });
+
 /**
  * Safely evaluates a math formula.
  * @param item The takeoff item containing properties and formula.
- * @param overrideQty Optional. If provided, uses this value for 'Qty' instead of item.totalValue. 
+ * @param overrideQty Optional. If provided, uses this value for 'Qty' instead of item.totalValue.
  * @param formulaOverride Optional. If provided, evaluates this formula instead of the item's default formula.
  * @param extraVariables Optional. Additional variables to inject into the context (e.g. calculated sub-items).
  */
@@ -134,7 +147,7 @@ export const evaluateFormula = (
   }
 
   // Create a map of variables
-  const variables: Record<string, number> = {
+  const scope: Record<string, number> = {
     'Qty': qty,
     'QTY': qty,
     'qty': qty,
@@ -144,52 +157,23 @@ export const evaluateFormula = (
   if (item.properties) {
     item.properties.forEach(prop => {
       // Access by raw name (if safe) and sanitized name
-      variables[prop.name] = prop.value;
+      scope[prop.name] = prop.value;
       const safeName = toVariableName(prop.name);
       if (safeName !== prop.name) {
-        variables[safeName] = prop.value;
+        scope[safeName] = prop.value;
       }
     });
   }
 
   // Add Price to variables
   if (item.price !== undefined) {
-    variables['Price'] = item.price;
-    variables['PRICE'] = item.price;
-    variables['price'] = item.price;
+    scope['Price'] = item.price;
+    scope['PRICE'] = item.price;
+    scope['price'] = item.price;
   }
 
   try {
-    // Add custom function aliases
-    const customFunctions = {
-      roundup: Math.ceil,
-      round: Math.round,
-      floor: Math.floor,
-      abs: Math.abs,
-      min: Math.min,
-      max: Math.max,
-      sqrt: Math.sqrt,
-      pow: Math.pow
-    };
-
-    const argNames = [...Object.keys(customFunctions), ...Object.keys(variables)];
-    const argValues = [...Object.values(customFunctions), ...Object.values(variables)];
-
-    // Filter out invalid JavaScript identifiers (e.g., property names with spaces)
-    const filteredArgNames: string[] = [];
-    const filteredArgValues: any[] = [];
-    for (let i = 0; i < argNames.length; i++) {
-      if (isValidIdentifier(argNames[i])) {
-        filteredArgNames.push(argNames[i]);
-        filteredArgValues.push(argValues[i]);
-      }
-    }
-
-    // Safety check for empty formula after variable replacement
-    if (!formulaToUse) return 0;
-
-    const func = new Function(...filteredArgNames, `return ${formulaToUse};`);
-    const result = func(...filteredArgValues);
+    const result = limitedEvaluate(formulaToUse, scope);
 
     if (isNaN(result) || result === undefined || result === null) {
       return 0;
