@@ -1,5 +1,6 @@
-
 import React, { useState, useRef, useEffect, useImperativeHandle, forwardRef, useMemo } from 'react';
+import { Stage, Layer, Rect, Circle, Line as KonvaLine, Path, Group, Label, Tag, Text as KonvaText, Arrow } from 'react-konva';
+import Konva from 'konva';
 import { Document, Page } from 'react-pdf';
 import { Point, ToolType, TakeoffItem, Shape, Unit, LegendSettings } from '../types';
 import { calculateDistance, calculatePolylineLength, calculatePolygonArea, getScaledValue, getScaledArea, parseDimensionInput, PresetScale, isPointInPolygon, PRESET_SCALES } from '../utils/geometry';
@@ -330,7 +331,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     const { addToast } = useToast();
     const viewportRef = useRef<HTMLDivElement>(null);
     const containerRef = useRef<HTMLDivElement>(null); // For PDF (CSS Transform)
-    const svgLayerRef = useRef<SVGGElement>(null); // For Shapes (SVG Transform)
+    const konvaLayerRef = useRef<Konva.Layer>(null); // For Konva Shapes
     const legendContainerRef = useRef<HTMLDivElement>(null); // For Legend (CSS Transform, Top Layer)
     const loupeRef = useRef<HTMLCanvasElement>(null);
 
@@ -709,9 +710,12 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         if (legendContainerRef.current) {
             legendContainerRef.current.style.transform = transformString;
         }
-        // Apply SVG transform attribute to Vector layer for crisp rendering
-        if (svgLayerRef.current) {
-            svgLayerRef.current.setAttribute('transform', `translate(${x}, ${y}) scale(${scale})`);
+        // Apply Konva transform
+        if (konvaLayerRef.current) {
+            konvaLayerRef.current.x(x);
+            konvaLayerRef.current.y(y);
+            konvaLayerRef.current.scale({ x: scale, y: scale });
+            konvaLayerRef.current.batchDraw();
         }
     };
 
@@ -1028,7 +1032,13 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         ctx.restore();
     };
 
-    const handleSvgClick = (e: React.MouseEvent) => {
+    const handleStageClick = (e: Konva.KonvaEventObject<MouseEvent>) => {
+        // Only trigger clicks on the stage background, not on shapes
+        if (e.target !== e.target.getStage()) {
+            return;
+        }
+        const mouseEvent = e.evt;
+
         if (contextMenu) {
             setContextMenu(null);
             return;
@@ -1061,7 +1071,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 
         if (isDragging) return;
 
-        const rawPoint = getInternalCoordinates(e.clientX, e.clientY);
+        const rawPoint = getInternalCoordinates(mouseEvent.clientX, mouseEvent.clientY);
         const point = getClosestSnapPoint(rawPoint) || rawPoint;
 
         if (activeTool === ToolType.SCALE) {
@@ -1385,11 +1395,14 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             const l = calculatePolylineLength(pdfPoints) + calculateDistance(prevPdfPt, currentPdfPt);
             text = scaleInfo.isSet ? `${getScaledValue(l, scaleInfo.ppu).toFixed(2)} ${scaleInfo.unit}` : '';
         }
-        return text ? (
-            <foreignObject x={tempPoint.x + 10} y={tempPoint.y + 10} width="100" height="30" className="pointer-events-none overflow-visible">
-                <div className="bg-black/75 text-white text-xs px-2 py-1 rounded w-fit whitespace-nowrap" style={{ transform: `scale(${visualScaleFactor})`, transformOrigin: 'top left' }}>{text}</div>
-            </foreignObject>
-        ) : null;
+        if (!text) return null;
+
+        return (
+            <Label x={tempPoint.x + 10} y={tempPoint.y + 10} scale={{ x: visualScaleFactor, y: visualScaleFactor }}>
+                <Tag fill="black" cornerRadius={4} />
+                <KonvaText text={text} fill="white" padding={4} fontSize={12} />
+            </Label>
+        );
     };
 
     const sortedItems = useMemo(() => {
@@ -1456,584 +1469,222 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                     )}
                 </div>
 
-                {/* SVG Overlay - Scaled via SVG Transform for crispness */}
+                {/* Konva Canvas Overlay */}
                 {file && contentWidth > 0 && (
-                    <svg className="absolute top-0 left-0 w-full h-full pointer-events-none" style={{ overflow: 'visible' }}>
-                        <g ref={svgLayerRef} onClick={handleSvgClick}>
-                            <rect width={contentWidth} height={pdfAspectRatio ? contentWidth * pdfAspectRatio : '100%'} fill="transparent" style={{ pointerEvents: 'auto' }} />
-                            <defs>
-                                {items.filter(i => i.type === ToolType.AREA && i.visible !== false).map(item => {
-                                    const pageShapes = item.shapes.filter(s => s.pageIndex === globalPageIndex);
-                                    if (pageShapes.length === 0) return null;
-
-                                    const deductions = pageShapes.filter(s => s.deduction);
-                                    if (deductions.length === 0 && !isDeductionMode) return null;
-
-                                    return (
-                                        <mask
-                                            key={`mask-${item.id}`}
-                                            id={`mask-${item.id}`}
-                                            maskUnits="userSpaceOnUse"
-                                            maskContentUnits="userSpaceOnUse"
-                                            x="-50000" y="-50000" width="100000" height="100000"
-                                        >
-                                            {/* White background: reveal everything */}
-                                            <rect x="-50000" y="-50000" width="100000" height="100000" fill="white" />
-
-                                            {/* Black shapes: hide these parts (deductions) */}
-                                            {deductions.map(shape => (
-                                                <polygon
-                                                    key={shape.id}
-                                                    points={shape.points.map(p => `${p.x},${p.y}`).join(' ')}
-                                                    fill="black"
-                                                />
-                                            ))}
-
-                                            {/* Live deduction preview */}
-                                            {isDeductionMode && activeTakeoffId === item.id && drawingPoints.length > 0 && (
-                                                <polygon
-                                                    points={[...drawingPoints, tempPoint].filter(Boolean).map(p => `${p!.x},${p!.y}`).join(' ')}
-                                                    fill="black"
-                                                />
-                                            )}
-                                        </mask>
-                                    );
-                                })}
-
-                                {items.filter(i => i.type === ToolType.NOTE).map(item => (
-                                    <marker
-                                        key={`arrowhead-${item.id}`}
-                                        id={`arrowhead-${item.id}`}
-                                        markerWidth="10"
-                                        markerHeight="7"
-                                        refX="9"
-                                        refY="3.5"
-                                        orient="auto"
-                                    >
-                                        <polygon points="0 0, 10 3.5, 0 7" fill={item.color} />
-                                    </marker>
-                                ))}
-                            </defs>
-
+                    <Stage
+                        width={viewportRef.current?.clientWidth ?? 0}
+                        height={viewportRef.current?.clientHeight ?? 0}
+                        className="absolute top-0 left-0"
+                        onClick={handleStageClick}
+                    >
+                        <Layer ref={konvaLayerRef}>
                             {sortedItems.map(item => {
                                 if (item.visible === false) return null;
-                                const pageShapes = item.shapes.filter(s => s.pageIndex === globalPageIndex);
-                                if (pageShapes.length === 0) return null;
+                                const shapesOnPage = item.shapes.filter(s => s.pageIndex === globalPageIndex);
 
-                                const positiveShapes = pageShapes.filter(s => !s.deduction);
-                                const negativeShapes = pageShapes.filter(s => s.deduction);
-                                const hasMask = negativeShapes.length > 0 || (isDeductionMode && activeTakeoffId === item.id);
-                                const isItemActive = activeTakeoffId === item.id;
+                                return shapesOnPage.map(shape => {
+                                    const isSelected = selectedItems.some(s => s.itemId === item.id && s.shapeId === shape.id);
+                                    const isFocused = focusedShapeIds.has(shape.id);
+                                    const isDimmed = focusedShapeIds.size > 0 && !isFocused;
+                                    
+                                    const opacity = isDimmed ? 0.2 : (item.type === ToolType.AREA ? 0.4 : 1);
+                                    const strokeColor = isSelected ? '#3b82f6' : item.color;
+                                    const strokeWidth = (isSelected ? 3 : 2) * visualScaleFactor;
+                                    
+                                    return (
+                                        <Group
+                                            key={shape.id}
+                                            onMouseDown={(e) => {
+                                                if (activeTool === ToolType.SELECT) {
+                                                    e.cancelBubble = true;
+                                                    const isMulti = e.evt.shiftKey || e.evt.ctrlKey || e.evt.metaKey;
+                                                    const alreadySelected = selectedItems.some(s => s.itemId === item.id && s.shapeId === shape.id);
 
-                                return (
-                                    <g key={item.id} style={{ pointerEvents: 'auto' }}>
-                                        <g mask={hasMask ? `url(#mask-${item.id})` : undefined}>
-                                            {positiveShapes.map(shape => {
-                                                const isShapeSelected = selectedShape?.shapeId === shape.id; // Specific shape selected
-
-                                                // Highlighting logic:
-                                                // If no specific shape selected (sidebar selection), highlight all shapes of active item.
-                                                // If specific shape selected, highlight only that shape (and its holes via focusedShapeIds).
-                                                const inFocus = focusedShapeIds.has(shape.id);
-                                                const isHighlighted = isItemActive && (selectedShape ? inFocus : true);
-
-                                                const opacity = isHighlighted ? 1 : 0.6;
-                                                const strokeWidth = (isHighlighted ? 6 : 4) * visualScaleFactor;
-                                                const markerStrokeWidth = 2 * visualScaleFactor;
-                                                const radius = (isHighlighted ? 12 : 8) * visualScaleFactor;
-
-                                                const handleShapeClick = (e: React.MouseEvent) => {
-                                                    if (activeTool === ToolType.SELECT) {
-                                                        e.stopPropagation();
-                                                        // Select specific shape
+                                                    if (isMulti) {
+                                                        if (alreadySelected) {
+                                                            setSelectedItems(prev => prev.filter(s => s.shapeId !== shape.id));
+                                                        } else {
+                                                            setSelectedItems(prev => [...prev, { itemId: item.id, shapeId: shape.id }]);
+                                                        }
+                                                    } else if (!alreadySelected) {
+                                                        setSelectedItems([{ itemId: item.id, shapeId: shape.id }]);
                                                         setSelectedShape({ itemId: item.id, shapeId: shape.id });
                                                         onSelectTakeoffItem(item.id);
                                                     }
-                                                };
 
-
-                                                const handleShapeMouseDown = (e: React.MouseEvent) => {
-                                                    if (activeTool === ToolType.SELECT && !draggedVertex && e.button === 0) {
-                                                        e.stopPropagation();
-                                                        
-                                                        // Start shape dragging (entire shape movement)
-                                                        const startPoint = getInternalCoordinates(e.clientX, e.clientY);
-                                                        dragStartPoint.current = startPoint;
-
-                                                        // Check if this shape is part of the selected items (from rectangle selection)
-                                                        const isInSelection = selectedItems.some(s => s.itemId === item.id && s.shapeId === shape.id);
-
-                                                        if (isInSelection && selectedItems.length > 0) {
-                                                            // Drag all selected shapes together WITHOUT changing selection
-                                                            const shapesToDrag = selectedItems.map(selected => {
-                                                                const selectedItem = items.find(i => i.id === selected.itemId);
-                                                                const selectedShape = selectedItem?.shapes.find(s => s.id === selected.shapeId);
-                                                                return {
-                                                                    itemId: selected.itemId,
-                                                                    shapeId: selected.shapeId,
-                                                                    initialPoints: selectedShape ? [...selectedShape.points] : []
-                                                                };
-                                                            });
-                                                            setDraggedShapes(shapesToDrag);
-                                                        } else {
-                                                            // Select the shape and drag only this shape
-                                                            setSelectedShape({ itemId: item.id, shapeId: shape.id });
-                                                            onSelectTakeoffItem(item.id);
-                                                            
-                                                            setDraggedShapes([{
-                                                                itemId: item.id,
-                                                                shapeId: shape.id,
-                                                                initialPoints: [...shape.points]
-                                                            }]);
-                                                        }
+                                                    // Prepare drag
+                                                    const currentSel = isMulti
+                                                        ? (alreadySelected && !e.evt.shiftKey ? selectedItems : [...(alreadySelected ? [] : selectedItems), ...(!alreadySelected ? [{ itemId: item.id, shapeId: shape.id }] : [])])
+                                                        : [{ itemId: item.id, shapeId: shape.id }];
+                                                    
+                                                    // Re-evaluate current selection for dragging if we modified it
+                                                    let itemsToDrag = selectedItems;
+                                                    if (!isMulti && !alreadySelected) {
+                                                        itemsToDrag = [{ itemId: item.id, shapeId: shape.id }];
+                                                    } else if (isMulti && !alreadySelected) {
+                                                        itemsToDrag = [...selectedItems, { itemId: item.id, shapeId: shape.id }];
                                                     }
-                                                };
 
-                                                if (item.type === ToolType.DIMENSION) {
-                                                    return (
-                                                        <g key={shape.id}>
-                                                            <polyline
-                                                                points={shape.points.map(p => `${p.x},${p.y}`).join(' ')}
-                                                                fill="none"
-                                                                stroke={item.color}
-                                                                strokeWidth={2 * visualScaleFactor}
-                                                                style={{ cursor: activeTool === ToolType.SELECT ? 'pointer' : 'crosshair' }}
-                                                                onClick={handleShapeClick}
-                                                                onMouseDown={handleShapeMouseDown}
-                                                                onContextMenu={(e) => activeTool === ToolType.SELECT && handleShapeContextMenu(e, item.id, shape.id)}
-                                                            />
-
-                                                            {shape.points.length >= 2 && (() => {
-                                                                const p1 = shape.points[0];
-                                                                const p2 = shape.points[1];
-                                                                const dx = p2.x - p1.x;
-                                                                const dy = p2.y - p1.y;
-                                                                const len = Math.sqrt(dx * dx + dy * dy);
-
-                                                                if (len === 0) return null;
-
-                                                                const nx = -dy / len;
-                                                                const ny = dx / len;
-                                                                const tickLen = 10 * visualScaleFactor;
-
-                                                                const t1a = { x: p1.x + nx * tickLen, y: p1.y + ny * tickLen };
-                                                                const t1b = { x: p1.x - nx * tickLen, y: p1.y - ny * tickLen };
-                                                                const t2a = { x: p2.x + nx * tickLen, y: p2.y + ny * tickLen };
-                                                                const t2b = { x: p2.x - nx * tickLen, y: p2.y - ny * tickLen };
-
-                                                                const mx = (p1.x + p2.x) / 2;
-                                                                const my = (p1.y + p2.y) / 2;
-
-                                                                return (
-                                                                    <>
-                                                                        <line x1={t1a.x} y1={t1a.y} x2={t1b.x} y2={t1b.y} stroke={item.color} strokeWidth={2 * visualScaleFactor} />
-                                                                        <line x1={t2a.x} y1={t2a.y} x2={t2b.x} y2={t2b.y} stroke={item.color} strokeWidth={2 * visualScaleFactor} />
-
-                                                                        <foreignObject
-                                                                            x={mx} y={my}
-                                                                            width={120 * visualScaleFactor} height={40 * visualScaleFactor}
-                                                                            className="overflow-visible pointer-events-none"
-                                                                        >
-                                                                            <div className="flex justify-center items-center" style={{ transform: `translate(-50%, -50%) scale(${visualScaleFactor})`, transformOrigin: 'center center' }}>
-                                                                                <span className="px-1 py-0.5 text-[10px] font-bold bg-white text-slate-800 border border-slate-300 rounded shadow-sm whitespace-nowrap">
-                                                                                    {shape.value.toFixed(2)} {item.unit}
-                                                                                </span>
-                                                                            </div>
-                                                                        </foreignObject>
-                                                                    </>
-                                                                );
-                                                            })()}
-                                                        </g>
-                                                    );
-                                                }
-
-                                                const TagName = item.type === ToolType.AREA ? 'polygon' : 'polyline';
-
-                                                return (
-                                                    <React.Fragment key={shape.id}>
-                                                        {item.type === ToolType.COUNT ? (
-                                                            shape.points.map((pt, pIdx) => (
-                                                                <circle
-                                                                    key={pIdx}
-                                                                    cx={pt.x} cy={pt.y}
-                                                                    r={radius}
-                                                                    fill={item.color}
-                                                                    stroke="white"
-                                                                    strokeWidth={markerStrokeWidth}
-                                                                    strokeOpacity={isHighlighted ? 1 : 0}
-                                                                    fillOpacity={opacity}
-                                                                    style={{ cursor: activeTool === ToolType.SELECT ? 'move' : 'crosshair' }}
-                                                                    onClick={handleShapeClick}
-                                                                    onContextMenu={(e) => activeTool === ToolType.SELECT && handlePointContextMenu(e, item.id, shape.id, pIdx)}
-                                                                    onMouseDown={(e) => {
-                                                                        if (activeTool === ToolType.SELECT && e.button === 0) {
-                                                                            e.stopPropagation();
-                                                                            setSelectedShape({ itemId: item.id, shapeId: shape.id });
-                                                                            setDraggedVertex({ itemId: item.id, shapeId: shape.id, pointIndex: pIdx });
-                                                                            onSelectTakeoffItem(item.id);
-                                                                        }
-                                                                    }}
-                                                                />
-                                                            ))
-                                                        ) : (
-                                                            <TagName
-                                                                points={shape.points.map(p => `${p.x},${p.y}`).join(' ')}
-                                                                fill={item.type === ToolType.AREA ? item.color : 'none'}
-                                                                fillOpacity={0.2}
-                                                                stroke={item.color}
-                                                                strokeWidth={strokeWidth}
-                                                                strokeOpacity={opacity}
-                                                                style={{ cursor: activeTool === ToolType.SELECT ? 'pointer' : 'crosshair' }}
-                                                                onClick={handleShapeClick}
-                                                                onMouseDown={handleShapeMouseDown}
-                                                                onContextMenu={(e) => activeTool === ToolType.SELECT && handleShapeContextMenu(e, item.id, shape.id)}
-                                                            />
-                                                        )}
-                                                    </React.Fragment>
-                                                )
-                                            })}
-                                        </g>
-
-                                        {negativeShapes.map(shape => {
-                                            // Handle cutout selection
-                                            const inFocus = focusedShapeIds.has(shape.id);
-                                            const isHighlighted = isItemActive && (selectedShape ? inFocus : true);
-
-                                            return (
-                                                <polygon
-                                                    key={shape.id}
-                                                    points={shape.points.map(p => `${p.x},${p.y}`).join(' ')}
-                                                    fill="transparent"
-                                                    stroke={item.color} // Use same color as item
-                                                    strokeWidth={2 * visualScaleFactor}
-                                                    strokeDasharray={`${4 * visualScaleFactor},${4 * visualScaleFactor}`}
-                                                    strokeOpacity={isHighlighted ? 1 : 0.6}
-                                                    style={{ cursor: activeTool === ToolType.SELECT ? 'pointer' : 'crosshair' }}
-                                                    onClick={(e) => {
-                                                        if (activeTool === ToolType.SELECT) {
-                                                            e.stopPropagation();
-                                                            // Select specific cutout shape
-                                                            setSelectedShape({ itemId: item.id, shapeId: shape.id });
-                                                            onSelectTakeoffItem(item.id);
-                                                        }
-                                                    }}
-                                                    onMouseDown={(e) => {
-                                                        if (activeTool === ToolType.SELECT && !draggedVertex && e.button === 0) {
-                                                            e.stopPropagation();
-                                                            // Select the shape
-                                                            setSelectedShape({ itemId: item.id, shapeId: shape.id });
-                                                            onSelectTakeoffItem(item.id);
-
-                                                            // Start shape dragging (entire shape movement)
-                                                            const startPoint = getInternalCoordinates(e.clientX, e.clientY);
-                                                            dragStartPoint.current = startPoint;
-                                                            setDraggedShapes([{
-                                                                itemId: item.id,
-                                                                shapeId: shape.id,
-                                                                initialPoints: [...shape.points] // Store copy of initial points
-                                                            }]);
-                                                        }
-                                                    }}
-                                                    onContextMenu={(e) => activeTool === ToolType.SELECT && handleShapeContextMenu(e, item.id, shape.id)}
-                                                />
-                                            );
-                                        })}
-
-                                        {/* Show handles for all shapes if item is active (Unified Selection) */}
-                                        {pageShapes.filter(s => activeTakeoffId === item.id && item.type !== ToolType.COUNT).map(shape => {
-                                            // Only show handles if this shape is in the focused set (or all are focused if none selected)
-                                            if (selectedShape && !focusedShapeIds.has(shape.id)) return null;
-
-                                            return shape.points.map((pt, idx) => (
-                                                <circle
-                                                    key={`handle-${shape.id}-${idx}`}
-                                                    cx={pt.x} cy={pt.y}
-                                                    r={6 * visualScaleFactor}
-                                                    fill="white"
-                                                    stroke={item.color} // Use same color as item for both main and deduction shapes
-                                                    strokeWidth={2 * visualScaleFactor}
-                                                    style={{ cursor: 'move' }}
-                                                    onContextMenu={(e) => activeTool === ToolType.SELECT && handlePointContextMenu(e, item.id, shape.id, idx)}
-                                                    onMouseDown={(e) => {
-                                                        if (activeTool === ToolType.SELECT && e.button === 0) {
-                                                            e.stopPropagation();
-                                                            setDraggedVertex({ itemId: item.id, shapeId: shape.id, pointIndex: idx });
-                                                        }
-                                                    }}
-                                                />
-                                            ))
-                                        })}
-
-                                        {item.type !== ToolType.DIMENSION && positiveShapes.map(shape => {
-                                            // Highlight label if item is active
-                                            const inFocus = focusedShapeIds.has(shape.id);
-                                            const isHighlighted = isItemActive && (selectedShape ? inFocus : true);
-
-                                            if (!isHighlighted || item.type === ToolType.COUNT || shape.points.length === 0) return null;
-
-                                            let labelPos = { x: 0, y: 0 };
-                                            let labelValue = shape.value;
-
-                                            if (item.type === ToolType.AREA) {
-                                                const cx = shape.points.reduce((s, p) => s + p.x, 0) / shape.points.length;
-                                                const cy = shape.points.reduce((s, p) => s + p.y, 0) / shape.points.length;
-                                                labelPos = { x: cx, y: cy };
-
-                                                const containedDeductions = negativeShapes.filter(d =>
-                                                    d.points.length > 0 && isPointInPolygon(d.points[0], shape.points)
-                                                );
-                                                const deductionTotal = containedDeductions.reduce((sum, d) => sum + d.value, 0);
-                                                labelValue = Math.max(0, shape.value - deductionTotal);
-
-                                            } else {
-                                                let totalDist = 0;
-                                                const dists: number[] = [];
-                                                for (let i = 0; i < shape.points.length - 1; i++) {
-                                                    const d = calculateDistance(shape.points[i], shape.points[i + 1]);
-                                                    totalDist += d;
-                                                    dists.push(d);
-                                                }
-                                                let target = totalDist / 2;
-                                                let found = false;
-                                                for (let i = 0; i < dists.length; i++) {
-                                                    if (target <= dists[i]) {
-                                                        const ratio = target / dists[i];
-                                                        const p1 = shape.points[i];
-                                                        const p2 = shape.points[i + 1];
-                                                        labelPos = {
-                                                            x: p1.x + (p2.x - p1.x) * ratio,
-                                                            y: p1.y + (p2.y - p1.y) * ratio
-                                                        };
-                                                        found = true;
-                                                        break;
-                                                    }
-                                                    target -= dists[i];
-                                                }
-                                                if (!found && shape.points.length > 0) labelPos = shape.points[0];
-                                            }
-
-                                            return (
-                                                <foreignObject
-                                                    key={`label-${shape.id}`}
-                                                    x={labelPos.x} y={labelPos.y}
-                                                    width={100 * visualScaleFactor} height={30 * visualScaleFactor}
-                                                    className="overflow-visible pointer-events-none"
-                                                >
-                                                    <div className="flex justify-center items-center" style={{ transform: `translate(-50%, -50%) scale(${visualScaleFactor})`, transformOrigin: 'center center' }}>
-                                                        <span className={`px-1 py-0.5 text-[10px] font-bold text-white rounded shadow-sm whitespace-nowrap ${isItemActive ? 'ring-2 ring-white ring-offset-2 ring-offset-black' : ''}`} style={{ backgroundColor: item.color }}>
-                                                            {labelValue.toFixed(2)}
-                                                        </span>
-                                                    </div>
-                                                </foreignObject>
-                                            );
-                                        })}
-                                    </g>
-                                )
-                            })}
-
-                            {items.filter(i => i.type === ToolType.NOTE && i.visible !== false).map(item => {
-                                const pageShapes = item.shapes.filter(s => s.pageIndex === globalPageIndex);
-                                return pageShapes.map(shape => {
-                                    const isSelected = selectedShape?.shapeId === shape.id;
-                                    const p1 = shape.points[0];
-                                    const p2 = shape.points.length > 1 ? shape.points[1] : p1;
-
-                                    // If 2 points, draw arrow from p2 (text) to p1 (target)
-                                    const isArrow = shape.points.length > 1;
-
-                                    return (
-                                        <g key={shape.id}
-                                            onClick={(e) => {
-                                                if (activeTool === ToolType.SELECT) {
-                                                    e.stopPropagation();
-                                                    setSelectedShape({ itemId: item.id, shapeId: shape.id });
-                                                    onSelectTakeoffItem(item.id);
+                                                    const shapesToDrag = itemsToDrag.map(sel => {
+                                                        const i = items.find(x => x.id === sel.itemId);
+                                                        const s = i?.shapes.find(x => x.id === sel.shapeId);
+                                                        return { itemId: sel.itemId, shapeId: sel.shapeId, initialPoints: s ? [...s.points] : [] };
+                                                    });
+                                                    
+                                                    setDraggedShapes(shapesToDrag);
+                                                    dragStartPoint.current = getInternalCoordinates(e.evt.clientX, e.evt.clientY);
                                                 }
                                             }}
-                                            style={{ cursor: activeTool === ToolType.SELECT ? 'pointer' : 'default' }}
+                                            onContextMenu={(e) => handleShapeContextMenu(e.evt as unknown as React.MouseEvent, item.id, shape.id)}
+                                            onMouseEnter={(e) => {
+                                                const container = e.target.getStage()?.container();
+                                                if(container) container.style.cursor = activeTool === ToolType.SELECT ? 'move' : 'crosshair';
+                                            }}
+                                            onMouseLeave={(e) => {
+                                                const container = e.target.getStage()?.container();
+                                                if(container) container.style.cursor = activeTool === ToolType.SELECT ? 'default' : 'crosshair';
+                                            }}
                                         >
-                                            {isArrow && (
+                                            {item.type === ToolType.AREA && (
+                                                <KonvaLine
+                                                    points={shape.points.flatMap(p => [p.x, p.y])}
+                                                    closed={true}
+                                                    fill={item.color}
+                                                    opacity={opacity}
+                                                    stroke={strokeColor}
+                                                    strokeWidth={strokeWidth}
+                                                    dash={shape.deduction ? [5 * visualScaleFactor, 5 * visualScaleFactor] : undefined}
+                                                />
+                                            )}
+                                            {(item.type === ToolType.LINEAR || item.type === ToolType.SEGMENT || item.type === ToolType.DIMENSION) && (
+                                                <KonvaLine
+                                                    points={shape.points.flatMap(p => [p.x, p.y])}
+                                                    stroke={strokeColor}
+                                                    strokeWidth={strokeWidth}
+                                                    opacity={opacity}
+                                                    lineCap="round"
+                                                    lineJoin="round"
+                                                />
+                                            )}
+                                            {item.type === ToolType.COUNT && shape.points.map((p, i) => (
+                                                <Circle
+                                                    key={i}
+                                                    x={p.x}
+                                                    y={p.y}
+                                                    radius={6 * visualScaleFactor}
+                                                    fill={item.color}
+                                                    stroke="white"
+                                                    strokeWidth={2 * visualScaleFactor}
+                                                    opacity={opacity}
+                                                />
+                                            ))}
+                                            
+                                            {item.type === ToolType.NOTE && shape.points.length > 0 && (
                                                 <>
-                                                    <line
-                                                        x1={p2.x} y1={p2.y} x2={p1.x} y2={p1.y}
-                                                        stroke={item.color}
-                                                        strokeWidth={2 * visualScaleFactor}
-                                                        markerEnd={`url(#arrowhead-${item.id})`}
-                                                    />
-                                                    <circle cx={p1.x} cy={p1.y} r={3 * visualScaleFactor} fill={item.color} />
+                                                    {shape.points.length > 1 && (
+                                                        <Arrow
+                                                            points={[shape.points[1].x, shape.points[1].y, shape.points[0].x, shape.points[0].y]}
+                                                            stroke={item.color}
+                                                            fill={item.color}
+                                                            strokeWidth={2 * visualScaleFactor}
+                                                            pointerLength={10 * visualScaleFactor}
+                                                            pointerWidth={10 * visualScaleFactor}
+                                                            opacity={opacity}
+                                                        />
+                                                    )}
+                                                    <Label
+                                                        x={shape.points[shape.points.length > 1 ? 1 : 0].x}
+                                                        y={shape.points[shape.points.length > 1 ? 1 : 0].y}
+                                                        scale={{ x: visualScaleFactor, y: visualScaleFactor }}
+                                                    >
+                                                        <Tag fill="white" stroke={item.color} strokeWidth={1} cornerRadius={4} opacity={0.9} />
+                                                        <KonvaText text={shape.text || "Note"} padding={5} fill="black" fontSize={12} />
+                                                    </Label>
                                                 </>
                                             )}
 
-                                            <g transform={`translate(${p2.x}, ${p2.y}) scale(${visualScaleFactor})`}>
-                                                <foreignObject
-                                                    x={0} y={0}
-                                                    width={200} height={100}
-                                                    className="overflow-visible"
-                                                    style={{ pointerEvents: 'none' }} // Allow clicks to pass through wrapper
+                                            {item.type === ToolType.DIMENSION && shape.points.length > 1 && (
+                                                <Label
+                                                    x={(shape.points[0].x + shape.points[1].x) / 2}
+                                                    y={(shape.points[0].y + shape.points[1].y) / 2}
+                                                    scale={{ x: visualScaleFactor, y: visualScaleFactor }}
                                                 >
-                                                    <div
-                                                        className={`bg-white/90 border shadow-sm rounded p-1 text-xs inline-block cursor-pointer hover:ring-2 hover:ring-blue-300 transition-all ${isSelected ? 'ring-2 ring-blue-500' : 'border-slate-300'}`}
-                                                        style={{
-                                                            transformOrigin: 'top left',
-                                                            color: item.color,
-                                                            borderColor: item.color,
-                                                            pointerEvents: 'auto' // Re-enable clicks on the note itself
-                                                        }}
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            if (activeTool === ToolType.SELECT || activeTool === ToolType.NOTE) {
-                                                                setNoteModal({
-                                                                    isOpen: true,
-                                                                    text: shape.text || '',
-                                                                    itemId: item.id,
-                                                                    shapeId: shape.id
-                                                                });
-                                                            }
-                                                        }}
-                                                    >
-                                                        {shape.text}
-                                                    </div>
-                                                </foreignObject>
-                                            </g>
-                                        </g>
+                                                    <Tag fill="white" stroke={item.color} cornerRadius={2} opacity={0.8} />
+                                                    <KonvaText
+                                                        text={`${shape.value?.toFixed(2)} ${item.unit}`}
+                                                        padding={2}
+                                                        fontSize={10}
+                                                        fill="black"
+                                                    />
+                                                </Label>
+                                            )}
+
+                                            {isSelected && activeTool === ToolType.SELECT && shape.points.map((p, i) => (
+                                                <Circle
+                                                    key={`handle-${i}`}
+                                                    x={p.x}
+                                                    y={p.y}
+                                                    radius={5 * visualScaleFactor}
+                                                    fill="white"
+                                                    stroke="#3b82f6"
+                                                    strokeWidth={2 * visualScaleFactor}
+                                                    draggable
+                                                    onDragStart={(e) => {
+                                                        e.cancelBubble = true;
+                                                        setDraggedVertex({ itemId: item.id, shapeId: shape.id, pointIndex: i });
+                                                    }}
+                                                    onDragEnd={() => setDraggedVertex(null)}
+                                                    onMouseDown={(e) => {
+                                                        e.cancelBubble = true;
+                                                        if (e.evt.button === 2) handlePointContextMenu(e.evt as unknown as React.MouseEvent, item.id, shape.id, i);
+                                                    }}
+                                                />
+                                            ))}
+                                        </Group>
                                     );
                                 });
                             })}
 
                             {drawingPoints.length > 0 && (
-                                <g className="pointer-events-none">
-                                    {activeTool === ToolType.AREA ? (
-                                        <polygon
-                                            points={[...drawingPoints, tempPoint].filter(Boolean).map(p => `${p!.x},${p!.y}`).join(' ')}
-                                            fill={isDeductionMode ? 'black' : (items.find(i => i.id === activeTakeoffId)?.color || '#3b82f6')}
-                                            fillOpacity={isDeductionMode ? 0.2 : 0.1}
-                                            stroke={isDeductionMode ? 'red' : (items.find(i => i.id === activeTakeoffId)?.color || '#3b82f6')}
-                                            strokeWidth={2 * visualScaleFactor}
-                                            strokeDasharray={`${5 * visualScaleFactor},${5 * visualScaleFactor}`}
-                                        />
-                                    ) : (
-                                        <polyline
-                                            points={[...drawingPoints, tempPoint].filter(Boolean).map(p => `${p!.x},${p!.y}`).join(' ')}
-                                            fill="none"
-                                            stroke={items.find(i => i.id === activeTakeoffId)?.color || '#3b82f6'}
-                                            strokeWidth={2 * visualScaleFactor}
-                                            strokeDasharray={`${5 * visualScaleFactor},${5 * visualScaleFactor}`}
-                                        />
-                                    )}
-
+                                <Group>
+                                    <KonvaLine
+                                        points={[...drawingPoints, tempPoint || drawingPoints[drawingPoints.length - 1]].flatMap(p => [p.x, p.y])}
+                                        stroke={items.find(i => i.id === activeTakeoffId)?.color || 'red'}
+                                        strokeWidth={2 * visualScaleFactor}
+                                        dash={[5 * visualScaleFactor, 5 * visualScaleFactor]}
+                                        closed={activeTool === ToolType.AREA && drawingPoints.length >= 2}
+                                    />
                                     {drawingPoints.map((p, i) => (
-                                        <circle key={i} cx={p.x} cy={p.y} r={4 * visualScaleFactor} fill={isDeductionMode ? 'red' : (items.find(i => i.id === activeTakeoffId)?.color || '#3b82f6')} />
+                                        <Circle key={i} x={p.x} y={p.y} radius={4 * visualScaleFactor} fill="white" stroke="red" strokeWidth={1} />
                                     ))}
-                                    {getLiveLabel()}
-                                </g>
+                                </Group>
                             )}
 
-                            {snapPoint && activeTool !== ToolType.SELECT && (
-                                <circle
-                                    cx={snapPoint.x}
-                                    cy={snapPoint.y}
-                                    r={8 * visualScaleFactor}
+                            {snapPoint && (
+                                <Circle
+                                    x={snapPoint.x}
+                                    y={snapPoint.y}
+                                    radius={6 * visualScaleFactor}
                                     stroke="#d946ef"
                                     strokeWidth={2 * visualScaleFactor}
-                                    fill="transparent"
-                                    className="pointer-events-none animate-pulse"
                                 />
                             )}
+                            
+                            {getLiveLabel()}
 
-                            {/* Rectangle Selection Visual */}
-                            {selectionRect && selectionRect.active && isRectSelecting && (
-                                <rect
+                            {selectionRect && selectionRect.active && (
+                                <Rect
                                     x={Math.min(selectionRect.start.x, selectionRect.end.x)}
                                     y={Math.min(selectionRect.start.y, selectionRect.end.y)}
                                     width={Math.abs(selectionRect.end.x - selectionRect.start.x)}
                                     height={Math.abs(selectionRect.end.y - selectionRect.start.y)}
-                                    fill="rgba(59, 130, 246, 0.1)"
+                                    fill="rgba(59, 130, 246, 0.2)"
                                     stroke="#3b82f6"
-                                    strokeWidth={2 * visualScaleFactor}
-                                    strokeDasharray={`${8 * visualScaleFactor},${4 * visualScaleFactor}`}
-                                    className="pointer-events-none"
+                                    strokeWidth={1 * visualScaleFactor}
                                 />
                             )}
-
-                            {/* Highlight selected items from rectangle selection */}
-                            {selectedItems.length > 0 && selectedItems.map(({ itemId, shapeId }) => {
-                                const item = items.find(i => i.id === itemId);
-                                const shape = item?.shapes.find(s => s.id === shapeId);
-
-                                if (!item || !shape || shape.pageIndex !== globalPageIndex) return null;
-
-                                const strokeWidth = 6 * visualScaleFactor;
-                                const handleRadius = 6 * visualScaleFactor;
-
-                                // Render highlight based on shape type
-                                if (item.type === ToolType.AREA) {
-                                    return (
-                                        <g key={`highlight-${shapeId}`}>
-                                            <polygon
-                                                points={shape.points.map(p => `${p.x},${p.y}`).join(' ')}
-                                                fill="none"
-                                                stroke={item.color}
-                                                strokeWidth={strokeWidth}
-                                                className="pointer-events-none"
-                                            />
-                                            {/* Vertex handles */}
-                                            {shape.points.map((pt, idx) => (
-                                                <circle
-                                                    key={`handle-${shapeId}-${idx}`}
-                                                    cx={pt.x}
-                                                    cy={pt.y}
-                                                    r={handleRadius}
-                                                    fill="white"
-                                                    stroke={item.color}
-                                                    strokeWidth={2 * visualScaleFactor}
-                                                    className="pointer-events-none"
-                                                />
-                                            ))}
-                                        </g>
-                                    );
-                                } else if (item.type === ToolType.LINEAR || item.type === ToolType.SEGMENT || item.type === ToolType.DIMENSION) {
-                                    return (
-                                        <g key={`highlight-${shapeId}`}>
-                                            <polyline
-                                                points={shape.points.map(p => `${p.x},${p.y}`).join(' ')}
-                                                fill="none"
-                                                stroke={item.color}
-                                                strokeWidth={strokeWidth}
-                                                className="pointer-events-none"
-                                            />
-                                            {/* Vertex handles */}
-                                            {shape.points.map((pt, idx) => (
-                                                <circle
-                                                    key={`handle-${shapeId}-${idx}`}
-                                                    cx={pt.x}
-                                                    cy={pt.y}
-                                                    r={handleRadius}
-                                                    fill="white"
-                                                    stroke={item.color}
-                                                    strokeWidth={2 * visualScaleFactor}
-                                                    className="pointer-events-none"
-                                                />
-                                            ))}
-                                        </g>
-                                    );
-                                } else if (item.type === ToolType.COUNT) {
-                                    return shape.points.map((p, idx) => (
-                                        <circle
-                                            key={`highlight-${shapeId}-${idx}`}
-                                            cx={p.x}
-                                            cy={p.y}
-                                            r={12 * visualScaleFactor}
-                                            fill="none"
-                                            stroke={item.color}
-                                            strokeWidth={strokeWidth}
-                                            className="pointer-events-none"
-                                        />
-                                    ));
-                                }
-                                return null;
-                            })}
-                        </g>
-                    </svg>
+                        </Layer>
+                    </Stage>
                 )}
 
                 {/* Legend Layer - Separated to sit on top of SVG */}
@@ -2257,4 +1908,3 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 });
 
 export default BlueprintCanvas;
-
