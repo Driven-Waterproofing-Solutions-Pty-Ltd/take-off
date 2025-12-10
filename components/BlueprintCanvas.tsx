@@ -157,42 +157,12 @@ const copySelectedItems = (
 
     // If we have rectangle-selected items, copy those
     if (selectedItems.length > 0) {
-        // Find the minimum coordinates to calculate relative offsets
-        let minX = Infinity;
-        let minY = Infinity;
-
-        // First pass: find the minimum coordinates
         selectedItems.forEach(({ itemId, shapeId }) => {
             const item = items.find(i => i.id === itemId);
             const shape = item?.shapes.find(s => s.id === shapeId);
             if (shape) {
-                shape.points.forEach(point => {
-                    minX = Math.min(minX, point.x);
-                    minY = Math.min(minY, point.y);
-                });
-            }
-        });
-
-        // Second pass: calculate relative offsets from the minimum point
-        selectedItems.forEach(({ itemId, shapeId }) => {
-            const item = items.find(i => i.id === itemId);
-            const shape = item?.shapes.find(s => s.id === shapeId);
-            if (shape) {
-                // Find the shape's minimum point
-                let shapeMinX = Infinity;
-                let shapeMinY = Infinity;
-                shape.points.forEach(point => {
-                    shapeMinX = Math.min(shapeMinX, point.x);
-                    shapeMinY = Math.min(shapeMinY, point.y);
-                });
-
-                // Calculate offset from the global minimum
-                const offset = {
-                    x: shapeMinX - minX,
-                    y: shapeMinY - minY
-                };
-
-                itemsToCopy.push({ itemId, shapeId, offset });
+                // Store with zero offset since we want to paste at exact original positions
+                itemsToCopy.push({ itemId, shapeId, offset: { x: 0, y: 0 } });
             }
         });
     }
@@ -201,18 +171,10 @@ const copySelectedItems = (
         const item = items.find(i => i.id === selectedShape.itemId);
         const shape = item?.shapes.find(s => s.id === selectedShape.shapeId);
         if (shape) {
-            // For single shape, offset is relative to its own position
-            let minX = Infinity;
-            let minY = Infinity;
-            shape.points.forEach(point => {
-                minX = Math.min(minX, point.x);
-                minY = Math.min(minY, point.y);
-            });
-
             itemsToCopy.push({
                 itemId: selectedShape.itemId,
                 shapeId: selectedShape.shapeId,
-                offset: { x: 0, y: 0 } // Single shape has no relative offset
+                offset: { x: 0, y: 0 } // No offset for single shape
             });
         }
     }
@@ -224,15 +186,15 @@ const copySelectedItems = (
 const pasteToOriginalItems = (
     items: TakeoffItem[],
     clipboardItems: { itemId: string, shapeId: string, offset: Point }[],
-    pasteOffset: Point,
     globalPageIndex: number,
     onBatchAddShapes: (shapes: { itemId: string, shape: Shape }[]) => void
-): Point => {
+): { itemId: string, shapeId: string }[] => {
     if (clipboardItems.length === 0) {
-        return pasteOffset;
+        return [];
     }
 
     const shapesToAdd: { itemId: string, shape: Shape }[] = [];
+    const newShapeIds: { itemId: string, shapeId: string }[] = [];
 
     // Find the original items to get their properties
     clipboardItems.forEach(clipboardItem => {
@@ -242,8 +204,8 @@ const pasteToOriginalItems = (
         if (originalItem && originalShape) {
             // Create a new shape with the same properties but offset position
             const newPoints = originalShape.points.map(point => ({
-                x: point.x + clipboardItem.offset.x + pasteOffset.x,
-                y: point.y + clipboardItem.offset.y + pasteOffset.y
+                x: point.x + clipboardItem.offset.x,
+                y: point.y + clipboardItem.offset.y
             }));
 
             const newShape: Shape = {
@@ -256,6 +218,7 @@ const pasteToOriginalItems = (
             };
 
             shapesToAdd.push({ itemId: clipboardItem.itemId, shape: newShape });
+            newShapeIds.push({ itemId: clipboardItem.itemId, shapeId: newShape.id });
         }
     });
 
@@ -263,24 +226,17 @@ const pasteToOriginalItems = (
         onBatchAddShapes(shapesToAdd);
     }
 
-    // Update paste offset for next paste operation (incremental offset)
-    const newPasteOffset = {
-        x: pasteOffset.x + 10,
-        y: pasteOffset.y + 10
-    };
-
-    return newPasteOffset;
+    return newShapeIds;
 };
 
 // Helper function to prepare payload for pasting as new items
 const getPasteAsNewItemsPayload = (
     items: TakeoffItem[],
     clipboardItems: { itemId: string, shapeId: string, offset: Point }[],
-    pasteOffset: Point,
     globalPageIndex: number
-): { payload: { sourceItemId: string, shapes: Shape[] }[], newOffset: Point } => {
+): { payload: { sourceItemId: string, shapes: Shape[] }[], newShapeIds: { itemId: string, shapeId: string }[] } => {
     if (clipboardItems.length === 0) {
-        return { payload: [], newOffset: pasteOffset };
+        return { payload: [], newShapeIds: [] };
     }
 
     // Group clipboard items by their source item ID
@@ -293,6 +249,7 @@ const getPasteAsNewItemsPayload = (
     }, {} as Record<string, typeof clipboardItems>);
 
     const payload: { sourceItemId: string, shapes: Shape[] }[] = [];
+    const newShapeIds: { itemId: string, shapeId: string }[] = [];
 
     // Process each source group
     Object.entries(itemsBySource).forEach(([sourceItemId, groupItems]) => {
@@ -306,8 +263,8 @@ const getPasteAsNewItemsPayload = (
             if (originalShape) {
                 // Create a new shape with offset position
                 const newPoints = originalShape.points.map(point => ({
-                    x: point.x + clipboardItem.offset.x + pasteOffset.x,
-                    y: point.y + clipboardItem.offset.y + pasteOffset.y
+                    x: point.x + clipboardItem.offset.x,
+                    y: point.y + clipboardItem.offset.y
                 }));
 
                 const newShape: Shape = {
@@ -319,6 +276,7 @@ const getPasteAsNewItemsPayload = (
                     text: originalShape.text
                 };
                 newShapes.push(newShape);
+                newShapeIds.push({ itemId: sourceItemId, shapeId: newShape.id });
             }
         });
 
@@ -327,13 +285,7 @@ const getPasteAsNewItemsPayload = (
         }
     });
 
-    // Update paste offset for next paste operation
-    const newPasteOffset = {
-        x: pasteOffset.x + 10,
-        y: pasteOffset.y + 10
-    };
-
-    return { payload, newOffset: newPasteOffset };
+    return { payload, newShapeIds };
 };
 
 const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
@@ -419,15 +371,55 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 
     // Clipboard state for copy/paste functionality
     const [clipboardItems, setClipboardItems] = useState<{ itemId: string, shapeId: string, offset: Point }[]>([]);
-    const [pasteOffset, setPasteOffset] = useState<Point>({ x: 10, y: 10 });
 
     // Paste options modal state
     const [showPasteOptions, setShowPasteOptions] = useState(false);
+    
+    // Ref to track pending selection after paste
+    const pendingSelectionRef = useRef<{ itemId: string, shapeId: string }[] | null>(null);
 
     // Keep ref in sync with state
     useEffect(() => {
         selectedItemsRef.current = selectedItems;
     }, [selectedItems]);
+
+    // Effect to maintain selection after items update (e.g., after pasting)
+    useEffect(() => {
+        console.log('[SELECTION EFFECT] Items updated, checking for pending selection');
+        // Check if we have a pending selection to apply after items update
+        if (pendingSelectionRef.current) {
+            console.log('[SELECTION EFFECT] Found pending selection:', pendingSelectionRef.current);
+            // Verify that all selected items exist in the new items array
+            const validSelections = pendingSelectionRef.current.filter(({ itemId, shapeId }) => {
+                const item = items.find(i => i.id === itemId);
+                const exists = item && item.shapes.some(s => s.id === shapeId);
+                console.log(`[SELECTION EFFECT] Checking shape ${shapeId} in item ${itemId}:`, exists);
+                return exists;
+            });
+            
+            if (validSelections.length > 0) {
+                console.log('[SELECTION EFFECT] Setting selected items:', validSelections);
+                setSelectedItems(validSelections);
+            } else {
+                console.log('[SELECTION EFFECT] No valid selections found');
+            }
+            // Clear the pending selection
+            pendingSelectionRef.current = null;
+        } else if (selectedItems.length > 0) {
+            // This effect ensures that when items prop changes (like after pasting),
+            // the selectedItems state is preserved if those shapes still exist
+            // Verify that all selected items still exist in the new items array
+            const validSelections = selectedItems.filter(({ itemId, shapeId }) => {
+                const item = items.find(i => i.id === itemId);
+                return item && item.shapes.some(s => s.id === shapeId);
+            });
+            
+            // Only update if some selections became invalid
+            if (validSelections.length !== selectedItems.length) {
+                setSelectedItems(validSelections);
+            }
+        }
+    }, [items]);
 
     // Calculate visual scale factor to keep lines/markers constant size on screen
     const currentScale = zoomLevel / RENDER_SCALE;
@@ -1514,10 +1506,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                                 const handleShapeMouseDown = (e: React.MouseEvent) => {
                                                     if (activeTool === ToolType.SELECT && !draggedVertex && e.button === 0) {
                                                         e.stopPropagation();
-                                                        // Select the shape
-                                                        setSelectedShape({ itemId: item.id, shapeId: shape.id });
-                                                        onSelectTakeoffItem(item.id);
-
+                                                        
                                                         // Start shape dragging (entire shape movement)
                                                         const startPoint = getInternalCoordinates(e.clientX, e.clientY);
                                                         dragStartPoint.current = startPoint;
@@ -1526,7 +1515,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                                         const isInSelection = selectedItems.some(s => s.itemId === item.id && s.shapeId === shape.id);
 
                                                         if (isInSelection && selectedItems.length > 0) {
-                                                            // Drag all selected shapes together
+                                                            // Drag all selected shapes together WITHOUT changing selection
                                                             const shapesToDrag = selectedItems.map(selected => {
                                                                 const selectedItem = items.find(i => i.id === selected.itemId);
                                                                 const selectedShape = selectedItem?.shapes.find(s => s.id === selected.shapeId);
@@ -1538,7 +1527,10 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                                             });
                                                             setDraggedShapes(shapesToDrag);
                                                         } else {
-                                                            // Drag only this shape
+                                                            // Select the shape and drag only this shape
+                                                            setSelectedShape({ itemId: item.id, shapeId: shape.id });
+                                                            onSelectTakeoffItem(item.id);
+                                                            
                                                             setDraggedShapes([{
                                                                 itemId: item.id,
                                                                 shapeId: shape.id,
@@ -2125,8 +2117,11 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 onPasteToOriginal={() => {
                     setShowPasteOptions(false);
                     if (onBatchAddShapes) {
-                        const newPasteOffset = pasteToOriginalItems(items, clipboardItems, pasteOffset, globalPageIndex, onBatchAddShapes);
-                        setPasteOffset(newPasteOffset);
+                        const newShapeIds = pasteToOriginalItems(items, clipboardItems, globalPageIndex, onBatchAddShapes);
+                        console.log('[PASTE] Generated new shape IDs:', newShapeIds);
+                        // Store the new shape IDs to be selected after the items update
+                        // Use a ref to track pending selection
+                        pendingSelectionRef.current = newShapeIds;
                     } else {
                         addToast('Paste to original items is not supported', 'error');
                     }
@@ -2134,9 +2129,9 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 onPasteAsNewItems={() => {
                     setShowPasteOptions(false);
                     if (onBatchCreateItems) {
-                        const { payload, newOffset } = getPasteAsNewItemsPayload(items, clipboardItems, pasteOffset, globalPageIndex);
+                        const { payload, newShapeIds } = getPasteAsNewItemsPayload(items, clipboardItems, globalPageIndex);
                         onBatchCreateItems(payload);
-                        setPasteOffset(newOffset);
+                        // Note: Selection for new items requires additional work
                     } else {
                         addToast('Paste as new items is not supported in this version', 'error');
                     }
