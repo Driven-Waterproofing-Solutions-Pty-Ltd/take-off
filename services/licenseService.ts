@@ -12,6 +12,8 @@ export interface LicenseStatus {
     expiresAt?: string;
     licenseKey?: string;
     licenseType?: 'trial' | 'paid';
+    subscriptionStatus?: string;
+    stripeSubscriptionId?: string;
 }
 
 export const licenseService = {
@@ -50,6 +52,7 @@ export const licenseService = {
             const licenseKey = await this.getStoredLicenseKey();
 
             if (licenseKey) {
+                console.log(`Found local license key: ${licenseKey}, verifying...`);
                 // Verify existing license
                 const { data, error } = await supabase.rpc('verify_license_key', {
                     p_key: licenseKey,
@@ -58,20 +61,59 @@ export const licenseService = {
 
                 if (error) {
                     console.error('Verification RPC Error:', error);
-                    return { valid: false, message: 'Network or Server Error during verification.' };
+                    // On error, we might want to fail safe or check DB? 
+                    // Let's assume network error and check DB just in case?
                 }
 
-                return {
-                    valid: data.valid,
-                    message: data.message,
-                    expiresAt: data.expires_at,
-                    licenseKey: licenseKey,
-                    licenseType: data.license_type,
-                };
-            } else {
-                // No license found, attempt to start trial
-                return await this.startTrial(machineId);
+                if (data && data.valid && data.subscription_status === 'active') {
+                    // If we have a paid license, we are good.
+                    if (data.license_type === 'paid') {
+                        return {
+                            valid: data.valid,
+                            message: data.message,
+                            expiresAt: data.expires_at,
+                            licenseKey: licenseKey,
+                            licenseType: data.license_type,
+                        };
+                    }
+                    // If it's a trial, we should check if there is a PAID license on the server
+                    // explicitly before returning only the trial.
+                    console.log("Local license is trial. Checking server for a PAID license update...");
+                } else {
+                    console.log("Local key invalid or expired. Checking DB for a newer license...");
+                }
+
+                // Fall through to the DB check below
             }
+            // No local license key found.
+            console.log(`Checking DB for existing license for machine: ${machineId}`);
+
+            // Check if there is an existing license for this machine in the DB (via secure RPC)
+            const { data: existingLicense, error: fetchError } = await supabase.rpc('get_license_by_machine', {
+                p_machine_id: machineId
+            }).maybeSingle();
+
+            if (fetchError) {
+                console.error("Error fetching existing license:", fetchError);
+            } else {
+                console.log("Existing license query result:", existingLicense);
+            }
+
+            if (!fetchError && existingLicense) {
+                console.log("Found existing license, restoring...");
+                // Found a valid existing license! Save it and use it.
+                await this.setStoredLicenseKey(existingLicense.license_key);
+                return {
+                    valid: true,
+                    message: 'License restored successfully.',
+                    expiresAt: existingLicense.expires_at,
+                    licenseKey: existingLicense.license_key,
+                    licenseType: existingLicense.license_type as 'trial' | 'paid',
+                };
+            }
+
+            // Really no license found, attempt to start trial
+            return await this.startTrial(machineId);
         } catch (err) {
             console.error('License Check Exception:', err);
             return { valid: false, message: 'Unexpected error checking license.' };

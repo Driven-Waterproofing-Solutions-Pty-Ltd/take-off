@@ -525,9 +525,30 @@ const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose, initialTab }) =>
                                             </div>
                                         </div>
                                     </div>
+
                                 ) : (
                                     <div className="text-slate-500 py-6 text-sm">
                                         Unable to load license information.
+                                    </div>
+                                )}
+
+                                {/* Subscribe Button for Help Modal */}
+                                {(licenseInfo?.licenseType === 'trial' || !licenseInfo?.valid) && (
+                                    <div className="mt-6 pt-6 border-t border-slate-100">
+                                        <p className="text-sm text-slate-600 mb-3">
+                                            {licenseInfo?.valid ? "Upgrade to a paid subscription to remove limits." : "Subscribe to activate ProTakeoff."}
+                                        </p>
+                                        <button
+                                            onClick={async () => {
+                                                // Allow subscribe even if no license key (will use machine ID)
+                                                const { url } = await import('../services/stripeService').then(m => m.stripeService.createCheckoutSession(licenseInfo?.licenseKey || ''));
+                                                if (url) window.location.href = url;
+                                            }}
+                                            className="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white py-2 rounded-lg font-semibold hover:from-blue-700 hover:to-purple-700 transition-all shadow-md flex justify-center items-center gap-2"
+                                        >
+                                            <Crown size={18} />
+                                            Subscribe Now ($29.99/mo)
+                                        </button>
                                     </div>
                                 )}
                             </div>
@@ -536,7 +557,7 @@ const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose, initialTab }) =>
 
                 </div>
             </div>
-        </div>,
+        </div >,
         document.body
     );
 };

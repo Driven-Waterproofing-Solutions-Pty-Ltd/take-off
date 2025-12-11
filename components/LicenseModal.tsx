@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldCheck, Key, Loader2, AlertCircle, Crown, AlertTriangle, Clock } from 'lucide-react';
+import { ShieldCheck, Key, Loader2, AlertCircle, Crown, AlertTriangle, Clock, CreditCard, ExternalLink } from 'lucide-react';
 import { licenseService, LicenseStatus } from '../services/licenseService';
+import { stripeService } from '../services/stripeService';
 
 interface LicenseModalProps {
     onSuccess: () => void;
@@ -11,6 +12,7 @@ interface LicenseModalProps {
 const LicenseModal: React.FC<LicenseModalProps> = ({ onSuccess, initialMessage, currentLicenseStatus }) => {
     const [key, setKey] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+    const [isSubscribing, setIsSubscribing] = useState(false);
     const [error, setError] = useState<string | null>(initialMessage || null);
     const [licenseStatus, setLicenseStatus] = useState<LicenseStatus | null>(currentLicenseStatus || null);
 
@@ -41,6 +43,25 @@ const LicenseModal: React.FC<LicenseModalProps> = ({ onSuccess, initialMessage, 
             setError(err.toString() || "Connection error.");
         } finally {
             setIsLoading(false);
+        }
+    };
+
+    const handleSubscribe = async () => {
+        // We allow subscribing without a license key (will use machine ID in backend)
+        setIsSubscribing(true);
+        setError(null);
+        try {
+            const { url } = await stripeService.createCheckoutSession(licenseStatus?.licenseKey || '');
+            if (url) {
+                window.location.href = url; // Redirect to Stripe
+            } else {
+                throw new Error("Failed to create checkout session.");
+            }
+        } catch (e: any) {
+            console.error(e);
+            setError(e.message || "Failed to start subscription.");
+        } finally {
+            setIsSubscribing(false);
         }
     };
 
@@ -80,23 +101,25 @@ const LicenseModal: React.FC<LicenseModalProps> = ({ onSuccess, initialMessage, 
                     )}
 
                     {/* Expiration Warning */}
-                    {licenseStatus?.valid && isTrial && (
+                    {licenseStatus?.valid && (isTrial || isPaid) && (
                         <div className="mt-3 w-full">
                             {isExpired ? (
                                 <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-2">
                                     <AlertCircle className="text-red-600 flex-shrink-0 mt-0.5" size={18} />
                                     <div className="text-sm">
-                                        <p className="font-semibold text-red-800">Trial Expired</p>
-                                        <p className="text-red-600">Your trial has ended. Upgrade to continue using ProTakeoff.</p>
+                                        <p className="font-semibold text-red-800">{isTrial ? 'Trial Expired' : 'License Expired'}</p>
+                                        <p className="text-red-600">
+                                            {isTrial ? 'Your trial has ended. Subscribe to continue.' : 'Your license has expired. Please renew.'}
+                                        </p>
                                     </div>
                                 </div>
                             ) : isExpiringSoon ? (
                                 <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 flex items-start gap-2">
                                     <AlertTriangle className="text-orange-600 flex-shrink-0 mt-0.5" size={18} />
                                     <div className="text-sm">
-                                        <p className="font-semibold text-orange-800">Trial Expiring Soon</p>
+                                        <p className="font-semibold text-orange-800">Expiring Soon</p>
                                         <p className="text-orange-600">
-                                            {daysLeft} {daysLeft === 1 ? 'day' : 'days'} remaining. Upgrade to keep access.
+                                            {daysLeft} {daysLeft === 1 ? 'day' : 'days'} remaining.
                                         </p>
                                     </div>
                                 </div>
@@ -104,7 +127,7 @@ const LicenseModal: React.FC<LicenseModalProps> = ({ onSuccess, initialMessage, 
                                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center gap-2">
                                     <Clock className="text-blue-600 flex-shrink-0" size={16} />
                                     <p className="text-sm text-blue-700">
-                                        Trial expires in <strong>{daysLeft} days</strong>
+                                        {isPaid ? 'Renews in' : 'Trial expires in'} <strong>{daysLeft} days</strong>
                                     </p>
                                 </div>
                             )}
@@ -166,18 +189,35 @@ const LicenseModal: React.FC<LicenseModalProps> = ({ onSuccess, initialMessage, 
                         <p className="text-sm text-slate-600 mb-3">
                             Get lifetime access and unlock premium templates from our library.
                         </p>
-                        <a
-                            href="#"
-                            className="block text-center bg-gradient-to-r from-blue-600 to-purple-600 text-white py-2 rounded-lg font-semibold hover:from-blue-700 hover:to-purple-700 transition-all"
+                        <button
+                            onClick={handleSubscribe}
+                            disabled={isSubscribing}
+                            className="w-full text-center bg-gradient-to-r from-blue-600 to-purple-600 text-white py-2 rounded-lg font-semibold hover:from-blue-700 hover:to-purple-700 transition-all shadow-md flex justify-center items-center gap-2"
                         >
-                            Purchase License Key
-                        </a>
+                            {isSubscribing ? <Loader2 size={18} className="animate-spin" /> : <CreditCard size={18} />}
+                            Subscribe Now ($29.99/mo)
+                        </button>
+                    </div>
+                )}
+
+                {isPaid && (
+                    <div className="mt-6 text-center">
+                        <button className="text-slate-600 hover:text-slate-900 text-sm font-medium flex items-center justify-center gap-1 mx-auto">
+                            Manage Subscription <ExternalLink size={14} />
+                        </button>
                     </div>
                 )}
 
                 {!licenseStatus?.valid && (
                     <div className="mt-6 text-center">
-                        <a href="#" className="text-sm text-blue-600 hover:underline">Purchase a license key</a>
+                        <button
+                            onClick={handleSubscribe}
+                            disabled={isSubscribing}
+                            className="text-blue-600 hover:text-blue-800 text-sm font-semibold hover:underline flex items-center justify-center gap-1 mx-auto"
+                        >
+                            {isSubscribing ? <Loader2 size={14} className="animate-spin" /> : null}
+                            Purchase / Subscribe to a License
+                        </button>
                     </div>
                 )}
             </div>

@@ -1,8 +1,8 @@
 [package]
 name = "protakeoff_ai"
 version = "0.1.0"
-description = "ProTakeoff"
-authors = ["you"]
+description = "Professional takeoff estimating software for construction projects"
+authors = ["Protakeoff LLC"]
 edition = "2021"
 rust-version = "1.77.2"
 build = "build.rs"
