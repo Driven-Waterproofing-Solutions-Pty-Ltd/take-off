@@ -157,10 +157,13 @@ export const evaluateFormula = (
   if (item.properties) {
     item.properties.forEach(prop => {
       // Access by raw name (if safe) and sanitized name
-      scope[prop.name] = prop.value;
-      const safeName = toVariableName(prop.name);
-      if (safeName !== prop.name) {
-        scope[safeName] = prop.value;
+      const val = Number(prop.value);
+      if (!isNaN(val)) {
+        scope[prop.name] = val;
+        const safeName = toVariableName(prop.name);
+        if (safeName !== prop.name) {
+          scope[safeName] = val;
+        }
       }
     });
   }

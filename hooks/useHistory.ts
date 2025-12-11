@@ -6,6 +6,10 @@ interface HistoryState<T> {
   future: T[];
 }
 
+interface HistoryOptions {
+  capacity?: number;
+}
+
 interface UseHistoryReturn<T> {
   state: T;
   set: (newState: T) => void;
@@ -18,7 +22,9 @@ interface UseHistoryReturn<T> {
   clear: (initialState: T) => void;
 }
 
-export function useHistory<T>(initialState: T): UseHistoryReturn<T> {
+export function useHistory<T>(initialState: T, options: HistoryOptions = {}): UseHistoryReturn<T> {
+  const { capacity = 30 } = options;
+
   const [history, setHistory] = useState<HistoryState<T>>({
     past: [],
     present: initialState,
@@ -69,14 +75,20 @@ export function useHistory<T>(initialState: T): UseHistoryReturn<T> {
     setHistory(curr => {
       if (newState === curr.present) return curr;
       
+      const newPast = [...curr.past, curr.present];
+      // Enforce capacity limit
+      if (newPast.length > capacity) {
+        newPast.splice(0, newPast.length - capacity);
+      }
+
       return {
-        past: [...curr.past, curr.present],
+        past: newPast,
         present: newState,
         future: []
       };
     });
     setSnapshot(null); // Reset snapshot
-  }, []);
+  }, [capacity]);
 
   // Transient set: updates present, but keeps the *original* present (before transient updates) in snapshot
   const setTransient = useCallback((newState: T) => {
@@ -91,14 +103,22 @@ export function useHistory<T>(initialState: T): UseHistoryReturn<T> {
   // Commit: takes the snapshot (if exists) and pushes IT to past, effectively treating the whole transient sequence as one step from Snapshot -> Present
   const commit = useCallback(() => {
     if (snapshot !== null) {
-      setHistory(curr => ({
-        past: [...curr.past, snapshot],
-        present: curr.present,
-        future: []
-      }));
+      setHistory(curr => {
+        const newPast = [...curr.past, snapshot];
+        // Enforce capacity limit
+        if (newPast.length > capacity) {
+          newPast.splice(0, newPast.length - capacity);
+        }
+
+        return {
+          past: newPast,
+          present: curr.present,
+          future: []
+        };
+      });
       setSnapshot(null);
     }
-  }, [snapshot]);
+  }, [snapshot, capacity]);
 
   const clear = useCallback((initialState: T) => {
       setHistory({

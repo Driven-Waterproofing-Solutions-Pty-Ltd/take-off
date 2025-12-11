@@ -1,3 +1,4 @@
+
 import JSZip from 'jszip';
 import Database from '@tauri-apps/plugin-sql';
 import { PlanSet, ProjectData, TakeoffItem, ItemTemplate } from '../types';
@@ -6,6 +7,23 @@ import { PlanSet, ProjectData, TakeoffItem, ItemTemplate } from '../types';
 // meta: key (TEXT PRIMARY KEY), value (TEXT JSON)
 // files: id (TEXT PRIMARY KEY), name (TEXT), data (BLOB)
 // templates: id (TEXT PRIMARY KEY), data (TEXT JSON)
+
+// --- Database Types ---
+interface MetaRow {
+  key: string;
+  value: string;
+}
+
+interface FileRow {
+  id: string;
+  name: string;
+  data: Uint8Array | number[]; // Tauri SQL might return number[] or Uint8Array depending on version
+}
+
+interface TemplateRow {
+  id: string;
+  data: string;
+}
 
 let dbInstance: Database | null = null;
 
@@ -96,9 +114,46 @@ export const clearProjectData = async () => {
 export const loadProjectFromStorage = async (): Promise<ProjectState | null> => {
   const db = await getDB();
 
-  const result = await db.select("SELECT value FROM meta WHERE key = 'current_project'") as any[];
+  const result = await db.select("SELECT value FROM meta WHERE key = 'current_project'") as MetaRow[];
   if (result.length === 0) return null;
 
+  try {
+    const data = JSON.parse(result[0].value);
+    const planSets: PlanSet[] = [];
+
+    // Rehydrate PlanSets by fetching associated files
+    if (data.planSetsMeta && Array.isArray(data.planSetsMeta)) {
+      for (const meta of data.planSetsMeta) {
+        const fileResult = await db.select("SELECT name, data FROM files WHERE id = $1", [meta.id]) as FileRow[];
+        
+        if (fileResult.length > 0) {
+          const fileRow = fileResult[0];
+          // Ensure data is in a format Blob can consume (Uint8Array)
+          const fileData = fileRow.data instanceof Uint8Array ? fileRow.data : new Uint8Array(fileRow.data);
+          
+          const blob = new Blob([fileData], { type: 'application/pdf' });
+          const file = new File([blob], fileRow.name, { type: 'application/pdf' });
+          
+          planSets.push({
+            ...meta,
+            file
+          });
+        }
+      }
+    }
+
+    return {
+      items: data.items || [],
+      projectData: data.projectData || {},
+      totalPages: data.totalPages || 0,
+      planSets,
+      projectName: data.projectName || "Untitled Project"
+    };
+
+  } catch (error) {
+    console.error("Failed to parse project data:", error);
+    return null;
+  }
 };
 
 // --- License Persistence ---
@@ -109,13 +164,11 @@ export const saveLicenseKey = async (key: string) => {
 
 export const getLicenseKey = async (): Promise<string | null> => {
   const db = await getDB();
-  const result = await db.select("SELECT value FROM meta WHERE key = 'license_key'") as any[];
+  const result = await db.select("SELECT value FROM meta WHERE key = 'license_key'") as MetaRow[];
   return result.length > 0 ? result[0].value : null;
 }
 
 // --- File Handle Persistence (Stubbed for SQLite version) ---
-// Since we store files directly in DB, we don't strictly need file handles unless we want to "Save As" back to disk later.
-
 export const saveFileHandle = async (handle: any) => {
   // Not implemented for SQLite persistence model
   return;
@@ -220,7 +273,7 @@ export const saveTemplate = async (template: ItemTemplate) => {
 
 export const getTemplates = async (): Promise<ItemTemplate[]> => {
   const db = await getDB();
-  const result = await db.select("SELECT data FROM templates") as any[];
+  const result = await db.select("SELECT data FROM templates") as TemplateRow[];
   return result.map(r => JSON.parse(r.data));
 };
 
