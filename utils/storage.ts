@@ -129,9 +129,20 @@ export const loadProjectFromStorage = async (): Promise<ProjectState | null> => 
         if (fileResult.length > 0) {
           const fileRow = fileResult[0];
           // Ensure data is in a format Blob can consume (Uint8Array)
-          const fileData = fileRow.data instanceof Uint8Array ? fileRow.data : new Uint8Array(fileRow.data);
+          // Explicitly cast to unknown then Uint8Array to handle potential type mismatches from the DB driver
+          // or construct a new Uint8Array from the data to ensure it's not a SharedArrayBuffer which Blob doesn't like
+          let fileData: Uint8Array;
           
-          const blob = new Blob([fileData], { type: 'application/pdf' });
+          if (fileRow.data instanceof Uint8Array) {
+             // Create a copy to ensure standard ArrayBuffer, not SharedArrayBuffer if that's what's returned
+             // We explicitly access the buffer property and cast it if necessary, but creating a new Uint8Array from the elements is safest
+             fileData = new Uint8Array(Array.from(fileRow.data));
+          } else {
+             // If it's number[] or something else
+             fileData = new Uint8Array(fileRow.data as unknown as number[]);
+          }
+          
+          const blob = new Blob([fileData as any], { type: 'application/pdf' });
           const file = new File([blob], fileRow.name, { type: 'application/pdf' });
           
           planSets.push({
@@ -169,12 +180,16 @@ export const getLicenseKey = async (): Promise<string | null> => {
 }
 
 // --- File Handle Persistence (Stubbed for SQLite version) ---
-export const saveFileHandle = async (handle: any) => {
+// File handles are platform-specific and not persisted in SQLite.
+// We use a specific type if needed, but for now `unknown` or a specific interface is safer than `any`.
+// However, since this is a stub and unused in this implementation:
+
+export const saveFileHandle = async (_handle: unknown): Promise<void> => {
   // Not implemented for SQLite persistence model
   return;
 };
 
-export const getFileHandle = async (): Promise<any | null> => {
+export const getFileHandle = async (): Promise<unknown | null> => {
   return null;
 };
 

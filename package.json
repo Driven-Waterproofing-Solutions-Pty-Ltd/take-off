@@ -19,6 +19,7 @@
     "@tauri-apps/plugin-store": "^2.0.0",
     "@types/mathjs": "^9.4.1",
     "html2canvas": "^1.4.1",
+    "immer": "^11.0.1",
     "jspdf": "^2.5.1",
     "jszip": "^3.10.1",
     "konva": "^10.0.12",

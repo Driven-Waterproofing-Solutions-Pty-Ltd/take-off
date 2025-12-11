@@ -1,9 +1,19 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
+import { produceWithPatches, applyPatches, Patch, enablePatches, Draft } from 'immer';
+
+// Enable patches plugin
+enablePatches();
+
+interface HistoryEntry {
+  patches: Patch[];
+  inversePatches: Patch[];
+}
 
 interface HistoryState<T> {
-  past: T[];
+  past: HistoryEntry[];
   present: T;
-  future: T[];
+  future: HistoryEntry[];
+  transient?: { patches: Patch[], inversePatches: Patch[] } | null;
 }
 
 interface HistoryOptions {
@@ -12,9 +22,9 @@ interface HistoryOptions {
 
 interface UseHistoryReturn<T> {
   state: T;
-  set: (newState: T) => void;
-  setTransient: (newState: T) => void; // Updates present without pushing to past (sets snapshot)
-  commit: () => void; // Commits the snapshot to past
+  set: (recipe: ((draft: Draft<T>) => void | T) | T) => void;
+  setTransient: (recipe: ((draft: Draft<T>) => void | T) | T) => void;
+  commit: () => void;
   undo: () => void;
   redo: () => void;
   canUndo: boolean;
@@ -28,105 +38,152 @@ export function useHistory<T>(initialState: T, options: HistoryOptions = {}): Us
   const [history, setHistory] = useState<HistoryState<T>>({
     past: [],
     present: initialState,
-    future: []
+    future: [],
+    transient: null
   });
-
-  // Snapshot stores the state *before* a transient sequence started.
-  // If null, it means we are not in a transient sequence.
-  const [snapshot, setSnapshot] = useState<T | null>(null);
 
   const canUndo = history.past.length > 0;
   const canRedo = history.future.length > 0;
 
   const undo = useCallback(() => {
     setHistory(curr => {
-      if (curr.past.length === 0) return curr;
+      if (curr.past.length === 0) return { ...curr, transient: null };
 
-      const previous = curr.past[curr.past.length - 1];
+      const previousEntry = curr.past[curr.past.length - 1];
       const newPast = curr.past.slice(0, curr.past.length - 1);
+      
+      // Apply inverse patches to current state to go back
+      const newPresent = applyPatches(curr.present, previousEntry.inversePatches);
 
       return {
         past: newPast,
-        present: previous,
-        future: [curr.present, ...curr.future]
+        present: newPresent,
+        future: [previousEntry, ...curr.future],
+        transient: null
       };
     });
-    setSnapshot(null); // Reset snapshot on undo
   }, []);
 
   const redo = useCallback(() => {
     setHistory(curr => {
-      if (curr.future.length === 0) return curr;
+      if (curr.future.length === 0) return { ...curr, transient: null };
 
-      const next = curr.future[0];
+      const nextEntry = curr.future[0];
       const newFuture = curr.future.slice(1);
+      
+      // Apply patches to current state to go forward
+      const newPresent = applyPatches(curr.present, nextEntry.patches);
 
       return {
-        past: [...curr.past, curr.present],
-        present: next,
-        future: newFuture
+        past: [...curr.past, nextEntry],
+        present: newPresent,
+        future: newFuture,
+        transient: null
       };
     });
-    setSnapshot(null); // Reset snapshot on redo
   }, []);
 
-  // Standard set: pushes current present to past, sets new present, clears future
-  const set = useCallback((newState: T) => {
+  const set = useCallback((recipeOrNextState: ((draft: Draft<T>) => void | T) | T) => {
     setHistory(curr => {
-      if (newState === curr.present) return curr;
+      let nextState: T;
+      let patches: Patch[];
+      let inversePatches: Patch[];
+
+      if (typeof recipeOrNextState === 'function') {
+         // @ts-ignore
+         [nextState, patches, inversePatches] = produceWithPatches(curr.present, recipeOrNextState);
+      } else {
+         // @ts-ignore
+         [nextState, patches, inversePatches] = produceWithPatches(curr.present, () => recipeOrNextState);
+      }
       
-      const newPast = [...curr.past, curr.present];
-      // Enforce capacity limit
-      if (newPast.length > capacity) {
-        newPast.splice(0, newPast.length - capacity);
+      if (patches.length === 0) return curr;
+
+      let newPast = [...curr.past];
+      
+      // If we have pending transient patches, commit them first as a history entry
+      // This ensures we don't lose the history of the transient actions if a hard set occurs
+      if (curr.transient) {
+          newPast.push(curr.transient);
+      }
+
+      const newEntry = { patches, inversePatches };
+      newPast.push(newEntry);
+      
+      // Enforce capacity
+      while (newPast.length > capacity) {
+        newPast.shift();
       }
 
       return {
         past: newPast,
-        present: newState,
-        future: []
+        present: nextState,
+        future: [],
+        transient: null
       };
     });
-    setSnapshot(null); // Reset snapshot
   }, [capacity]);
 
-  // Transient set: updates present, but keeps the *original* present (before transient updates) in snapshot
-  const setTransient = useCallback((newState: T) => {
-    setHistory(curr => ({
-      ...curr,
-      present: newState
-    }));
-    
-    setSnapshot(prev => prev === null ? history.present : prev);
-  }, [history.present]);
+  const setTransient = useCallback((recipeOrNextState: ((draft: Draft<T>) => void | T) | T) => {
+    setHistory(curr => {
+        let nextState: T;
+        let patches: Patch[];
+        let inversePatches: Patch[];
 
-  // Commit: takes the snapshot (if exists) and pushes IT to past, effectively treating the whole transient sequence as one step from Snapshot -> Present
-  const commit = useCallback(() => {
-    if (snapshot !== null) {
-      setHistory(curr => {
-        const newPast = [...curr.past, snapshot];
-        // Enforce capacity limit
-        if (newPast.length > capacity) {
-          newPast.splice(0, newPast.length - capacity);
+        if (typeof recipeOrNextState === 'function') {
+             // @ts-ignore
+             [nextState, patches, inversePatches] = produceWithPatches(curr.present, recipeOrNextState);
+        } else {
+             // @ts-ignore
+             [nextState, patches, inversePatches] = produceWithPatches(curr.present, () => recipeOrNextState);
         }
+        
+        if (patches.length === 0) return curr;
+
+        // Accumulate patches
+        const currentTransient = curr.transient || { patches: [], inversePatches: [] };
+        
+        const newTransient = {
+            patches: [...currentTransient.patches, ...patches],
+            // Inverse patches need to be prepended to maintain correct undo order (LIFO for undo)
+            inversePatches: [...inversePatches, ...currentTransient.inversePatches]
+        };
 
         return {
-          past: newPast,
-          present: curr.present,
-          future: []
+            ...curr,
+            present: nextState,
+            transient: newTransient
         };
-      });
-      setSnapshot(null);
-    }
-  }, [snapshot, capacity]);
+    });
+  }, []);
+
+  const commit = useCallback(() => {
+    setHistory(curr => {
+        if (!curr.transient) return curr;
+
+         const newPast = [...curr.past, curr.transient];
+         
+         // Enforce capacity
+         if (newPast.length > capacity) {
+             newPast.splice(0, newPast.length - capacity);
+         }
+
+         return {
+             past: newPast,
+             present: curr.present,
+             future: [],
+             transient: null
+         };
+    });
+  }, [capacity]);
 
   const clear = useCallback((initialState: T) => {
-      setHistory({
-          past: [],
-          present: initialState,
-          future: []
-      });
-      setSnapshot(null);
+    setHistory({
+      past: [],
+      present: initialState,
+      future: [],
+      transient: null
+    });
   }, []);
 
   return {

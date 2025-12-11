@@ -955,6 +955,9 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         }
 
         if (draggedShapes.length > 0) {
+            // Commit the changes to history when drag ends
+            // We need to commit the final state explicitly to ensure the patches are properly finalized
+            // This is handled by onInteractionEnd() which calls commitHistory()
             setDraggedShapes([]);
             dragStartPoint.current = null;
             if (onInteractionEnd) onInteractionEnd();
@@ -1291,7 +1294,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 
         if (isTransient && onUpdateShapeTransient) {
             onUpdateShapeTransient(item.id, updatedShape);
-        } else if (onUpdateShape) {
+        } else if (onUpdateShape && !isTransient) {
             onUpdateShape(item.id, updatedShape.id, updatedShape);
         }
         return { updatedShape };

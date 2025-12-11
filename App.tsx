@@ -186,7 +186,10 @@ const App: React.FC = () => {
         newPlanSets.push(newPlanSet);
         currentTotalPages += numPages;
       }
-      setHistory({ ...historyState, planSets: newPlanSets, totalPages: currentTotalPages });
+      setHistory(draft => {
+        draft.planSets = newPlanSets;
+        draft.totalPages = currentTotalPages;
+      });
       if (planSets.length === 0 && newPlanSets.length > 0) {
         setPageIndex(0);
         setZoomLevel(1.0);
@@ -247,7 +250,9 @@ const App: React.FC = () => {
       group: data.group || 'General',
       subItems: data.subItems || []
     };
-    setHistory({ ...historyState, items: [...items, newItem] });
+    setHistory(draft => {
+      draft.items.push(newItem);
+    });
     setActiveTakeoffId(newItem.id);
     setActiveTool(pendingTool);
     setIsDeductionMode(false);
@@ -278,7 +283,9 @@ const App: React.FC = () => {
     });
 
     if (newItemsList.length > 0) {
-      setHistory({ ...historyState, items: [...items, ...newItemsList] });
+      setHistory(draft => {
+        draft.items.push(...newItemsList);
+      });
       setActiveTakeoffId(lastItemId);
       addToast(`Created ${newItemsList.length} new item(s)`, 'success');
     }
@@ -291,31 +298,27 @@ const App: React.FC = () => {
       return acc;
     }, {} as Record<string, Shape[]>);
 
-    const newItems = items.map(item => {
-      if (shapesByItem[item.id]) {
-        const newShapes = [...item.shapes, ...shapesByItem[item.id]];
-        const newTotal = calculateTotalValue(newShapes);
-        return { ...item, shapes: newShapes, totalValue: newTotal };
-      }
-      return item;
+    setHistory(draft => {
+      draft.items.forEach(item => {
+        if (shapesByItem[item.id]) {
+          item.shapes.push(...shapesByItem[item.id]);
+          item.totalValue = calculateTotalValue(item.shapes);
+        }
+      });
     });
-
-    setHistory({ ...historyState, items: newItems });
     addToast(`Added ${shapesToAdd.length} shapes`, 'success');
   };
 
   const handleShapeCreated = (shape: Shape) => {
     if (!activeTakeoffId) return;
     if (isDeductionMode) shape.deduction = true;
-    const newItems = items.map(item => {
-      if (item.id === activeTakeoffId) {
-        const newShapes = [...item.shapes, shape];
-        const newTotal = calculateTotalValue(newShapes);
-        return { ...item, shapes: newShapes, totalValue: newTotal };
+    setHistory(draft => {
+      const item = draft.items.find(i => i.id === activeTakeoffId);
+      if (item) {
+        item.shapes.push(shape);
+        item.totalValue = calculateTotalValue(item.shapes);
       }
-      return item;
     });
-    setHistory({ ...historyState, items: newItems });
     if (isDeductionMode) {
       setIsDeductionMode(false);
       addToast("Cutout added", 'success');
@@ -323,27 +326,29 @@ const App: React.FC = () => {
   };
 
   const handleUpdateShape = (itemId: string, shapeId: string, updates: Partial<Shape>) => {
-    const newItems = items.map(item => {
-      if (item.id === itemId) {
-        const newShapes = item.shapes.map(shape => shape.id === shapeId ? { ...shape, ...updates } : shape);
-        const newTotal = calculateTotalValue(newShapes);
-        return { ...item, shapes: newShapes, totalValue: newTotal };
+    setHistory(draft => {
+      const item = draft.items.find(i => i.id === itemId);
+      if (item) {
+        const shape = item.shapes.find(s => s.id === shapeId);
+        if (shape) {
+          Object.assign(shape, updates);
+          item.totalValue = calculateTotalValue(item.shapes);
+        }
       }
-      return item;
     });
-    setHistory({ ...historyState, items: newItems });
   };
 
   const handleUpdateShapeTransient = (itemId: string, updatedShape: Shape) => {
-    const newItems = items.map(item => {
-      if (item.id === itemId) {
-        const newShapes = item.shapes.map(s => s.id === updatedShape.id ? updatedShape : s);
-        const newTotal = calculateTotalValue(newShapes);
-        return { ...item, shapes: newShapes, totalValue: newTotal };
+    setHistoryTransient(draft => {
+      const item = draft.items.find(i => i.id === itemId);
+      if (item) {
+        const index = item.shapes.findIndex(s => s.id === updatedShape.id);
+        if (index !== -1) {
+          item.shapes[index] = updatedShape;
+          item.totalValue = calculateTotalValue(item.shapes);
+        }
       }
-      return item;
     });
-    setHistoryTransient({ ...historyState, items: newItems });
   };
 
   const handleBatchUpdateShapesTransient = (updates: { itemId: string, shape: Shape }[]) => {
@@ -355,68 +360,73 @@ const App: React.FC = () => {
       return acc;
     }, {} as Record<string, Shape[]>);
 
-    const newItems = items.map(item => {
-      if (updatesByItemId[item.id]) {
-        const itemUpdates = updatesByItemId[item.id];
-        const updatedShapes = item.shapes.map(shape => {
-          const update = itemUpdates.find(u => u.id === shape.id);
-          return update || shape;
-        });
-        return { ...item, shapes: updatedShapes };
-      }
-      return item;
+    setHistoryTransient(draft => {
+      draft.items.forEach(item => {
+        if (updatesByItemId[item.id]) {
+          const itemUpdates = updatesByItemId[item.id];
+          itemUpdates.forEach(updatedShape => {
+            const index = item.shapes.findIndex(s => s.id === updatedShape.id);
+            if (index !== -1) {
+              item.shapes[index] = updatedShape;
+            }
+          });
+        }
+      });
     });
-
-    setHistoryTransient({ ...historyState, items: newItems });
   };
 
   const handleSplitShape = (itemId: string, updatedShape: Shape, newShape: Shape) => {
-    const newItems = items.map(item => {
-      if (item.id === itemId) {
-        const newShapes = item.shapes.map(s => s.id === updatedShape.id ? updatedShape : s);
-        newShapes.push(newShape);
-        const newTotal = calculateTotalValue(newShapes);
-        return { ...item, shapes: newShapes, totalValue: newTotal };
+    setHistory(draft => {
+      const item = draft.items.find(i => i.id === itemId);
+      if (item) {
+        const index = item.shapes.findIndex(s => s.id === updatedShape.id);
+        if (index !== -1) {
+          item.shapes[index] = updatedShape;
+          item.shapes.push(newShape);
+          item.totalValue = calculateTotalValue(item.shapes);
+        }
       }
-      return item;
     });
-    setHistory({ ...historyState, items: newItems });
   };
 
   const handleUpdateItem = (itemId: string, updates: Partial<TakeoffItem>) => {
-    const newItems = items.map(item => item.id === itemId ? { ...item, ...updates } : item);
-    setHistory({ ...historyState, items: newItems });
+    setHistory(draft => {
+      const item = draft.items.find(i => i.id === itemId);
+      if (item) {
+        Object.assign(item, updates);
+      }
+    });
   };
 
   const handleDeleteItem = (id: string) => {
     if (activeTakeoffId === id) { setActiveTakeoffId(null); setActiveTool(ToolType.SELECT); setIsDeductionMode(false); }
-    setHistory({ ...historyState, items: items.filter(i => i.id !== id) });
+    setHistory(draft => {
+      draft.items = draft.items.filter(i => i.id !== id);
+    });
     addToast("Item deleted", 'info');
   };
 
   const handleDeleteShape = (itemId: string, shapeId: string) => {
-    const newItems = items.map(item => {
-      if (item.id === itemId) {
-        const newShapes = item.shapes.filter(s => s.id !== shapeId);
-        const newTotal = calculateTotalValue(newShapes);
-        return { ...item, shapes: newShapes, totalValue: newTotal };
+    setHistory(draft => {
+      const item = draft.items.find(i => i.id === itemId);
+      if (item) {
+        item.shapes = item.shapes.filter(s => s.id !== shapeId);
+        item.totalValue = calculateTotalValue(item.shapes);
       }
-      return item;
     });
-    setHistory({ ...historyState, items: newItems });
   };
 
   const handleDeleteShapes = (shapesToDelete: { itemId: string, shapeId: string }[]) => {
     const shapeIdSet = new Set(shapesToDelete.map(s => s.shapeId));
-    const newItems = items.map(item => {
-      const newShapes = item.shapes.filter(shape => !shapeIdSet.has(shape.id));
-      if (newShapes.length !== item.shapes.length) {
-        const newTotal = calculateTotalValue(newShapes);
-        return { ...item, shapes: newShapes, totalValue: newTotal };
-      }
-      return item;
+    setHistory(draft => {
+      draft.items.forEach(item => {
+        const originalLength = item.shapes.length;
+        item.shapes = item.shapes.filter(shape => !shapeIdSet.has(shape.id));
+        if (item.shapes.length !== originalLength) {
+          item.totalValue = calculateTotalValue(item.shapes);
+        }
+      });
     });
-    setHistory({ ...historyState, items: newItems });
   };
 
   const handleMoveShapesToItem = (shapesToMove: { itemId: string, shapeId: string }[], targetItemId: string) => {
@@ -484,7 +494,30 @@ const App: React.FC = () => {
     const movedShapeIdSet = new Set(shapesToMove.map(s => s.shapeId));
     setSelectedShapes(prev => prev.filter(sel => !movedShapeIdSet.has(sel.shapeId)));
 
-    setHistory({ ...historyState, items: newItems });
+    setHistory(draft => {
+       // Remove shapes from source items
+       sourceItemIds.forEach(sourceId => {
+         const sourceItem = draft.items.find(i => i.id === sourceId);
+         if (sourceItem) {
+             const shapeIdsToRemove = new Set(shapesBySource[sourceId]);
+             sourceItem.shapes = sourceItem.shapes.filter(s => !shapeIdsToRemove.has(s.id));
+             sourceItem.totalValue = calculateTotalValue(sourceItem.shapes);
+         }
+       });
+
+       // Add to target item
+       const targetDraftItem = draft.items.find(i => i.id === targetItemId);
+       if (targetDraftItem) {
+           targetDraftItem.shapes.push(...movedShapes);
+           targetDraftItem.totalValue = calculateTotalValue(targetDraftItem.shapes);
+       }
+
+       // Remove empty source items
+       if (emptySourceItemIds.size > 0) {
+           draft.items = draft.items.filter(item => !emptySourceItemIds.has(item.id));
+       }
+    });
+    
     addToast(`Moved ${shapesToMove.length} shape(s) to ${targetItem.label}`, 'success');
   };
 
@@ -503,18 +536,22 @@ const App: React.FC = () => {
 
   const handleUpdateScale = (pixels: number, realValue: number, unit: Unit) => {
     const ppu = pixels / realValue;
-    setHistory({
-      ...historyState,
-      projectData: { ...projectData, [pageIndex]: { ...projectData[pageIndex], scale: { isSet: true, pixelsPerUnit: ppu, unit } } }
+    setHistory(draft => {
+      if (!draft.projectData[pageIndex]) {
+          draft.projectData[pageIndex] = { scale: { isSet: false, pixelsPerUnit: 1, unit: Unit.FEET } };
+      }
+      draft.projectData[pageIndex].scale = { isSet: true, pixelsPerUnit: ppu, unit };
     });
     addToast("Scale calibrated", 'success');
   };
 
   const handleUpdateLegend = (updates: Partial<LegendSettings>) => {
-    const currentLegend = projectData[pageIndex]?.legend || { x: 50, y: 50, scale: 1, visible: true };
-    setHistoryTransient({
-      ...historyState,
-      projectData: { ...projectData, [pageIndex]: { ...projectData[pageIndex], legend: { ...currentLegend, ...updates } } }
+    setHistoryTransient(draft => {
+        if (!draft.projectData[pageIndex]) {
+             draft.projectData[pageIndex] = { scale: { isSet: false, pixelsPerUnit: 1, unit: Unit.FEET } };
+        }
+        const currentLegend = draft.projectData[pageIndex].legend || { x: 50, y: 50, scale: 1, visible: true };
+        draft.projectData[pageIndex].legend = { ...currentLegend, ...updates };
     });
   };
 
@@ -576,7 +613,12 @@ const App: React.FC = () => {
         scaleInfo={{ isSet: currentScale.isSet, unit: currentScale.unit, ppu: currentScale.pixelsPerUnit }}
         onToggleVisibility={(id) => handleUpdateItem(id, { visible: !items.find(i => i.id === id)?.visible })}
         onShowEstimates={() => { handleStopTakeoff(); setViewMode('estimates'); }}
-        onRenamePage={(i, n) => setHistory({ ...historyState, projectData: { ...projectData, [i]: { ...projectData[i], name: n } } })}
+        onRenamePage={(i, n) => setHistory(draft => {
+            if (!draft.projectData[i]) {
+                draft.projectData[i] = { scale: { isSet: false, pixelsPerUnit: 1, unit: Unit.FEET } };
+            }
+            draft.projectData[i].name = n;
+        })}
         onDeletePage={(i) => { setPageToDelete(i); setShowDeletePageConfirm(true); }}
         onEditItem={setEditingItem} onRenameItem={(id, n) => handleUpdateItem(id, { label: n })}
         onMoveShapesToItem={handleMoveShapesToItem}
@@ -587,7 +629,7 @@ const App: React.FC = () => {
       <main className="flex-1 relative flex flex-col h-full overflow-hidden">
         {viewMode === 'estimates' ? (
           <EstimatesView items={items} onBack={() => setViewMode('canvas')} onDeleteItem={handleDeleteItem} onUpdateItem={handleUpdateItem}
-            onReorderItems={(newItems) => setHistory({ ...historyState, items: newItems })} onEditItem={setEditingItem} />
+            onReorderItems={(newItems) => setHistory(draft => { draft.items = newItems; })} onEditItem={setEditingItem} />
         ) : (
           <>
             {planSets.length > 0 && (
