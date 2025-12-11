@@ -76,6 +76,7 @@ Deno.serve(async (req) => {
                 const { error, count } = await supabase
                     .from('licenses')
                     .update({
+                        license_key: licenseKey || `PAID-${crypto.randomUUID().toUpperCase().slice(0, 18)}`,
                         license_type: 'paid',
                         stripe_subscription_id: subscriptionId,
                         stripe_customer_id: customerId,
