@@ -14,12 +14,41 @@
     "http:default",
     "fs:default",
     "fs:allow-read-text-file",
-    "fs:allow-read-file",
+    {
+      "identifier": "fs:allow-read-file",
+      "allow": [
+        {
+          "path": "$APPLOCALDATA/protakeoff/pdf_store/*"
+        }
+      ]
+    },
     {
       "identifier": "fs:allow-write-file",
       "allow": [
         {
           "path": "$DOCUMENT/ProTakeoff/*"
+        },
+        {
+          "path": "$APPLOCALDATA/protakeoff/pdf_store/*"
+        }
+      ]
+    },
+    {
+      "identifier": "fs:allow-exists",
+      "allow": [
+        {
+          "path": "$APPLOCALDATA/protakeoff/pdf_store/*"
+        }
+      ]
+    },
+    {
+      "identifier": "fs:allow-mkdir",
+      "allow": [
+        {
+          "path": "$APPLOCALDATA/protakeoff/pdf_store"
+        },
+        {
+          "path": "$APPLOCALDATA/protakeoff"
         }
       ]
     },

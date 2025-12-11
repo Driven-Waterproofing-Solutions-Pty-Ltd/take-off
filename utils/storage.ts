@@ -1,12 +1,18 @@
-
 import JSZip from 'jszip';
 import Database from '@tauri-apps/plugin-sql';
+import { exists, writeFile, readFile, mkdir, remove, BaseDirectory } from '@tauri-apps/plugin-fs';
+// import { join } from '@tauri-apps/api/path'; // Not strictly needed if we use BaseDirectory and relative paths
 import { PlanSet, ProjectData, TakeoffItem, ItemTemplate } from '../types';
 
 // SQLite Table Structure:
 // meta: key (TEXT PRIMARY KEY), value (TEXT JSON)
-// files: id (TEXT PRIMARY KEY), name (TEXT), data (BLOB)
+// files: id (TEXT PRIMARY KEY), name (TEXT), data (BLOB) - data column is deprecated, used for legacy migration only
 // templates: id (TEXT PRIMARY KEY), data (TEXT JSON)
+
+// File System Structure:
+// $APPLOCALDATA/protakeoff/pdf_store/{id}.pdf
+
+const PDF_STORE_DIR = 'protakeoff/pdf_store';
 
 // --- Database Types ---
 interface MetaRow {
@@ -17,7 +23,7 @@ interface MetaRow {
 interface FileRow {
   id: string;
   name: string;
-  data: Uint8Array | number[]; // Tauri SQL might return number[] or Uint8Array depending on version
+  data: Uint8Array | number[] | null; // Nullable now
 }
 
 interface TemplateRow {
@@ -50,6 +56,25 @@ const getDB = async () => {
     `);
   }
   return dbInstance;
+};
+
+// Ensure storage directory exists
+const ensureStorageDir = async () => {
+  try {
+    const dirExists = await exists(PDF_STORE_DIR, { baseDir: BaseDirectory.AppLocalData });
+    if (!dirExists) {
+      await mkdir(PDF_STORE_DIR, { baseDir: BaseDirectory.AppLocalData, recursive: true });
+    }
+  } catch (e) {
+    console.error("Failed to ensure storage directory:", e);
+    // Try creating it anyway, error might be "not found"
+    try {
+      await mkdir(PDF_STORE_DIR, { baseDir: BaseDirectory.AppLocalData, recursive: true });
+    } catch (e2) {
+      console.error("Critical: Could not create storage directory", e2);
+      throw e2;
+    }
+  }
 };
 
 export interface ProjectState {
@@ -92,14 +117,23 @@ export const saveProjectData = async (
   await db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ($1, $2)", ['current_project', JSON.stringify(data)]);
 };
 
-// Save a specific file (blob) to SQLite
+// Save a specific file to File System and record in SQLite
 export const savePlanFile = async (id: string, file: File) => {
   const db = await getDB();
+  await ensureStorageDir();
+
   const buffer = await file.arrayBuffer();
-  // Tauri SQL plugin requires Uint8Array for BLOBs
+  const uint8Array = new Uint8Array(buffer);
+  const filePath = `${PDF_STORE_DIR}/${id}.pdf`;
+
+  // Write to filesystem
+  await writeFile(filePath, uint8Array, { baseDir: BaseDirectory.AppLocalData });
+
+  // Update DB record (without BLOB data)
+  // We explicitly set data to NULL to save space if it was previously populated
   await db.execute(
-    "INSERT OR REPLACE INTO files (id, name, data) VALUES ($1, $2, $3)",
-    [id, file.name, new Uint8Array(buffer)]
+    "INSERT OR REPLACE INTO files (id, name, data) VALUES ($1, $2, NULL)",
+    [id, file.name]
   );
 };
 
@@ -107,6 +141,25 @@ export const savePlanFile = async (id: string, file: File) => {
 export const clearProjectData = async () => {
   const db = await getDB();
   await db.execute("DELETE FROM meta WHERE key = 'current_project'");
+  
+  // Clean up files
+  try {
+    const files = await db.select("SELECT id FROM files") as FileRow[];
+    for (const row of files) {
+       const filePath = `${PDF_STORE_DIR}/${row.id}.pdf`;
+       try {
+         const fileExists = await exists(filePath, { baseDir: BaseDirectory.AppLocalData });
+         if (fileExists) {
+           await remove(filePath, { baseDir: BaseDirectory.AppLocalData });
+         }
+       } catch (e) {
+         console.warn(`Failed to delete file ${row.id}`, e);
+       }
+    }
+  } catch (e) {
+    console.error("Error cleaning up files:", e);
+  }
+
   await db.execute("DELETE FROM files");
 };
 
@@ -123,32 +176,66 @@ export const loadProjectFromStorage = async (): Promise<ProjectState | null> => 
 
     // Rehydrate PlanSets by fetching associated files
     if (data.planSetsMeta && Array.isArray(data.planSetsMeta)) {
+      await ensureStorageDir();
+
       for (const meta of data.planSetsMeta) {
         const fileResult = await db.select("SELECT name, data FROM files WHERE id = $1", [meta.id]) as FileRow[];
         
         if (fileResult.length > 0) {
           const fileRow = fileResult[0];
-          // Ensure data is in a format Blob can consume (Uint8Array)
-          // Explicitly cast to unknown then Uint8Array to handle potential type mismatches from the DB driver
-          // or construct a new Uint8Array from the data to ensure it's not a SharedArrayBuffer which Blob doesn't like
-          let fileData: Uint8Array;
-          
-          if (fileRow.data instanceof Uint8Array) {
-             // Create a copy to ensure standard ArrayBuffer, not SharedArrayBuffer if that's what's returned
-             // We explicitly access the buffer property and cast it if necessary, but creating a new Uint8Array from the elements is safest
-             fileData = new Uint8Array(Array.from(fileRow.data));
-          } else {
-             // If it's number[] or something else
-             fileData = new Uint8Array(fileRow.data as unknown as number[]);
+          let fileData: Uint8Array | null = null;
+          const filePath = `${PDF_STORE_DIR}/${meta.id}.pdf`;
+
+          // 1. Try reading from File System first
+          try {
+            const fileExists = await exists(filePath, { baseDir: BaseDirectory.AppLocalData });
+            if (fileExists) {
+              fileData = await readFile(filePath, { baseDir: BaseDirectory.AppLocalData });
+            }
+          } catch (e) {
+            console.warn(`Error reading file ${meta.id} from disk`, e);
           }
-          
-          const blob = new Blob([fileData as any], { type: 'application/pdf' });
-          const file = new File([blob], fileRow.name, { type: 'application/pdf' });
-          
-          planSets.push({
-            ...meta,
-            file
-          });
+
+          // 2. Migration Fallback: If not on disk, check DB BLOB
+          if (!fileData && fileRow.data) {
+             console.log(`Migrating file ${meta.id} from DB to FS`);
+             if (fileRow.data instanceof Uint8Array) {
+               fileData = new Uint8Array(Array.from(fileRow.data));
+             } else {
+               fileData = new Uint8Array(fileRow.data as unknown as number[]);
+             }
+             
+             // Save to disk for next time
+             try {
+                await writeFile(filePath, fileData, { baseDir: BaseDirectory.AppLocalData });
+                // Optional: Clear data from DB to free space immediately? 
+                // Let's safe-keep it until next save, or just update now.
+                // await db.execute("UPDATE files SET data = NULL WHERE id = $1", [meta.id]);
+             } catch (e) {
+                console.error("Failed to migrate file to disk", e);
+             }
+          }
+
+          if (fileData) {
+            const blob = new Blob([fileData as any], { type: 'application/pdf' });
+            const file = new File([blob], fileRow.name, { type: 'application/pdf' });
+            
+            planSets.push({
+              ...meta,
+              file
+            });
+          } else {
+            console.error(`File data missing for plan ${meta.id}`);
+            // Push placeholder or skip? Skipping might break index alignment if not careful, 
+            // but planSetsMeta usually has enough info.
+            // If we skip, the UI might crash if it expects a file.
+            // Let's creating a dummy file to prevent crash, but user will see empty/error
+            const dummyBlob = new Blob([], { type: 'application/pdf' });
+            planSets.push({
+               ...meta,
+               file: new File([dummyBlob], fileRow.name || "Missing File.pdf", { type: 'application/pdf' })
+            });
+          }
         }
       }
     }
@@ -180,10 +267,6 @@ export const getLicenseKey = async (): Promise<string | null> => {
 }
 
 // --- File Handle Persistence (Stubbed for SQLite version) ---
-// File handles are platform-specific and not persisted in SQLite.
-// We use a specific type if needed, but for now `unknown` or a specific interface is safer than `any`.
-// However, since this is a stub and unused in this implementation:
-
 export const saveFileHandle = async (_handle: unknown): Promise<void> => {
   // Not implemented for SQLite persistence model
   return;
@@ -229,6 +312,7 @@ export const exportProjectToZip = async (
   const assets = zip.folder('assets');
   if (assets) {
     for (const plan of planSets) {
+      // plan.file is a File object, JSZip handles it directly
       assets.file(`${plan.id}.pdf`, plan.file);
     }
   }
