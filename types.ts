@@ -82,7 +82,7 @@ export interface Shape {
 
 export interface ItemProperty {
   name: string;
-  value: number;
+  value: number | string;
 }
 
 export interface SubItem {

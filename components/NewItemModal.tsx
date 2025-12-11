@@ -27,9 +27,12 @@ const NewItemModal: React.FC<NewItemModalProps> = ({ toolType, existingCount, on
     };
 
     return (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/50 z-[100]" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="bg-white rounded-2xl shadow-2xl w-[450px] overflow-hidden flex flex-col max-h-[80vh] animate-in zoom-in-95 duration-200">
-                <div className="flex border-b border-slate-100">
+        <div className="fixed inset-0 flex items-center justify-center bg-black/50 z-[100]" onMouseDown={onCancel}>
+            <div
+                className={`bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200 transition-all ${activeTab === 'template' ? 'w-[1000px]' : 'w-[450px]'}`}
+                onMouseDown={(e) => e.stopPropagation()}
+            >
+                <div className="flex border-b border-slate-100 shrink-0">
                     <button
                         className={`flex-1 py-3 px-4 text-sm font-medium flex items-center justify-center gap-2 border-b-2 transition-all ${activeTab === 'basic' ? 'border-slate-900 text-slate-900 bg-slate-50/50' : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50/30'}`}
                         onClick={() => setActiveTab('basic')}
@@ -82,12 +85,12 @@ const NewItemModal: React.FC<NewItemModalProps> = ({ toolType, existingCount, on
                             </div>
                         </form>
                     ) : (
-                        <div className="h-96 flex flex-col">
-                            <div className="px-5 pt-4 pb-3">
+                        <div className="h-[700px] flex flex-col bg-slate-50">
+                            <div className="px-5 pt-4 pb-3 bg-white border-b border-slate-200 shrink-0">
                                 <h3 className="font-semibold text-lg text-slate-900">Select Template</h3>
                                 <p className="text-xs text-slate-500 mt-0.5">Showing templates compatible with {toolType} tool.</p>
                             </div>
-                            <div className="flex-1 overflow-hidden px-2">
+                            <div className="flex-1 overflow-hidden bg-slate-100">
                                 <TemplateManager
                                     mode="select"
                                     filterToolType={toolType}
@@ -106,7 +109,7 @@ const NewItemModal: React.FC<NewItemModalProps> = ({ toolType, existingCount, on
                                     }}
                                 />
                             </div>
-                            <div className="px-5 py-3 border-t border-slate-100 flex justify-end">
+                            <div className="px-5 py-3 bg-white border-t border-slate-200 flex justify-end shrink-0">
                                 <button type="button" onClick={onCancel} className="text-slate-600 px-4 py-1.5 text-sm font-medium hover:bg-slate-100 rounded-lg transition-colors">Cancel</button>
                             </div>
                         </div>

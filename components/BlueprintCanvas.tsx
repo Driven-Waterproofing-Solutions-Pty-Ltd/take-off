@@ -1033,8 +1033,9 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     };
 
     const handleStageClick = (e: Konva.KonvaEventObject<MouseEvent>) => {
-        // Only trigger clicks on the stage background, not on shapes
-        if (e.target !== e.target.getStage()) {
+        // In Select mode, only trigger clicks on the stage background (to deselect)
+        // In other modes (Area, Linear, etc.), allow clicking anywhere including on existing shapes
+        if (activeTool === ToolType.SELECT && e.target !== e.target.getStage()) {
             return;
         }
         const mouseEvent = e.evt;
@@ -1049,7 +1050,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         if (justCompletedRectSelection.current) return;
 
         if (activeTool === ToolType.SELECT) {
-            if (!isRectSelecting && !selectionRect?.active) {
+            if (!isRectSelecting) {
                 if (selectedItems.length > 0) {
                     setSelectedItems([]);
                 }
@@ -1321,7 +1322,8 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             id: crypto.randomUUID(),
             pageIndex: globalPageIndex,
             points: [...points],
-            value
+            value,
+            deduction: isDeductionMode
         });
         setDrawingPoints([]);
         setTempPoint(null);
@@ -1431,6 +1433,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             <div
                 ref={viewportRef}
                 className={`w-full h-full relative overflow-hidden select-none ${isDragging || draggedShapes.length > 0 ? 'cursor-grabbing' : (activeTool === ToolType.SELECT ? 'cursor-default' : 'cursor-crosshair')}`}
+                style={{ cursor: activeTool !== ToolType.SELECT ? 'crosshair' : undefined }}
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
@@ -1487,9 +1490,9 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                     const isFocused = focusedShapeIds.has(shape.id);
                                     const isDimmed = focusedShapeIds.size > 0 && !isFocused;
                                     
-                                    const opacity = isDimmed ? 0.2 : (item.type === ToolType.AREA ? 0.4 : 1);
+                                    const opacity = item.type === ToolType.AREA ? 0.4 : 1;
                                     const strokeColor = isSelected ? '#3b82f6' : item.color;
-                                    const strokeWidth = (isSelected ? 3 : 2) * visualScaleFactor;
+                                    const strokeWidth = (isSelected ? 4.5 : 3) * visualScaleFactor;
                                     
                                     return (
                                         <Group
@@ -1546,15 +1549,37 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                             }}
                                         >
                                             {item.type === ToolType.AREA && (
-                                                <KonvaLine
-                                                    points={shape.points.flatMap(p => [p.x, p.y])}
-                                                    closed={true}
-                                                    fill={item.color}
-                                                    opacity={opacity}
-                                                    stroke={strokeColor}
-                                                    strokeWidth={strokeWidth}
-                                                    dash={shape.deduction ? [5 * visualScaleFactor, 5 * visualScaleFactor] : undefined}
-                                                />
+                                                <>
+                                                    {shape.deduction ? (
+                                                        <>
+                                                            <KonvaLine
+                                                                points={shape.points.flatMap(p => [p.x, p.y])}
+                                                                closed={true}
+                                                                fill="black"
+                                                                globalCompositeOperation="destination-out"
+                                                                opacity={1}
+                                                            />
+                                                            <KonvaLine
+                                                                points={shape.points.flatMap(p => [p.x, p.y])}
+                                                                closed={true}
+                                                                stroke={strokeColor}
+                                                                strokeWidth={strokeWidth}
+                                                                dash={[5 * visualScaleFactor, 5 * visualScaleFactor]}
+                                                                opacity={1}
+                                                                listening={false}
+                                                            />
+                                                        </>
+                                                    ) : (
+                                                        <KonvaLine
+                                                            points={shape.points.flatMap(p => [p.x, p.y])}
+                                                            closed={true}
+                                                            fill={item.color}
+                                                            opacity={opacity}
+                                                            stroke={strokeColor}
+                                                            strokeWidth={strokeWidth}
+                                                        />
+                                                    )}
+                                                </>
                                             )}
                                             {(item.type === ToolType.LINEAR || item.type === ToolType.SEGMENT || item.type === ToolType.DIMENSION) && (
                                                 <KonvaLine
@@ -1650,7 +1675,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                     <KonvaLine
                                         points={[...drawingPoints, tempPoint || drawingPoints[drawingPoints.length - 1]].flatMap(p => [p.x, p.y])}
                                         stroke={items.find(i => i.id === activeTakeoffId)?.color || 'red'}
-                                        strokeWidth={2 * visualScaleFactor}
+                                        strokeWidth={3 * visualScaleFactor}
                                         dash={[5 * visualScaleFactor, 5 * visualScaleFactor]}
                                         closed={activeTool === ToolType.AREA && drawingPoints.length >= 2}
                                     />
