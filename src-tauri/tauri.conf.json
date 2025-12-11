@@ -1,7 +1,12 @@
 {
   "productName": "ProTakeoff",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "identifier": "com.protakeoff.app",
+  "publisher": "Protakeoff LLC",
+  "authors": ["Protakeoff LLC"],
+  "copyright": "Copyright © 2025 Protakeoff LLC. All rights reserved.",
+  "description": "Professional takeoff estimating software for construction projects",
+  "website": "https://protakeoff.org",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
