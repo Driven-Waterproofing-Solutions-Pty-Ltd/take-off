@@ -52,13 +52,62 @@ export const useProjectManager = (isLicensed: boolean) => {
   const [showImportConfirm, setShowImportConfirm] = useState(false);
   const [showNewProjectPrompt, setShowNewProjectPrompt] = useState(false);
 
-  // Load project from storage on initial load
+  // Load project from file logic
+  const loadFromFile = useCallback(async (path: string) => {
+    // Read and parse first to ensure validity before clearing existing data
+    const data = await invoke<number[]>('read_file_binary', { path });
+    const importData = new Uint8Array(data);
+    const state = await importProjectFromZip(importData);
+
+    // Now it's safe to clear and save
+    await clearProjectData();
+
+    const filename = path.split(/[\\/]/).pop() || "Project";
+    const name = filename.replace(/\.[^/.]+$/, "");
+    const finalName = state.projectName || name;
+
+    await saveProjectData(state.items, state.projectData, state.planSets, state.totalPages, finalName);
+    for (const plan of state.planSets) {
+      await savePlanFile(plan.id, plan.file);
+    }
+
+    return { ...state, projectName: finalName };
+  }, []);
+
+  // Load project from storage or file on initial load
   useEffect(() => {
     if (!isLicensed) return;
 
     const init = async () => {
       try {
-        const state = await loadProjectFromStorage();
+        let state = null;
+        let loadedFilePath: string | null = null;
+        let loadSource: 'file' | 'storage' = 'storage';
+
+        // 1. Try to load from arguments
+        try {
+          const args = await invoke<string[]>('get_startup_args');
+          console.log("Startup args:", args);
+          
+          // Find first argument that looks like a .takeoff file
+          const fileArg = args.find(arg => arg.toLowerCase().endsWith('.takeoff'));
+          
+          if (fileArg) {
+            console.log("Attempting to load from argument:", fileArg);
+            state = await loadFromFile(fileArg);
+            loadedFilePath = fileArg;
+            loadSource = 'file';
+          }
+        } catch (argError) {
+          console.error("Error checking startup args:", argError);
+        }
+
+        // 2. Fallback to storage if no file loaded
+        if (!state) {
+          state = await loadProjectFromStorage();
+          loadSource = 'storage';
+        }
+
         if (state) {
           const patchedItems = state.items.map(item => {
             if (item.type === ToolType.AREA) {
@@ -77,20 +126,22 @@ export const useProjectManager = (isLicensed: boolean) => {
             totalPages: state.totalPages
           });
 
-          if (state.projectName) setProjectName(state.projectName);
+          const nameToUse = state.projectName || (loadedFilePath ? loadedFilePath.split(/[\\/]/).pop()?.replace(/\.[^/.]+$/, "") : "Untitled Project");
+          setProjectName(nameToUse || "Untitled Project");
+          if (loadedFilePath) setCurrentFilePath(loadedFilePath);
 
           setLastSavedAt(new Date());
-          addToast("Project loaded successfully", 'success');
+          addToast(loadSource === 'file' ? "Project opened from file" : "Project loaded successfully", 'success');
         }
       } catch (e) {
         console.error("Failed to load project", e);
-        addToast("Failed to load existing project", 'error');
+        addToast("Failed to load project", 'error');
       } finally {
         setIsInitializing(false);
       }
     };
     init();
-  }, [isLicensed]);
+  }, [isLicensed, loadFromFile]);
 
   // Autosave
   useEffect(() => {
@@ -181,25 +232,13 @@ export const useProjectManager = (isLicensed: boolean) => {
     setIsInitializing(true);
     setLoadingMessage("Importing Project...");
     try {
-      await clearProjectData();
-
-      const data = await invoke<number[]>('read_file_binary', { path: pendingImportPath });
-      const importData = new Uint8Array(data);
-
-      const filename = pendingImportPath.split(/[\\/]/).pop() || "Project";
-      const name = filename.replace(/\.[^/.]+$/, "");
+      const state = await loadFromFile(pendingImportPath);
+      
       setCurrentFilePath(pendingImportPath);
-
-      const state = await importProjectFromZip(importData);
+      
       clearHistory({ items: state.items, projectData: state.projectData, planSets: state.planSets, totalPages: state.totalPages });
-
-      const finalName = state.projectName || name;
-      setProjectName(finalName);
-
-      await saveProjectData(state.items, state.projectData, state.planSets, state.totalPages, finalName);
-      for (const plan of state.planSets) {
-        await savePlanFile(plan.id, plan.file);
-      }
+      
+      setProjectName(state.projectName);
       setLastSavedAt(new Date());
       addToast("Project imported successfully", 'success');
     } catch (err) {

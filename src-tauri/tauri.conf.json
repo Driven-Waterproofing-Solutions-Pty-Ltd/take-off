@@ -32,7 +32,7 @@
         "ext": [
           "takeoff"
         ],
-        "name": "Takeoff Project",
+        "name": "ProTakeoff Project",
         "description": "ProTakeoff Project File",
         "role": "Editor",
         "mimeType": "application/x-protakeoff"
