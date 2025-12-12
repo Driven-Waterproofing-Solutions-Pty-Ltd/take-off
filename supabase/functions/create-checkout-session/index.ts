@@ -25,17 +25,7 @@ Deno.serve(async (req) => {
             payment_method_types: ['card'],
             line_items: [
                 {
-                    price_data: {
-                        currency: 'usd',
-                        product_data: {
-                            name: 'ProTakeoff Monthly Subscription',
-                            description: 'Renew your ProTakeoff license for 1 month.',
-                        },
-                        unit_amount: 2999,
-                        recurring: {
-                            interval: 'month',
-                        },
-                    },
+                    price: 'price_1SdXf8DFznUtiVVQA5mBpqRi',
                     quantity: 1,
                 },
             ],

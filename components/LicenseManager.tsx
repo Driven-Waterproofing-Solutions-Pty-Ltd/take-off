@@ -292,7 +292,7 @@ const LicenseManager: React.FC<LicenseManagerProps> = ({ onSuccess, initialMessa
                         <h3 className="font-semibold text-slate-900">Upgrade to Paid License</h3>
                     </div>
                     <p className="text-sm text-slate-600 mb-3">
-                        Get lifetime access and unlock premium templates from our library.
+                        Subscribe for full access and unlock premium templates from our library, for $23.49/mo.
                     </p>
                     <button
                         onClick={handleSubscribe}
@@ -300,7 +300,7 @@ const LicenseManager: React.FC<LicenseManagerProps> = ({ onSuccess, initialMessa
                         className="w-full text-center bg-gradient-to-r from-blue-600 to-purple-600 text-white py-2 rounded-lg font-semibold hover:from-blue-700 hover:to-purple-700 transition-all shadow-md flex justify-center items-center gap-2"
                     >
                         {isSubscribing ? <Loader2 size={18} className="animate-spin" /> : <CreditCard size={18} />}
-                        Subscribe Now ($29.99/mo)
+                        Subscribe Now
                     </button>
                 </div>
             )}
