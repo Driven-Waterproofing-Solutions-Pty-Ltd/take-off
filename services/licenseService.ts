@@ -66,51 +66,96 @@ export const licenseService = {
         }
     },
 
-    async checkLicense(): Promise<LicenseStatus> {
+    async clearStoredData() {
+        console.log("Clearing license_key and license_token...");
+        await store.delete('license_key');
+        await store.delete('license_token');
+        await store.save();
+
+        // Verify deletion
+        const key = await store.get('license_key');
+        const token = await store.get('license_token');
+        if (key || token) {
+            console.error("Failed to clear data:", { key, token });
+            throw new Error("Failed to clear license data from storage.");
+        }
+        console.log("License data cleared successfully.");
+    },
+
+    async checkLicense(forceOnline = false): Promise<LicenseStatus> {
         try {
             const machineId = await this.getMachineId();
 
             // 1. Try to load and verify local signed token first (OFFLINE CAPABLE)
-            const localToken = await this.getStoredToken();
-            if (localToken) {
-                const payload = await this.verifyTokenSignature(localToken);
-                if (payload) {
-                    // Check if machine ID matches (prevent copying file to another PC)
-                    if (payload.machineId === machineId) {
-                        // Check expiration (although jwtVerify does this, we double check for UI logic)
-                        const expiry = new Date((payload.exp as number) * 1000);
-                        if (expiry > new Date()) {
-                            console.log("Valid local signed token found.");
-                            return {
-                                valid: true,
-                                message: 'License verified (Offline)',
-                                expiresAt: expiry.toISOString(),
-                                licenseKey: payload.licenseKey as string,
-                                licenseType: payload.licenseType as 'trial' | 'paid',
-                            };
+            // If forced, skip this and go straight to online check
+            if (!forceOnline) {
+                const localToken = await this.getStoredToken();
+                if (localToken) {
+                    const payload = await this.verifyTokenSignature(localToken);
+                    if (payload) {
+                        // Check if machine ID matches (prevent copying file to another PC)
+                        if (payload.machineId === machineId) {
+                            // USE THE REAL LICENSE EXPIRY, NOT THE TOKEN EXPIRY (exp)
+                            let realExpiryIso = undefined;
+
+                            if (payload.expiresAt) {
+                                realExpiryIso = String(payload.expiresAt);
+                            } else if (payload.expiresAt === null) {
+                                // Lifetime license
+                                realExpiryIso = undefined;
+                            } else {
+                                // Fallback to token expiry if specific field missing (legacy tokens?)
+                                const tokenExp = new Date((payload.exp as number) * 1000);
+                                realExpiryIso = tokenExp.toISOString();
+                            }
+
+                            // Token validity check (security)
+                            const tokenExpiry = new Date((payload.exp as number) * 1000);
+
+                            if (tokenExpiry > new Date()) {
+                                console.log("Valid local signed token found.");
+                                return {
+                                    valid: true,
+                                    message: 'License verified (Offline)',
+                                    expiresAt: realExpiryIso, // Passing null/undefined for lifetime, or the correct date
+                                    licenseKey: payload.licenseKey as string,
+                                    licenseType: payload.licenseType as 'trial' | 'paid',
+                                };
+                            } else {
+                                console.log("Local token expired.");
+                            }
                         } else {
-                            console.log("Local token expired.");
+                            console.log("Local token machine ID mismatch.");
                         }
-                    } else {
-                        console.log("Local token machine ID mismatch.");
                     }
                 }
             }
 
-            // 2. If no valid local token, check ONLINE
+            // 2. If no valid local token (or forced online), check ONLINE
             console.log("Checking license online...");
-
-            // We need to look up the key to check. 
-            // If they had a token before, we can extract the key from it (unsafe) or just ask the user.
-            // But usually we store the raw key too for convenience.
             const storedKey = await store.get<string>('license_key');
 
             if (storedKey) {
-                return await this.activateKey(storedKey);
+                const activationResult = await this.activateKey(storedKey);
+
+                if (activationResult.valid) {
+                    return activationResult;
+                }
+
+                // If invalid and NOT a network/connection error, clear it and try trial
+                const isNetworkError = activationResult.message.toLowerCase().includes('connection') ||
+                    activationResult.message.toLowerCase().includes('network');
+
+                if (!isNetworkError) {
+                    console.warn("Stored license key is invalid (server rejected). Clearing stored data and attempting trial...");
+                    await this.clearStoredData();
+                    // Fall through to trial logic
+                } else {
+                    return activationResult; // Return the network error
+                }
             }
 
-            // 3. Fallback: No key, no token. Check if we can start/resume a trial?
-            // Existing logic for trial...
+            // 3. Fallback: No key, no token (or just cleared). Check if we can start/resume a trial?
             return await this.startTrial(machineId);
 
         } catch (err) {
@@ -134,7 +179,7 @@ export const licenseService = {
             });
 
             if (error) {
-                // ... error handling
+                console.error("create_trial_license RPC error:", error);
                 return { valid: false, message: 'Failed to start trial.' };
             }
             if (data.success) {
@@ -151,14 +196,29 @@ export const licenseService = {
     async activateKey(key: string): Promise<LicenseStatus> {
         const machineId = await this.getMachineId();
 
-        console.log("Verifying key online via Edge Function: verify-license");
+        const payload = { licenseKey: key, machineId };
+        console.log("Verifying key online via Edge Function: verify-license", payload);
 
         const { data, error } = await supabase.functions.invoke('verify-license', {
-            body: { licenseKey: key, machineId }
+            body: payload
         });
 
         if (error) {
-            console.error("Edge function error:", error);
+            console.error("Edge function error details:", error);
+            // Try to extract more info if available
+            if (error instanceof Error) {
+                console.error("Error message:", error.message);
+            }
+            // @ts-ignore - Supabase error types might have context
+            if (error.context && typeof error.context.json === 'function') {
+                try {
+                    const errorBody = await error.context.json();
+                    console.error("Edge function error body:", errorBody);
+                    return { valid: false, message: "Server Error: " + (errorBody.error || error.message) };
+                } catch (e) {
+                    console.error("Failed to parse error context");
+                }
+            }
             return { valid: false, message: "Connection error verifying license." };
         }
 
@@ -179,6 +239,7 @@ export const licenseService = {
                 message: data.message,
                 expiresAt: data.expiresAt,
                 licenseType: data.licenseType,
+                licenseKey: key,
             };
         }
 

@@ -8,9 +8,10 @@ interface LicenseManagerProps {
     onSuccess?: () => void;
     initialMessage?: string | null;
     currentLicenseStatus?: LicenseStatus | null;
+    forceRefreshOnMount?: boolean;
 }
 
-const LicenseManager: React.FC<LicenseManagerProps> = ({ onSuccess, initialMessage, currentLicenseStatus }) => {
+const LicenseManager: React.FC<LicenseManagerProps> = ({ onSuccess, initialMessage, currentLicenseStatus, forceRefreshOnMount = false }) => {
     const [key, setKey] = useState('');
     const [showManualInput, setShowManualInput] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
@@ -24,9 +25,9 @@ const LicenseManager: React.FC<LicenseManagerProps> = ({ onSuccess, initialMessa
             setLicenseStatus(currentLicenseStatus);
         } else {
             // Initial fetch if not provided
-            licenseService.checkLicense().then(setLicenseStatus).catch(console.error);
+            licenseService.checkLicense(forceRefreshOnMount).then(setLicenseStatus).catch(console.error);
         }
-    }, [currentLicenseStatus]);
+    }, [currentLicenseStatus, forceRefreshOnMount]);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -67,15 +68,16 @@ const LicenseManager: React.FC<LicenseManagerProps> = ({ onSuccess, initialMessa
                 const pollInterval = setInterval(async () => {
                     attempts++;
                     try {
-                        const res = await licenseService.checkLicense();
+                        // Force online check to bypass local token cache
+                        const res = await licenseService.checkLicense(true);
                         if (res.valid && res.licenseType === 'paid') {
                             clearInterval(pollInterval);
                             setLicenseStatus(res);
+                            setIsSubscribing(false);
                             if (onSuccess) onSuccess();
-                            alert("Subscription confirmed! Thank you.");
                         }
                     } catch (e) {
-                        // ignore errors
+                        console.error("Poll error", e);
                     }
 
                     if (attempts > 150) { // 5 minutes
@@ -95,6 +97,32 @@ const LicenseManager: React.FC<LicenseManagerProps> = ({ onSuccess, initialMessa
             setError(msg);
             alert(`Subscription Error: ${msg}`);
             setIsSubscribing(false);
+        }
+    };
+
+    const handleReset = async () => {
+        if (confirm("This will clear your local license key and restart the app trial check. Are you sure?")) {
+            try {
+                console.log("Attempting to clear stored license data...");
+                setIsLoading(true);
+                await licenseService.clearStoredData();
+                console.log("Data cleared. Re-checking license...");
+
+                // Soft reset: Check license again instead of reloading
+                const newStatus = await licenseService.checkLicense();
+                setLicenseStatus(newStatus);
+                setError(newStatus.valid ? null : newStatus.message || "License reset, but still invalid.");
+
+                if (newStatus.valid) {
+                    onSuccess();
+                }
+
+            } catch (error: any) {
+                console.error("Failed to reset license data:", error);
+                alert("Failed to reset license data: " + (error.message || error));
+            } finally {
+                setIsLoading(false);
+            }
         }
     };
 
@@ -222,14 +250,23 @@ const LicenseManager: React.FC<LicenseManagerProps> = ({ onSuccess, initialMessa
                                 disabled={isLoading}
                             />
                         </div>
+                        {/* Error or Message */}
+                        {error && (
+                            <div className="flex flex-col gap-2">
+                                <div className="bg-red-50 text-red-600 p-3 rounded-lg flex items-center gap-2 text-sm border border-red-100">
+                                    <AlertCircle size={16} />
+                                    {error}
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={handleReset}
+                                    className="text-xs text-gray-500 hover:text-gray-700 underline self-start"
+                                >
+                                    Reset stored license data
+                                </button>
+                            </div>
+                        )}
                     </div>
-
-                    {error && (
-                        <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 p-3 rounded-lg border border-red-100">
-                            <AlertCircle size={16} />
-                            <span>{error}</span>
-                        </div>
-                    )}
 
                     <button
                         type="submit"

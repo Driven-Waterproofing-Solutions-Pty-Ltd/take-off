@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { TakeoffItem, ToolType, ProjectData, PlanSet } from '../types';
-import { Trash2, Upload, ChevronDown, ChevronRight, FilePlus, FolderOpen, Save, RefreshCw, Settings, Edit2, Table, Eye, EyeOff, FileDown, MoreHorizontal, Plus, HelpCircle } from 'lucide-react';
+import { Trash2, Upload, ChevronDown, ChevronRight, FilePlus, FolderOpen, Save, RefreshCw, Settings, Edit2, Table, Eye, EyeOff, FileDown, MoreHorizontal, Plus, HelpCircle, ShieldCheck } from 'lucide-react';
 import { evaluateFormula } from '../utils/math';
 import Logo from './Logo';
 import ChangeItemModal from './ChangeItemModal';
@@ -39,6 +39,7 @@ interface SidebarProps {
     activeTool: ToolType;
     onOpenExportModal: () => void;
     onOpenHelp: () => void;
+    onOpenLicense: () => void;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({
@@ -70,6 +71,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     activeTool,
     onOpenExportModal,
     onOpenHelp,
+    onOpenLicense,
 }) => {
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
     const [expandedPages, setExpandedPages] = useState<Set<number>>(new Set());
@@ -261,7 +263,10 @@ const Sidebar: React.FC<SidebarProps> = ({
                         <Save size={16} />
                     </button>
                     <div className="w-px h-4 bg-slate-200 mx-1"></div>
-                    <button onClick={onOpenHelp} className="p-1.5 text-blue-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors" title="Help & Shortcuts">
+                    <button onClick={onOpenLicense} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors" title="License Manager">
+                        <ShieldCheck size={16} />
+                    </button>
+                    <button onClick={onOpenHelp} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors" title="Help & Shortcuts">
                         <HelpCircle size={16} />
                     </button>
                 </div>

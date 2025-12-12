@@ -107,6 +107,32 @@ const LicenseModal: React.FC<LicenseModalProps> = ({ onSuccess, initialMessage, 
         }
     };
 
+    const handleReset = async () => {
+        if (confirm("This will clear your local license key and restart the app trial check. Are you sure?")) {
+            try {
+                console.log("Attempting to clear stored license data...");
+                setIsLoading(true);
+                await licenseService.clearStoredData();
+                console.log("Data cleared. Re-checking license...");
+
+                // Soft reset: Check license again instead of reloading
+                const newStatus = await licenseService.checkLicense();
+                setLicenseStatus(newStatus);
+                setError(newStatus.valid ? null : newStatus.message || "License reset, but still invalid.");
+
+                if (newStatus.valid) {
+                    onSuccess();
+                }
+
+            } catch (error: any) {
+                console.error("Failed to reset license data:", error);
+                alert("Failed to reset license data: " + (error.message || error));
+            } finally {
+                setIsLoading(false);
+            }
+        }
+    };
+
     // Calculate days until expiration
     const getDaysUntilExpiration = () => {
         if (!licenseStatus?.expiresAt) return null;
@@ -200,9 +226,18 @@ const LicenseModal: React.FC<LicenseModalProps> = ({ onSuccess, initialMessage, 
                     </div>
 
                     {error && (
-                        <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 p-3 rounded-lg border border-red-100">
-                            <AlertCircle size={16} />
-                            <span>{error}</span>
+                        <div className="flex flex-col gap-2">
+                            <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 p-3 rounded-lg border border-red-100">
+                                <AlertCircle size={16} />
+                                <span>{error}</span>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={handleReset}
+                                className="text-xs text-gray-500 hover:text-gray-700 underline self-start"
+                            >
+                                Reset stored license data
+                            </button>
                         </div>
                     )}
 

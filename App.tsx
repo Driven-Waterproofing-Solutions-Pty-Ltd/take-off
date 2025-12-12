@@ -9,10 +9,11 @@ import HelpModal from './components/HelpModal';
 import NewItemModal from './components/NewItemModal';
 import UploadModal from './components/UploadModal';
 import PropertiesModal from './components/PropertiesModal';
-import EstimatesView from './components/EstimatesView';
-import ConfirmModal from './components/ConfirmModal';
+import LicenseSettingsModal from './components/LicenseSettingsModal';
 import PromptModal from './components/PromptModal';
 import ExportModal from './components/ExportModal';
+import ConfirmModal from './components/ConfirmModal';
+import EstimatesView from './components/EstimatesView';
 import { ToolType, ProjectData, TakeoffItem, Shape, Unit, PlanSet, LegendSettings } from './types';
 import { PresetScale, getAreaUnitFromLinear } from './utils/geometry';
 import { useToast } from './contexts/ToastContext';
@@ -73,7 +74,8 @@ const App: React.FC = () => {
   const [showNewItemModal, setShowNewItemModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
-  const [helpModalTab, setHelpModalTab] = useState<'guide' | 'shortcuts' | 'properties' | 'license'>('guide');
+  const [showLicenseModal, setShowLicenseModal] = useState(false);
+  const [helpModalTab, setHelpModalTab] = useState<'guide' | 'shortcuts' | 'properties'>('guide');
   const [editingItem, setEditingItem] = useState<TakeoffItem | null>(null);
   const [pendingTool, setPendingTool] = useState<ToolType | null>(null);
 
@@ -564,8 +566,8 @@ const App: React.FC = () => {
     }));
 
     unlisteners.push(listen('open_activation', () => {
-      setHelpModalTab('license');
-      setShowHelpModal(true);
+      // Changed to open standalone license modal
+      setShowLicenseModal(true);
     }));
 
     unlisteners.push(listen('new_project', handleNewProjectRequest));
@@ -666,6 +668,7 @@ const App: React.FC = () => {
         projectName={projectName} onNewProject={handleNewProjectRequest} onSaveProject={handleSaveProject} onLoadProject={handleLoadProjectClick}
         isSaving={isSaving} lastSavedAt={lastSavedAt} activeTool={activeTool} onOpenExportModal={() => setShowExportModal(true)}
         onOpenHelp={() => setShowHelpModal(true)}
+        onOpenLicense={() => setShowLicenseModal(true)}
       />
       <main className="flex-1 relative flex flex-col h-full overflow-hidden">
         {viewMode === 'estimates' ? (
@@ -698,6 +701,7 @@ const App: React.FC = () => {
       {showNewItemModal && pendingTool && <NewItemModal toolType={pendingTool} existingCount={items.length} onCreate={handleCreateTakeoffItem} onCancel={() => { setShowNewItemModal(false); setPendingTool(null); }} />}
       {editingItem && <PropertiesModal item={editingItem} items={items} onSave={handleUpdateItem} onClose={() => setEditingItem(null)} />}
       <HelpModal isOpen={showHelpModal} onClose={() => setShowHelpModal(false)} initialTab={helpModalTab} />
+      <LicenseSettingsModal isOpen={showLicenseModal} onClose={() => setShowLicenseModal(false)} />
       <ExportModal isOpen={showExportModal} planSets={planSets} projectData={projectData} currentPageIndex={pageIndex} isExporting={isExporting} progress={exportProgress} onClose={() => setShowExportModal(false)} onExport={handleExportPDF} />
       <PromptModal isOpen={showNewProjectPrompt} title="Create New Project" message="Enter a name for the new project." placeholder="My Project" onConfirm={(name) => handleNewProjectConfirmed(name).then(() => setViewMode('canvas'))} onCancel={() => setShowNewProjectPrompt(false)} confirmText="Create Project" />
       <ConfirmModal isOpen={showImportConfirm} title="Import Project?" message="Loading a project will replace the current workspace." onConfirm={() => handleImportConfirmed().then(() => setViewMode('canvas'))} onCancel={() => { setShowImportConfirm(false); setPendingImportPath(null); }} confirmText="Import Project" isDestructive />

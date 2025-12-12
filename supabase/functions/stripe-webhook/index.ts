@@ -55,7 +55,7 @@ Deno.serve(async (req) => {
                         stripe_subscription_id: subscriptionId,
                         stripe_customer_id: customerId,
                         subscription_status: 'active',
-                        expires_at: new Date(Date.now() + 32 * 24 * 60 * 60 * 1000).toISOString(),
+                        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
                         is_active: true
                     })
                     .eq('license_key', licenseKey)
@@ -81,7 +81,7 @@ Deno.serve(async (req) => {
                         stripe_subscription_id: subscriptionId,
                         stripe_customer_id: customerId,
                         subscription_status: 'active',
-                        expires_at: new Date(Date.now() + 32 * 24 * 60 * 60 * 1000).toISOString(),
+                        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
                         is_active: true,
                     })
                     .eq('machine_id', machineId)
@@ -112,7 +112,7 @@ Deno.serve(async (req) => {
                         stripe_subscription_id: subscriptionId,
                         stripe_customer_id: customerId,
                         subscription_status: 'active',
-                        expires_at: new Date(Date.now() + 32 * 24 * 60 * 60 * 1000).toISOString(),
+                        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
                         is_active: true
                     }, { onConflict: 'license_key' })
                     .select()
@@ -135,7 +135,7 @@ Deno.serve(async (req) => {
                 const { error, count } = await supabase
                     .from('licenses')
                     .update({
-                        expires_at: new Date(Date.now() + 32 * 24 * 60 * 60 * 1000).toISOString(),
+                        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
                         subscription_status: 'active',
                         license_type: 'paid',
                         is_active: true
@@ -161,7 +161,7 @@ Deno.serve(async (req) => {
                                     stripe_customer_id: invoice.customer,
                                     license_type: 'paid',
                                     subscription_status: 'active',
-                                    expires_at: new Date(Date.now() + 32 * 24 * 60 * 60 * 1000).toISOString(),
+                                    expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
                                     is_active: true
                                 }).eq('license_key', license_key).select('count', { count: 'exact' })
 
@@ -177,7 +177,7 @@ Deno.serve(async (req) => {
                                     stripe_customer_id: invoice.customer,
                                     license_type: 'paid',
                                     subscription_status: 'active',
-                                    expires_at: new Date(Date.now() + 32 * 24 * 60 * 60 * 1000).toISOString(),
+                                    expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
                                     is_active: true
                                 }).eq('machine_id', machine_id).select('count', { count: 'exact' })
 

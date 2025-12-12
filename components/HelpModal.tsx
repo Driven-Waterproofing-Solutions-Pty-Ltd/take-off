@@ -1,32 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Keyboard, BookOpen, MousePointer2, Layers, FileText, Settings, Calculator, Package, FileDown, Save, Box, ShieldCheck, AlertTriangle, Crown, Key } from 'lucide-react';
-import { licenseService } from '../services/licenseService';
-import LicenseManager from './LicenseManager';
+import { X, Keyboard, BookOpen, MousePointer2, Layers, FileDown, Save, Calculator, Settings } from 'lucide-react';
 
 interface HelpModalProps {
     isOpen: boolean;
     onClose: () => void;
-    initialTab?: 'guide' | 'shortcuts' | 'properties' | 'license';
+    initialTab?: 'guide' | 'shortcuts' | 'properties';
 }
 
 const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose, initialTab }) => {
-    const [activeTab, setActiveTab] = useState<'guide' | 'shortcuts' | 'properties' | 'license'>('guide');
-    const [licenseInfo, setLicenseInfo] = useState<{ valid: boolean; message: string; expiresAt?: string; licenseKey?: string; licenseType?: 'trial' | 'paid' } | null>(null);
-    const [checkingLicense, setCheckingLicense] = useState(false);
+    const [activeTab, setActiveTab] = useState<'guide' | 'shortcuts' | 'properties'>('guide');
     const [mounted, setMounted] = useState(false);
-
-    const checkLicense = async () => {
-        setCheckingLicense(true);
-        try {
-            const res = await licenseService.checkLicense();
-            setLicenseInfo(res);
-        } catch (e) {
-            console.error(e);
-        } finally {
-            setCheckingLicense(false);
-        }
-    };
 
     useEffect(() => {
         if (initialTab) {
@@ -36,11 +20,8 @@ const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose, initialTab }) =>
 
     useEffect(() => {
         setMounted(true);
-        if (isOpen && activeTab === 'license') {
-            checkLicense();
-        }
         return () => setMounted(false);
-    }, [isOpen, activeTab]);
+    }, []);
 
     if (!isOpen || !mounted) return null;
 
@@ -68,7 +49,6 @@ const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose, initialTab }) =>
                     <div className="flex items-center gap-2">
                         <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-100 rounded-lg border border-slate-200">
                             <img src="/prologo.svg" alt="ProTakeoff" className="w-9 h-9" />
-
                         </div>
                         <button
                             onClick={onClose}
@@ -98,12 +78,6 @@ const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose, initialTab }) =>
                         className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'shortcuts' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
                     >
                         <Keyboard size={16} /> Keyboard Shortcuts
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('license')}
-                        className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'license' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-                    >
-                        <ShieldCheck size={16} /> License
                     </button>
                 </div>
 
@@ -427,14 +401,6 @@ const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose, initialTab }) =>
                                     </div>
                                 </div>
 
-                            </div>
-                        </div>
-                    )}
-
-                    {activeTab === 'license' && (
-                        <div className="max-w-md mx-auto">
-                            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm text-center">
-                                <LicenseManager />
                             </div>
                         </div>
                     )}

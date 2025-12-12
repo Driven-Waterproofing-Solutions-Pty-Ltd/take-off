@@ -63,17 +63,20 @@ Deno.serve(async (req) => {
         }
 
         // Check expiration
-        const expiresAt = new Date(license.expires_at)
-        if (expiresAt < new Date()) {
-            return new Response(JSON.stringify({
-                valid: false,
-                message: 'License Expired',
-                licenseType: license.license_type,
-                expiresAt: license.expires_at
-            }), {
-                headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-                status: 200
-            })
+        let expiresAt: Date | null = null;
+        if (license.expires_at) {
+            expiresAt = new Date(license.expires_at);
+            if (expiresAt < new Date()) {
+                return new Response(JSON.stringify({
+                    valid: false,
+                    message: 'License Expired',
+                    licenseType: license.license_type,
+                    expiresAt: license.expires_at
+                }), {
+                    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+                    status: 200
+                })
+            }
         }
 
         // 2. Generate Signed JWT
@@ -86,22 +89,28 @@ Deno.serve(async (req) => {
         const privateKey = await jose.importPKCS8(privateKeyPem, 'RS256')
 
         // TOKEN EXPIRATION POLICY:
-        // User wants to force a check every day.
         // Token expires in 24 hours OR when license expires (whichever is sooner).
         const oneDayCheck = new Date(Date.now() + 24 * 60 * 60 * 1000)
-        // If license expires sooner than 24h (e.g. tomorrow morning), use that.
-        // If license expires in 30 days, use 24h.
-        const tokenExpiresAt = (expiresAt < oneDayCheck) ? expiresAt : oneDayCheck
+
+        // If license has no expiry (lifetime) or expires > 24h, use 24h token.
+        // If license expires < 24h, token dies with license.
+        let tokenExpiresAt = oneDayCheck;
+        if (expiresAt && expiresAt < oneDayCheck) {
+            tokenExpiresAt = expiresAt;
+        }
+
+        // Fix: jose expects number (Unix timestamp in seconds) or string duration
+        const tokenExpiresEpoch = Math.floor(tokenExpiresAt.getTime() / 1000)
 
         const jwt = await new jose.SignJWT({
             licenseKey: license.license_key,
             licenseType: license.license_type,
-            expiresAt: license.expires_at, // actual license expiry still in payload for UI
+            expiresAt: license.expires_at, // pass original string/null
             machineId: machineId
         })
             .setProtectedHeader({ alg: 'RS256' })
             .setIssuedAt()
-            .setExpirationTime(tokenExpiresAt) // Token itself dies in 24h
+            .setExpirationTime(tokenExpiresEpoch) // Token itself dies in 24h
             .sign(privateKey)
 
         return new Response(JSON.stringify({
