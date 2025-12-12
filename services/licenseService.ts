@@ -101,11 +101,25 @@ export const licenseService = {
 
             if (!fetchError && existingLicense) {
                 console.log("Found existing license, restoring...");
+
+                // Check if it is actually valid/unexpired
+                let isValid = true;
+                if (existingLicense.expires_at) {
+                    const expiry = new Date(existingLicense.expires_at);
+                    if (expiry < new Date()) {
+                        isValid = false;
+                        console.log("Restored license is expired.");
+                    }
+                }
+
+                // Also check if status is specifically 'cancelled' or similar if that field exists
+                // For now, expiration date is the main check.
+
                 // Found a valid existing license! Save it and use it.
                 await this.setStoredLicenseKey(existingLicense.license_key);
                 return {
-                    valid: true,
-                    message: 'License restored successfully.',
+                    valid: isValid,
+                    message: isValid ? 'License restored successfully.' : 'Your license has expired.',
                     expiresAt: existingLicense.expires_at,
                     licenseKey: existingLicense.license_key,
                     licenseType: existingLicense.license_type as 'trial' | 'paid',

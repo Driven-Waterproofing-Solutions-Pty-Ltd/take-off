@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Keyboard, BookOpen, MousePointer2, Layers, FileText, Settings, Calculator, Package, FileDown, Save, Box, ShieldCheck, AlertTriangle, Crown, Key } from 'lucide-react';
 import { licenseService } from '../services/licenseService';
+import LicenseManager from './LicenseManager';
 
 interface HelpModalProps {
     isOpen: boolean;
@@ -431,126 +432,9 @@ const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose, initialTab }) =>
                     )}
 
                     {activeTab === 'license' && (
-                        <div className="max-w-2xl mx-auto">
+                        <div className="max-w-md mx-auto">
                             <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm text-center">
-                                {checkingLicense ? (
-                                    <div className="flex flex-col items-center gap-3 py-6">
-                                        <div className="w-8 h-8 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin"></div>
-                                        <p className="text-slate-500 text-sm">Verifying license...</p>
-                                    </div>
-                                ) : licenseInfo ? (
-                                    <div className="space-y-4">
-                                        <div className="flex flex-col items-center gap-3">
-                                            <div className={`p-3 rounded-full ${licenseInfo.valid ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
-                                                <ShieldCheck size={36} />
-                                            </div>
-                                            <div>
-                                                <h3 className="text-xl font-bold text-slate-800">
-                                                    {licenseInfo.valid ? 'License Active' : 'License Invalid'}
-                                                </h3>
-                                                <p className="text-slate-500 text-sm mt-0.5">{licenseInfo.message}</p>
-                                            </div>
-                                        </div>
-
-                                        <div className="grid grid-cols-2 gap-3 max-w-lg mx-auto text-left">
-                                            {/* License Type */}
-                                            <div className="col-span-2 bg-gradient-to-br from-purple-50 to-blue-50 p-3 rounded-lg border-2 border-purple-200">
-                                                <div className="text-xs text-purple-600 uppercase tracking-wider font-bold mb-1 flex items-center gap-1">
-                                                    {licenseInfo.licenseType === 'paid' ? <Crown size={11} /> : <ShieldCheck size={11} />}
-                                                    License Type
-                                                </div>
-                                                <div className="font-bold text-base">
-                                                    {licenseInfo.licenseType === 'paid' ? (
-                                                        <span className="text-purple-700 flex items-center gap-1.5">
-                                                            <Crown size={16} />
-                                                            Paid License
-                                                        </span>
-                                                    ) : (
-                                                        <span className="text-orange-600 flex items-center gap-1.5">
-                                                            <ShieldCheck size={16} />
-                                                            Trial License
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            </div>
-
-                                            {/* License Key */}
-                                            {licenseInfo.licenseKey && (
-                                                <div className="col-span-2 bg-slate-50 p-3 rounded-lg border border-slate-200">
-                                                    <div className="text-xs text-slate-500 uppercase tracking-wider font-bold mb-1 flex items-center gap-1">
-                                                        <Key size={11} />
-                                                        License Key
-                                                    </div>
-                                                    <div className="font-mono text-xs text-slate-800 bg-white px-2 py-1.5 rounded border border-slate-200 break-all">
-                                                        {licenseInfo.licenseKey}
-                                                    </div>
-                                                </div>
-                                            )}
-
-                                            {/* Status */}
-                                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
-                                                <div className="text-xs text-slate-500 uppercase tracking-wider font-bold mb-1">Status</div>
-                                                <div className={`font-semibold text-sm ${licenseInfo.valid ? 'text-green-600' : 'text-red-600'}`}>
-                                                    {licenseInfo.valid ? 'Verified' : 'Unverified'}
-                                                </div>
-                                            </div>
-
-                                            {/* Expiration Date */}
-                                            <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
-                                                <div className="text-xs text-slate-500 uppercase tracking-wider font-bold mb-1">Expiration</div>
-                                                <div className="font-semibold text-sm text-slate-800">
-                                                    {licenseInfo.expiresAt ? (
-                                                        <div className="space-y-1">
-                                                            <div>{new Date(licenseInfo.expiresAt).toLocaleDateString()}</div>
-                                                            {(() => {
-                                                                const exp = new Date(licenseInfo.expiresAt);
-                                                                const now = new Date();
-                                                                const diff = Math.ceil((exp.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-                                                                if (diff <= 7 && diff > 0) {
-                                                                    return <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-bold flex items-center gap-1 w-fit"><AlertTriangle size={10} /> {diff}d left</span>
-                                                                }
-                                                                if (diff <= 0) {
-                                                                    return <span className="text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full font-bold">Expired</span>
-                                                                }
-                                                                return null;
-                                                            })()}
-                                                        </div>
-                                                    ) : (
-                                                        <span className="text-green-600 flex items-center gap-1 text-sm">
-                                                            <Crown size={13} />
-                                                            Lifetime
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                ) : (
-                                    <div className="text-slate-500 py-6 text-sm">
-                                        Unable to load license information.
-                                    </div>
-                                )}
-
-                                {/* Subscribe Button for Help Modal */}
-                                {(licenseInfo?.licenseType === 'trial' || !licenseInfo?.valid) && (
-                                    <div className="mt-6 pt-6 border-t border-slate-100">
-                                        <p className="text-sm text-slate-600 mb-3">
-                                            {licenseInfo?.valid ? "Upgrade to a paid subscription to remove limits." : "Subscribe to activate ProTakeoff."}
-                                        </p>
-                                        <button
-                                            onClick={async () => {
-                                                // Allow subscribe even if no license key (will use machine ID)
-                                                const { url } = await import('../services/stripeService').then(m => m.stripeService.createCheckoutSession(licenseInfo?.licenseKey || ''));
-                                                if (url) window.location.href = url;
-                                            }}
-                                            className="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white py-2 rounded-lg font-semibold hover:from-blue-700 hover:to-purple-700 transition-all shadow-md flex justify-center items-center gap-2"
-                                        >
-                                            <Crown size={18} />
-                                            Subscribe Now ($29.99/mo)
-                                        </button>
-                                    </div>
-                                )}
+                                <LicenseManager />
                             </div>
                         </div>
                     )}

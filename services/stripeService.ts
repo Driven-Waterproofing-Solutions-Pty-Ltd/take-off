@@ -1,8 +1,9 @@
-
 import { supabase } from './supabaseClient';
+import { licenseService } from './licenseService';
 
 export const stripeService = {
     async createCheckoutSession(licenseKey: string) {
+        console.log("stripeService.createCheckoutSession called");
         // For Tauri, we need a custom scheme or a known local server if using deep links.
         // But since this is a web-view, we can usually just use standard URLs if hosted, 
         // OR for desktop app we might want to open the browser.
@@ -11,25 +12,66 @@ export const stripeService = {
 
         // For this implementation, we'll assume a hosted success page or simple http return.
         // You might need to adjust 'http://localhost:3000' to your actual production URL or deeplink.
-        const returnUrl = window.location.origin;
-        const { licenseService } = await import('./licenseService');
-        const machineId = await licenseService.getMachineId();
+        // We use a real URL because Stripe requires http/https for success_url.
+        // 'protakeoff.org' is the user's domain.
+        const returnUrl = 'https://protakeoff.org';
+        console.log("Return URL:", returnUrl);
 
-        const { data, error } = await supabase.functions.invoke('create-checkout-session', {
-            body: {
-                licenseKey,
-                machineId,
-                returnUrl
+        try {
+            // Using static import to avoid bundling issues
+            const machineId = await licenseService.getMachineId();
+            console.log("Machine ID obtained:", machineId);
+
+            console.log("Invoking create-checkout-session function...");
+            const { data, error } = await supabase.functions.invoke('create-checkout-session', {
+                body: {
+                    licenseKey,
+                    machineId,
+                    returnUrl
+                }
+            });
+
+            if (error) {
+                console.error("Supabase function error:", error);
+                throw error;
             }
-        });
 
-        if (error) throw error;
-        return data;
+            console.log("Supabase function success, data:", data);
+            return data;
+        } catch (err) {
+            console.error("Error in createCheckoutSession:", err);
+            throw err;
+        }
+    },
+
+    async createCustomerPortalSession(licenseKey: string) {
+        console.log("stripeService.createCustomerPortalSession called");
+        try {
+            const returnUrl = 'https://protakeoff.org';
+            console.log("Invoking create-portal-session function...");
+
+            // We need to pass the licenseKey so the backend can look up the customer ID
+            const { data, error } = await supabase.functions.invoke('create-portal-session', {
+                body: {
+                    licenseKey,
+                    returnUrl
+                }
+            });
+
+            if (error) {
+                console.error("Supabase function error:", error);
+                throw error;
+            }
+
+            console.log("Supabase function success, data:", data);
+            return data;
+        } catch (err) {
+            console.error("Error in createCustomerPortalSession:", err);
+            throw err;
+        }
     },
 
     async openCustomerPortal() {
-        // Implement if you want users to manage subs. 
-        // Requires a separate edge function to create portal session.
-        console.log("Customer portal not yet implemented.");
+        console.warn("Use createCustomerPortalSession instead to get the URL first.");
     }
 };

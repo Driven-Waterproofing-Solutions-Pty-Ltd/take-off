@@ -495,29 +495,29 @@ const App: React.FC = () => {
     setSelectedShapes(prev => prev.filter(sel => !movedShapeIdSet.has(sel.shapeId)));
 
     setHistory(draft => {
-       // Remove shapes from source items
-       sourceItemIds.forEach(sourceId => {
-         const sourceItem = draft.items.find(i => i.id === sourceId);
-         if (sourceItem) {
-             const shapeIdsToRemove = new Set(shapesBySource[sourceId]);
-             sourceItem.shapes = sourceItem.shapes.filter(s => !shapeIdsToRemove.has(s.id));
-             sourceItem.totalValue = calculateTotalValue(sourceItem.shapes);
-         }
-       });
+      // Remove shapes from source items
+      sourceItemIds.forEach(sourceId => {
+        const sourceItem = draft.items.find(i => i.id === sourceId);
+        if (sourceItem) {
+          const shapeIdsToRemove = new Set(shapesBySource[sourceId]);
+          sourceItem.shapes = sourceItem.shapes.filter(s => !shapeIdsToRemove.has(s.id));
+          sourceItem.totalValue = calculateTotalValue(sourceItem.shapes);
+        }
+      });
 
-       // Add to target item
-       const targetDraftItem = draft.items.find(i => i.id === targetItemId);
-       if (targetDraftItem) {
-           targetDraftItem.shapes.push(...movedShapes);
-           targetDraftItem.totalValue = calculateTotalValue(targetDraftItem.shapes);
-       }
+      // Add to target item
+      const targetDraftItem = draft.items.find(i => i.id === targetItemId);
+      if (targetDraftItem) {
+        targetDraftItem.shapes.push(...movedShapes);
+        targetDraftItem.totalValue = calculateTotalValue(targetDraftItem.shapes);
+      }
 
-       // Remove empty source items
-       if (emptySourceItemIds.size > 0) {
-           draft.items = draft.items.filter(item => !emptySourceItemIds.has(item.id));
-       }
+      // Remove empty source items
+      if (emptySourceItemIds.size > 0) {
+        draft.items = draft.items.filter(item => !emptySourceItemIds.has(item.id));
+      }
     });
-    
+
     addToast(`Moved ${shapesToMove.length} shape(s) to ${targetItem.label}`, 'success');
   };
 
@@ -538,7 +538,7 @@ const App: React.FC = () => {
     const ppu = pixels / realValue;
     setHistory(draft => {
       if (!draft.projectData[pageIndex]) {
-          draft.projectData[pageIndex] = { scale: { isSet: false, pixelsPerUnit: 1, unit: Unit.FEET } };
+        draft.projectData[pageIndex] = { scale: { isSet: false, pixelsPerUnit: 1, unit: Unit.FEET } };
       }
       draft.projectData[pageIndex].scale = { isSet: true, pixelsPerUnit: ppu, unit };
     });
@@ -547,11 +547,11 @@ const App: React.FC = () => {
 
   const handleUpdateLegend = (updates: Partial<LegendSettings>) => {
     setHistoryTransient(draft => {
-        if (!draft.projectData[pageIndex]) {
-             draft.projectData[pageIndex] = { scale: { isSet: false, pixelsPerUnit: 1, unit: Unit.FEET } };
-        }
-        const currentLegend = draft.projectData[pageIndex].legend || { x: 50, y: 50, scale: 1, visible: true };
-        draft.projectData[pageIndex].legend = { ...currentLegend, ...updates };
+      if (!draft.projectData[pageIndex]) {
+        draft.projectData[pageIndex] = { scale: { isSet: false, pixelsPerUnit: 1, unit: Unit.FEET } };
+      }
+      const currentLegend = draft.projectData[pageIndex].legend || { x: 50, y: 50, scale: 1, visible: true };
+      draft.projectData[pageIndex].legend = { ...currentLegend, ...updates };
     });
   };
 
@@ -576,6 +576,47 @@ const App: React.FC = () => {
       unlisteners.forEach(u => u.then(f => f()));
     };
   }, [handleNewProjectRequest, handleLoadProjectClick, handleSaveProject]);
+
+  // Check for Stripe success return
+  useEffect(() => {
+    const checkSubscriptionSuccess = async () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const sessionId = urlParams.get('session_id');
+
+      if (sessionId) {
+        // Clear the param immediately so we don't re-trigger on reload
+        window.history.replaceState({}, document.title, window.location.pathname);
+
+        addToast("Verifying subscription...", 'info');
+
+        // Poll a few times for the webhook to update the DB
+        let attempts = 0;
+        const maxAttempts = 5;
+
+        const pollLicense = async () => {
+          const { licenseService } = await import('./services/licenseService');
+          const status = await licenseService.checkLicense();
+
+          if (status.valid && status.licenseType === 'paid') {
+            const dateStr = status.expiresAt ? new Date(status.expiresAt).toLocaleDateString() : 'Lifetime';
+            addToast(`Purchase Successful! Valid until: ${dateStr}`, 'success');
+            // Force a reload of the license context or just let the updated state flow? 
+            // Since useLicense calls checkLicense on mount, we might need to trigger a re-check if we want the context to update globally immediately.
+            // However, for now, the toast is the feedback requested.
+          } else if (attempts < maxAttempts) {
+            attempts++;
+            setTimeout(pollLicense, 2000); // Retry every 2 seconds
+          } else {
+            addToast("Purchase processing... your license will update shortly.", 'info');
+          }
+        };
+
+        pollLicense();
+      }
+    };
+
+    checkSubscriptionSuccess();
+  }, [addToast]);
 
   useKeyboardShortcuts({
     undo, redo, setTool: (t) => { setActiveTool(t); if (t === ToolType.SELECT) setActiveTakeoffId(null); },
@@ -614,10 +655,10 @@ const App: React.FC = () => {
         onToggleVisibility={(id) => handleUpdateItem(id, { visible: !items.find(i => i.id === id)?.visible })}
         onShowEstimates={() => { handleStopTakeoff(); setViewMode('estimates'); }}
         onRenamePage={(i, n) => setHistory(draft => {
-            if (!draft.projectData[i]) {
-                draft.projectData[i] = { scale: { isSet: false, pixelsPerUnit: 1, unit: Unit.FEET } };
-            }
-            draft.projectData[i].name = n;
+          if (!draft.projectData[i]) {
+            draft.projectData[i] = { scale: { isSet: false, pixelsPerUnit: 1, unit: Unit.FEET } };
+          }
+          draft.projectData[i].name = n;
         })}
         onDeletePage={(i) => { setPageToDelete(i); setShowDeletePageConfirm(true); }}
         onEditItem={setEditingItem} onRenameItem={(id, n) => handleUpdateItem(id, { label: n })}

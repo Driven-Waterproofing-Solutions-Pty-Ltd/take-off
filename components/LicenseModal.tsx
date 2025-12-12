@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { open } from '@tauri-apps/plugin-shell';
 import { ShieldCheck, Key, Loader2, AlertCircle, Crown, AlertTriangle, Clock, CreditCard, ExternalLink } from 'lucide-react';
 import { licenseService, LicenseStatus } from '../services/licenseService';
 import { stripeService } from '../services/stripeService';
@@ -47,20 +48,61 @@ const LicenseModal: React.FC<LicenseModalProps> = ({ onSuccess, initialMessage, 
     };
 
     const handleSubscribe = async () => {
+        console.log("Subscribe button clicked");
         // We allow subscribing without a license key (will use machine ID in backend)
         setIsSubscribing(true);
         setError(null);
         try {
-            const { url } = await stripeService.createCheckoutSession(licenseStatus?.licenseKey || '');
+            console.log(`Calling stripeService with key: ${licenseStatus?.licenseKey}`);
+            const response = await stripeService.createCheckoutSession(licenseStatus?.licenseKey || '');
+            console.log("Stripe response received:", response);
+            const { url } = response;
+
             if (url) {
-                window.location.href = url; // Redirect to Stripe
+                console.log(`Opening external browser: ${url}`);
+                await open(url); // Open in default browser
+
+                // Start polling for success in the UI since we are in an external browser
+                // addToast("Checkout opened in browser. Waiting for completion...", "info");
+
+                // Poll for up to 5 minutes? Or just let user manage it? 
+                // Let's rely on the existing polling or just let the user click "Activate" if they have a key, 
+                // BUT for subscription, we want auto-detect.
+
+                // Simple polling loop here since we don't have a deep link return guaranteed
+                let attempts = 0;
+                const pollInterval = setInterval(async () => {
+                    attempts++;
+                    try {
+                        const res = await licenseService.checkLicense();
+                        if (res.valid && res.licenseType === 'paid') {
+                            clearInterval(pollInterval);
+                            setLicenseStatus(res);
+                            onSuccess();
+                            // addToast("Subscription confirmed!", "success");
+                        }
+                    } catch (e) {
+                        // console.error("Poll error", e); 
+                    }
+
+                    if (attempts > 60) { // 2 minutes approx (assuming 2s interval) - adjust as needed
+                        clearInterval(pollInterval);
+                        setIsSubscribing(false); // Stop the spinner/loading state
+                        // Don't show error, just stop polling. User can manually check.
+                    }
+                }, 2000);
+
             } else {
+                const err = "No URL in response";
+                console.error(err);
+                alert(err);
                 throw new Error("Failed to create checkout session.");
             }
         } catch (e: any) {
-            console.error(e);
-            setError(e.message || "Failed to start subscription.");
-        } finally {
+            console.error("Subscribe error:", e);
+            const msg = e.message || "Failed to start subscription.";
+            setError(msg);
+            alert(`Subscription Error: ${msg}`);
             setIsSubscribing(false);
         }
     };

@@ -8,6 +8,7 @@ interface LicenseContextType {
   isLicensed: boolean;
   licenseExpiration: Date | null;
   checkingLicense: boolean;
+  refreshLicense: () => Promise<void>;
 }
 
 const LicenseContext = createContext<LicenseContextType | undefined>(undefined);
@@ -19,26 +20,30 @@ export const LicenseProvider: React.FC<{ children: ReactNode }> = ({ children })
   const [licenseExpiration, setLicenseExpiration] = useState<Date | null>(null);
   const [licenseError, setLicenseError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const checkLicense = async () => {
-      try {
-        const res = await licenseService.checkLicense();
-        if (res.valid) {
-          setIsLicensed(true);
-          if (res.expiresAt) setLicenseExpiration(new Date(res.expiresAt));
-        } else {
-          if (res.message) {
-            addToast(res.message, 'error');
-            setLicenseError(res.message);
-          }
+  const checkLicense = async () => {
+    try {
+      const res = await licenseService.checkLicense();
+      if (res.valid) {
+        setIsLicensed(true);
+        if (res.expiresAt) setLicenseExpiration(new Date(res.expiresAt));
+        setLicenseError(null);
+      } else {
+        setIsLicensed(false);
+        if (res.message) {
+          // Only show toast on initial load or explicit refresh, maybe not needed here if handled by UI
+          // addToast(res.message, 'error'); 
+          setLicenseError(res.message);
         }
-      } catch (e) {
-        console.error("Failed to load license", e);
-        setLicenseError("Failed to check license status.");
-      } finally {
-        setCheckingLicense(false);
       }
-    };
+    } catch (e) {
+      console.error("Failed to load license", e);
+      setLicenseError("Failed to check license status.");
+    } finally {
+      setCheckingLicense(false);
+    }
+  };
+
+  useEffect(() => {
     checkLicense();
   }, []);
 
@@ -51,11 +56,11 @@ export const LicenseProvider: React.FC<{ children: ReactNode }> = ({ children })
   }
 
   if (!isLicensed) {
-    return <LicenseModal onSuccess={() => setIsLicensed(true)} initialMessage={licenseError} />;
+    return <LicenseModal onSuccess={() => checkLicense()} initialMessage={licenseError} />;
   }
 
   return (
-    <LicenseContext.Provider value={{ isLicensed, licenseExpiration, checkingLicense }}>
+    <LicenseContext.Provider value={{ isLicensed, licenseExpiration, checkingLicense, refreshLicense: checkLicense }}>
       {children}
     </LicenseContext.Provider>
   );
