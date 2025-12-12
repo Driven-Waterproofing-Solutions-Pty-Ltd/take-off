@@ -12,6 +12,7 @@ interface LicenseManagerProps {
 
 const LicenseManager: React.FC<LicenseManagerProps> = ({ onSuccess, initialMessage, currentLicenseStatus }) => {
     const [key, setKey] = useState('');
+    const [showManualInput, setShowManualInput] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [isSubscribing, setIsSubscribing] = useState(false);
     const [error, setError] = useState<string | null>(initialMessage || null);
@@ -172,43 +173,79 @@ const LicenseManager: React.FC<LicenseManagerProps> = ({ onSuccess, initialMessa
                 )}
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-4">
-                <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1.5 ml-1">Serial Key</label>
-                    <div className="relative">
-                        <Key className="absolute left-3 top-2.5 text-slate-400" size={18} />
-                        <input
-                            type="text"
-                            className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all uppercase font-mono tracking-widest text-center"
-                            placeholder="XXXX-XXXX-XXXX-XXXX"
-                            value={key}
-                            onChange={(e) => setKey(e.target.value)}
-                            disabled={isLoading}
-                        />
-                    </div>
-                </div>
+            {/* Current License Key Display (Auto-Generated) */}
+            <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 text-center mb-6">
+                <p className="text-xs text-slate-500 uppercase tracking-wider font-semibold mb-1">Your License System ID</p>
+                <code className="text-lg font-mono font-bold text-slate-700 select-all">
+                    {licenseStatus?.licenseKey || "Generating..."}
+                </code>
+            </div>
 
-                {error && (
-                    <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 p-3 rounded-lg border border-red-100">
-                        <AlertCircle size={16} />
-                        <span>{error}</span>
-                    </div>
-                )}
-
+            {/* Manual Key Entry (Hidden by default) */}
+            {!showManualInput ? (
                 <button
-                    type="submit"
-                    disabled={isLoading || !key.trim()}
-                    className="w-full bg-slate-900 hover:bg-slate-800 text-white py-3 rounded-lg font-semibold shadow-lg transition-all flex justify-center items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    onClick={() => setShowManualInput(true)}
+                    className="text-xs text-slate-400 hover:text-slate-600 underline text-center w-full mb-4"
                 >
-                    {isLoading ? (
-                        <>
-                            <Loader2 size={18} className="animate-spin" /> Verifying...
-                        </>
-                    ) : (
-                        "Activate License"
-                    )}
+                    Have an existing key from another machine? Click here to restore.
                 </button>
-            </form>
+            ) : (
+                <form onSubmit={handleSubmit} className="space-y-4 mb-6 relative">
+                    <button
+                        type="button"
+                        onClick={() => setShowManualInput(false)}
+                        className="absolute -top-6 right-0 text-xs text-slate-400 hover:text-red-500"
+                    >
+                        Cancel
+                    </button>
+
+                    <div className="bg-amber-50 p-3 rounded-lg border border-amber-200 text-xs text-slate-700 mb-4">
+                        <div className="font-bold text-amber-800 mb-1 flex items-center gap-1">
+                            <AlertCircle size={14} /> Attention
+                        </div>
+                        <p>
+                            Activating your license here will <strong>disable it on your other devices</strong>.
+                            ProTakeoff tracks your active session, and switching devices will transfer your license to this computer immediately.
+                        </p>
+                    </div>
+
+                    <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1.5 ml-1">Enter Existing Serial Key</label>
+                        <div className="relative">
+                            <Key className="absolute left-3 top-2.5 text-slate-400" size={18} />
+                            <input
+                                type="text"
+                                className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all uppercase font-mono tracking-widest text-center"
+                                placeholder="XXXX-XXXX-XXXX-XXXX"
+                                value={key}
+                                onChange={(e) => setKey(e.target.value)}
+                                disabled={isLoading}
+                            />
+                        </div>
+                    </div>
+
+                    {error && (
+                        <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 p-3 rounded-lg border border-red-100">
+                            <AlertCircle size={16} />
+                            <span>{error}</span>
+                        </div>
+                    )}
+
+                    <button
+                        type="submit"
+                        disabled={isLoading || !key.trim()}
+                        className="w-full bg-slate-900 hover:bg-slate-800 text-white py-3 rounded-lg font-semibold shadow-lg transition-all flex justify-center items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {isLoading ? (
+                            <>
+                                <Loader2 size={18} className="animate-spin" /> Verifying...
+                            </>
+                        ) : (
+                            "Activate This Key"
+                        )}
+                    </button>
+                </form>
+            )}
 
             {/* Upgrade CTA for Trial Users */}
             {isTrial && (
