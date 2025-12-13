@@ -92,24 +92,26 @@ const App: React.FC = () => {
   const canvasRef = useRef<BlueprintCanvasRef>(null);
 
   useEffect(() => {
-    if (activeTakeoffId) {
-      const activeItem = items.find(i => i.id === activeTakeoffId);
-      const hasShapesOnCurrentPage = activeItem?.shapes.some(s => s.pageIndex === pageIndex);
-      if (activeItem && activeItem.shapes.length > 0 && !hasShapesOnCurrentPage) {
-        setActiveTakeoffId(null);
-        setSelectedShapes([]);
-      }
-    } else if (selectedShapes.length > 0) {
+    // Only clear selection if it's no longer valid for the current page
+    if (selectedShapes.length > 0) {
       const validSelectedShapes = selectedShapes.filter(sel => {
         const item = items.find(i => i.id === sel.itemId);
         const shape = item?.shapes.find(s => s.id === sel.shapeId);
+        // Only keep shapes that exist on the CURRENT page
         return shape && shape.pageIndex === pageIndex;
       });
+
+      // If we have selected shapes that are not on this page, clear them
+      // This happens when switching pages while shapes are selected
       if (validSelectedShapes.length !== selectedShapes.length) {
         setSelectedShapes(validSelectedShapes);
+        
+        // Note: We deliberately DO NOT clear activeTakeoffId here.
+        // We want to persist the "Active Recording Item" across pages so the user
+        // can continue measuring the same item on the new page.
       }
     }
-  }, [pageIndex, activeTakeoffId, selectedShapes, items]);
+  }, [pageIndex, selectedShapes, items]);
 
   const handleExportPDF = async (pageIndices: number[], includeLegend: boolean, includeNotes: boolean) => {
     setIsExporting(true);
@@ -700,7 +702,12 @@ const App: React.FC = () => {
                 isLegendVisible={currentLegend.visible ?? true} onToggleLegend={() => handleUpdateLegend({ visible: !(currentLegend.visible ?? true) })}
                 isPageScaled={currentScale.isSet} />
             )}
-            <BlueprintCanvas ref={canvasRef} file={activePlan?.file || null} localPageIndex={activePlan?.localPageIndex || 0} globalPageIndex={pageIndex}
+            <BlueprintCanvas
+              key={pageIndex}
+              ref={canvasRef}
+              file={activePlan?.file || null}
+              localPageIndex={activePlan?.localPageIndex || 0}
+              globalPageIndex={pageIndex}
               onPageWidthChange={() => { }} activeTool={activeTool} items={items} activeTakeoffId={activeTakeoffId} isDeductionMode={isDeductionMode}
               onEnableDeduction={handleEnableDeductionMode} onSelectTakeoffItem={setActiveTakeoffId} onSelectionChanged={setSelectedShapes} onShapeCreated={handleShapeCreated}
               onUpdateShape={handleUpdateShape} onUpdateShapeTransient={handleUpdateShapeTransient} onBatchUpdateShapesTransient={handleBatchUpdateShapesTransient} onSplitShape={handleSplitShape}

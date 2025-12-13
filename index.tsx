@@ -4,6 +4,7 @@ import App from './App';
 import { ToastProvider } from './contexts/ToastContext';
 import { LicenseProvider } from './contexts/LicenseContext';
 import { suppressConsoleWarnings } from './utils/suppressWarnings';
+import './utils/pdfWorker';
 import { RouterProvider } from './components/Router';
 
 // Suppress specific PDF.js warnings to prevent performance issues

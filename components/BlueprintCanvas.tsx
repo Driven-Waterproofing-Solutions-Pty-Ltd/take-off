@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useImperativeHandle, forwardRef, useMemo } from 'react';
 import { Stage, Layer, Rect, Circle, Line as KonvaLine, Path, Group, Label, Tag, Text as KonvaText, Arrow } from 'react-konva';
 import Konva from 'konva';
-import { Document, Page } from 'react-pdf';
+import { Document, Page, pdfjs } from 'react-pdf';
 import { Point, ToolType, TakeoffItem, Shape, Unit, LegendSettings } from '../types';
 import { calculateDistance, calculatePolylineLength, calculatePolygonArea, getScaledValue, getScaledArea, parseDimensionInput, PresetScale, isPointInPolygon, PRESET_SCALES } from '../utils/geometry';
 import { AlertCircle, Trash2, Scissors, Plus, Eraser, MessageSquare, Ruler, Edit2 } from 'lucide-react';
@@ -11,6 +11,7 @@ import DraggableLegend from './DraggableLegend';
 import NoteInputModal from './NoteInputModal';
 import PasteOptionsModal from './PasteOptionsModal';
 import ChangeItemModal from './ChangeItemModal';
+import { flattenOCG } from '../utils/flattenOCG';
 
 // Removed html2canvas import as we now use pdf-lib for vector export
 
@@ -342,6 +343,9 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 
     // Track if we have performed the initial "Fit to Screen" for the current file
     const [isFitted, setIsFitted] = useState(false);
+    // Ref to track the zoom level we just requested via fit-to-screen
+    // This helps avoid race conditions where the old zoom prop overwrites the fit transform
+    const fittingZoomRef = useRef<number | null>(null);
 
     const transform = useRef({ x: 0, y: 0, scale: 1 });
     const [isDragging, setIsDragging] = useState(false);
@@ -363,6 +367,8 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     const [selectedShape, setSelectedShape] = useState<{ itemId: string, shapeId: string } | null>(null);
     // State for dragging a specific point of an existing shape
     const [draggedVertex, setDraggedVertex] = useState<{ itemId: string, shapeId: string, pointIndex: number } | null>(null);
+    // State for a specific selected point (vertex)
+    const [selectedVertex, setSelectedVertex] = useState<{ itemId: string, shapeId: string, pointIndex: number } | null>(null);
     // State for dragging entire shapes (all points together) - supports single or multiple shapes
     const [draggedShapes, setDraggedShapes] = useState<{ itemId: string, shapeId: string, initialPoints: Point[] }[]>([]);
     const dragStartPoint = useRef<Point | null>(null);
@@ -396,12 +402,20 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         selectedItemsRef.current = selectedItems;
     }, [selectedItems]);
 
+    // Effect to clear selected vertex if its shape is no longer selected
+    useEffect(() => {
+        if (selectedVertex) {
+            const isStillSelected = selectedItems.some(s => s.itemId === selectedVertex.itemId && s.shapeId === selectedVertex.shapeId);
+            if (!isStillSelected) {
+                setSelectedVertex(null);
+            }
+        }
+    }, [selectedItems, selectedVertex]);
+
     // Effect to maintain selection after items update (e.g., after pasting)
     useEffect(() => {
         // Check if we have a pending selection to apply after items update
         if (pendingSelection) {
-            console.log('[SELECTION EFFECT] Items updated, applying pending selection:', pendingSelection);
-
             // Verify that all selected items exist in the new items array
             const validSelections = pendingSelection.filter(({ itemId, shapeId }) => {
                 const item = items.find(i => i.id === itemId);
@@ -410,7 +424,6 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             });
 
             if (validSelections.length > 0) {
-                console.log('[SELECTION EFFECT] Setting selected items:', validSelections);
                 setSelectedItems(validSelections);
 
                 // If only one item is selected, we can also set selectedShape for backward compatibility
@@ -419,8 +432,6 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                     setSelectedShape(validSelections[0]);
                 }
                 setPendingSelection(null);
-            } else {
-                console.log('[SELECTION EFFECT] No valid selections found after update');
             }
         } else if (selectedItems.length > 0) {
             // This block handles cases where we didn't just paste, but items updated
@@ -489,6 +500,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     // Reset state when file/page changes
     useEffect(() => {
         setContentWidth(0);
+        setOriginalPdfWidth(0); // Ensure we don't use stale width from previous page
         setIsFitted(false);
         updateTransform(0, 0, 1);
     }, [file, localPageIndex, globalPageIndex]);
@@ -506,34 +518,91 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             return;
         }
 
-        try {
-            const url = URL.createObjectURL(file);
-            setFileUrl(url);
-            return () => URL.revokeObjectURL(url);
-        } catch (error) {
-            console.error("Error creating object URL for PDF:", error);
-            setFileUrl(null);
-        }
+        const processFile = async () => {
+            try {
+                // Read the file as an ArrayBuffer
+                const arrayBuffer = await file.arrayBuffer();
+                const uint8Array = new Uint8Array(arrayBuffer);
+                
+                // Log the original PDF size for debugging
+                console.log('Original PDF size:', arrayBuffer.byteLength, 'bytes');
+                
+                // Flatten OCG layers to improve rendering performance
+                const flattenedPdfBytes = await flattenOCG(uint8Array);
+                
+                // Log the flattened PDF size for debugging
+                console.log('Flattened PDF size:', flattenedPdfBytes.byteLength, 'bytes');
+                
+                // Check if the flattened PDF is valid by checking its header
+                const isValidPdf = flattenedPdfBytes.byteLength > 0 &&
+                                   flattenedPdfBytes[0] === 0x25 &&
+                                   flattenedPdfBytes[1] === 0x50 &&
+                                   flattenedPdfBytes[2] === 0x44 &&
+                                   flattenedPdfBytes[3] === 0x46;
+                
+                if (!isValidPdf) {
+                    console.error('Flattened PDF is not valid. Falling back to original PDF.');
+                    // Fallback to original file if the flattened PDF is not valid
+                    const url = URL.createObjectURL(file);
+                    setFileUrl(url);
+                    return () => URL.revokeObjectURL(url);
+                }
+                
+                // Create a Blob from the flattened PDF
+                const flattenedBlob = new Blob([flattenedPdfBytes as BlobPart], { type: 'application/pdf' });
+                const url = URL.createObjectURL(flattenedBlob);
+                
+                // Log the Blob URL for debugging
+                console.log('Flattened PDF Blob URL:', url);
+                
+                setFileUrl(url);
+                
+                return () => URL.revokeObjectURL(url);
+            } catch (error) {
+                console.error('Error processing PDF:', error);
+                // Fallback to original file if processing fails
+                try {
+                    const url = URL.createObjectURL(file);
+                    setFileUrl(url);
+                    return () => URL.revokeObjectURL(url);
+                } catch (fallbackError) {
+                    console.error('Error creating fallback URL:', fallbackError);
+                    setFileUrl(null);
+                }
+            }
+        };
+
+        processFile();
     }, [file]);
 
     // Handle Initial Fit-to-Screen
     useEffect(() => {
-        if (!viewportRef.current) return;
+        if (!viewportRef.current) {
+            return;
+        }
+
+        const performFit = (viewportWidth: number) => {
+            if (contentWidth > 0 && !isFitted && viewportWidth > 0) {
+                const fitScale = viewportWidth / contentWidth;
+                const newZoom = fitScale * RENDER_SCALE;
+
+                // Set the expected zoom level to handle race condition with old props
+                fittingZoomRef.current = newZoom;
+                setZoomLevel(newZoom);
+                updateTransform(0, 0, fitScale);
+                setIsFitted(true);
+            }
+        };
+
+        // Attempt immediate fit
+        const rect = viewportRef.current.getBoundingClientRect();
+        if (rect.width > 0) {
+            performFit(rect.width);
+        }
 
         const resizeObserver = new ResizeObserver((entries) => {
             for (const entry of entries) {
-                // Only trigger fit if we have content and haven't fitted yet
-                if (contentWidth > 0 && !isFitted) {
-                    const width = entry.contentRect.width;
-                    if (width > 0) {
-                        const fitScale = width / contentWidth;
-                        const newZoom = fitScale * RENDER_SCALE;
-
-                        setZoomLevel(newZoom);
-                        updateTransform(0, 0, fitScale);
-                        setIsFitted(true);
-                    }
-                }
+                performFit(entry.contentRect.width);
             }
         });
 
@@ -543,7 +612,22 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 
     // Handle Manual Zoom Updates
     useEffect(() => {
-        if (contentWidth === 0 || !viewportRef.current) return;
+        // Prevent manual zoom updates until the initial fit has been performed
+        // This avoids race conditions where a stale zoomLevel from a previous page
+        // is applied to the new page before the "fit to screen" logic can run.
+        if (contentWidth === 0 || !viewportRef.current || !isFitted) return;
+        
+        // If we just performed a fit, we need to wait for the zoomLevel prop to match
+        // the value we requested. If it's still the old value (from before the page switch),
+        // we ignore it to prevent the view from jumping back to the old zoom level.
+        if (fittingZoomRef.current !== null) {
+            if (Math.abs(zoomLevel - fittingZoomRef.current) > 0.001) {
+                return;
+            }
+            // Zoom level matches what we set, so we're synced up.
+            fittingZoomRef.current = null;
+        }
+
         const targetScale = zoomLevel / RENDER_SCALE;
 
         if (Math.abs(targetScale - transform.current.scale) > 0.00001) {
@@ -559,7 +643,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 
             updateTransform(newX, newY, targetScale);
         }
-    }, [zoomLevel, contentWidth]);
+    }, [zoomLevel, contentWidth, isFitted]);
 
     useEffect(() => {
         if (pendingPreset && clearPendingPreset && originalPdfWidth > 0) {
@@ -610,10 +694,17 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 // Use ref to get current value and avoid stale closures
                 const currentSelectedItems = selectedItemsRef.current;
 
+                if (selectedVertex) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    deletePoint(selectedVertex.itemId, selectedVertex.shapeId, selectedVertex.pointIndex);
+                    setSelectedVertex(null);
+                    return;
+                }
+
                 if (currentSelectedItems.length > 0) {
                     // Prevent multiple rapid deletions
                     if (isDeletingRef.current) {
-                        console.log('[BATCH DELETE] Already deleting, ignoring duplicate event');
                         e.preventDefault();
                         e.stopPropagation();
                         return;
@@ -623,36 +714,25 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                     e.stopPropagation();
                     isDeletingRef.current = true;
 
-                    console.log('[BATCH DELETE] Starting batch deletion');
-                    console.log('[BATCH DELETE] Selected items count:', currentSelectedItems.length);
-                    console.log('[BATCH DELETE] Selected items:', currentSelectedItems);
-
                     // Clear selection first
                     setSelectedItems([]);
 
                     // Use batch delete if available, otherwise fall back to individual deletes
                     if (onDeleteShapes) {
-                        console.log('[BATCH DELETE] Using batch delete API');
                         onDeleteShapes(currentSelectedItems);
-                        console.log('[BATCH DELETE] Batch delete completed');
                     } else {
-                        console.log('[BATCH DELETE] No batch API, using individual deletes');
                         currentSelectedItems.forEach(({ itemId, shapeId }, index) => {
-                            console.log(`[BATCH DELETE] Deleting item ${index + 1}/${currentSelectedItems.length}:`, { itemId, shapeId });
                             onDeleteShape(itemId, shapeId);
                         });
-                        console.log('[BATCH DELETE] Individual deletes completed');
                     }
 
                     // Reset the deletion flag
                     setTimeout(() => {
                         isDeletingRef.current = false;
-                        console.log('[BATCH DELETE] Deletion flag reset');
                     }, 100);
                 } else if (selectedShape) {
                     e.preventDefault();
                     e.stopPropagation();
-                    console.log('[SINGLE DELETE] Deleting single shape:', selectedShape);
                     onDeleteShape(selectedShape.itemId, selectedShape.shapeId);
                     setSelectedShape(null);
                 }
@@ -690,12 +770,13 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         // Use capture: true to ensure this handler runs before global shortcuts
         window.addEventListener('keydown', handleKeyDown, { capture: true });
         return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
-    }, [selectedShape, selectedItems, drawingPoints, showScaleModal, activeTool, onStopRecording, contextMenu]);
+    }, [selectedShape, selectedItems, drawingPoints, showScaleModal, activeTool, onStopRecording, contextMenu, selectedVertex]);
 
     useEffect(() => {
         if (activeTool !== ToolType.SELECT) {
             setSelectedShape(null);
             setDraggedVertex(null);
+            setSelectedVertex(null);
             setDraggedShapes([]);
             dragStartPoint.current = null;
             setContextMenu(null);
@@ -1062,6 +1143,9 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 
         if (activeTool === ToolType.SELECT) {
             if (!isRectSelecting) {
+                if (selectedVertex) {
+                    setSelectedVertex(null);
+                }
                 if (selectedItems.length > 0) {
                     setSelectedItems([]);
                 }
@@ -1207,6 +1291,15 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 onDeleteShape(itemId, shapeId);
             } else {
                 updateShapeValue(item, shape, newPoints);
+                
+                // Update selected vertex index if needed
+                if (selectedVertex && selectedVertex.itemId === itemId && selectedVertex.shapeId === shapeId) {
+                    if (selectedVertex.pointIndex === pointIndex) {
+                        setSelectedVertex(null);
+                    } else if (selectedVertex.pointIndex > pointIndex) {
+                        setSelectedVertex({ ...selectedVertex, pointIndex: selectedVertex.pointIndex - 1 });
+                    }
+                }
             }
         }
     };
@@ -1252,10 +1345,9 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             const part2Points = shape.points.slice(pointIndex);
 
             const ppu = scaleInfo.ppu;
-            const pdfScale = originalPdfWidth > 0 && contentWidth > 0 ? originalPdfWidth / contentWidth : 1;
-
-            const pdfPoints1 = part1Points.map(p => ({ x: p.x * pdfScale, y: p.y * pdfScale }));
-            const pdfPoints2 = part2Points.map(p => ({ x: p.x * pdfScale, y: p.y * pdfScale }));
+            // Points are already in PDF space (from shape.points)
+            const pdfPoints1 = part1Points;
+            const pdfPoints2 = part2Points;
 
             let val1 = 0;
             if (part1Points.length > 1) {
@@ -1288,8 +1380,8 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     const updateShapeValue = (item: TakeoffItem, shape: Shape, newPoints: Point[], isTransient = false): { updatedShape: Shape | null } => {
         let newValue = 0;
         const ppu = scaleInfo.ppu;
-        const pdfScale = originalPdfWidth > 0 && contentWidth > 0 ? originalPdfWidth / contentWidth : 1;
-        const pdfPoints = newPoints.map(p => ({ x: p.x * pdfScale, y: p.y * pdfScale }));
+        // newPoints are already in PDF space (passed from handlers that convert to PDF space)
+        const pdfPoints = newPoints;
 
         if (item.type === ToolType.SEGMENT || item.type === ToolType.LINEAR || item.type === ToolType.DIMENSION) {
             newValue = getScaledValue(calculatePolylineLength(pdfPoints), ppu);
@@ -1337,7 +1429,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         onShapeCreated({
             id: crypto.randomUUID(),
             pageIndex: globalPageIndex,
-            points: [...points],
+            points: [...pdfPoints],
             value,
             deduction: isDeductionMode
         });
@@ -1347,10 +1439,13 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     };
 
     const finalizeNote = (points: Point[]) => {
+        const pdfScale = originalPdfWidth > 0 && contentWidth > 0 ? originalPdfWidth / contentWidth : 1;
+        const pdfPoints = points.map(p => ({ x: p.x * pdfScale, y: p.y * pdfScale }));
+        
         setNoteModal({
             isOpen: true,
             text: '',
-            points: points
+            points: pdfPoints
         });
         setDrawingPoints([]);
         setTempPoint(null);
@@ -1466,9 +1561,10 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                         <Document
                             file={fileUrl}
                             loading={<div className="p-10">Loading PDF...</div>}
-                            onLoadError={(error) => console.error("BlueprintCanvas PDF Load Error:", error)}
+                            onLoadError={() => {}}
                         >
                             <Page
+                                key={localPageIndex}
                                 pageNumber={localPageIndex + 1}
                                 scale={RENDER_SCALE}
                                 renderTextLayer={false}
@@ -1485,6 +1581,48 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                         </Document>
                     ) : (
                         <div className="flex items-center justify-center h-96 text-slate-400">Upload Blueprint</div>
+                    )}
+                    {fileUrl && (
+                        <Document
+                            file={fileUrl}
+                            loading={<div className="p-10">Loading PDF...</div>}
+                            onLoadError={(error) => {
+                                console.error('Error loading PDF:', error);
+                                addToast('Error loading PDF. Please try again.', 'error');
+                            }}
+                            error={<div className="p-10 text-red-500">Error loading PDF. Please try again.</div>}
+                            onLoadSuccess={() => {
+                                console.log('PDF loaded successfully');
+                            }}
+                            onLoadProgress={({ loaded, total }) => {
+                                console.log(`Loading PDF: ${Math.round(loaded / total * 100)}%`);
+                            }}
+                        >
+                            <Page
+                                key={localPageIndex}
+                                pageNumber={localPageIndex + 1}
+                                scale={RENDER_SCALE}
+                                renderTextLayer={false}
+                                renderAnnotationLayer={false}
+                                onLoadSuccess={(page) => {
+                                    console.log('Page loaded successfully:', page.pageNumber);
+                                    const viewport = page.getViewport({ scale: RENDER_SCALE });
+                                    setContentWidth(viewport.width);
+                                    setOriginalPdfWidth(viewport.width / RENDER_SCALE);
+                                    setPdfAspectRatio(viewport.height / viewport.width);
+                                    onPageWidthChange(viewport.width / RENDER_SCALE);
+                                    if (onPageLoaded) onPageLoaded();
+                                }}
+                                onLoadError={(error) => {
+                                    console.error('Error loading page:', error);
+                                    addToast('Error loading page. Please try again.', 'error');
+                                }}
+                                onRenderError={(error) => {
+                                    console.error('Error rendering page:', error);
+                                    addToast('Error rendering page. Please try again.', 'error');
+                                }}
+                            />
+                        </Document>
                     )}
                 </div>
 
@@ -1660,30 +1798,34 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                                 </Label>
                                             )}
 
-                                            {isSelected && activeTool === ToolType.SELECT && shape.points.map((p, i) => (
-                                                <Circle
-                                                    key={`handle-${i}`}
-                                                    x={p.x * shapeRenderScale}
-                                                    y={p.y * shapeRenderScale}
-                                                    radius={5 * visualScaleFactor}
-                                                    fill="white"
-                                                    stroke="#3b82f6"
-                                                    strokeWidth={2 * visualScaleFactor}
-                                                    draggable
-                                                    onDragStart={(e) => {
-                                                        e.cancelBubble = true;
-                                                        setDraggedVertex({ itemId: item.id, shapeId: shape.id, pointIndex: i });
-                                                    }}
-                                                    onDragEnd={() => setDraggedVertex(null)}
-                                                    onMouseDown={(e) => {
-                                                        if (e.evt.button === 2) handlePointContextMenu(e.evt as unknown as React.MouseEvent, item.id, shape.id, i);
-                                                    }}
-                                                    onDblClick={(e) => {
-                                                        e.cancelBubble = true;
-                                                        deletePoint(item.id, shape.id, i);
-                                                    }}
-                                                />
-                                            ))}
+                                            {isSelected && activeTool === ToolType.SELECT && shape.points.map((p, i) => {
+                                                const isPointSelected = selectedVertex?.itemId === item.id && selectedVertex?.shapeId === shape.id && selectedVertex?.pointIndex === i;
+                                                return (
+                                                    <Circle
+                                                        key={`handle-${i}`}
+                                                        x={p.x * shapeRenderScale}
+                                                        y={p.y * shapeRenderScale}
+                                                        radius={(isPointSelected ? 7 : 5) * visualScaleFactor}
+                                                        fill={isPointSelected ? "#ef4444" : "white"}
+                                                        stroke={isPointSelected ? "#ef4444" : "#3b82f6"}
+                                                        strokeWidth={2 * visualScaleFactor}
+                                                        draggable
+                                                        onDragStart={(e) => {
+                                                            e.cancelBubble = true;
+                                                            setDraggedVertex({ itemId: item.id, shapeId: shape.id, pointIndex: i });
+                                                        }}
+                                                        onDragEnd={() => setDraggedVertex(null)}
+                                                        onMouseDown={(e) => {
+                                                            e.cancelBubble = true;
+                                                            if (e.evt.button === 2) handlePointContextMenu(e.evt as unknown as React.MouseEvent, item.id, shape.id, i);
+                                                        }}
+                                                        onDblClick={(e) => {
+                                                            e.cancelBubble = true;
+                                                            setSelectedVertex({ itemId: item.id, shapeId: shape.id, pointIndex: i });
+                                                        }}
+                                                    />
+                                                );
+                                            })}
                                         </Group>
                                     );
                                 });
