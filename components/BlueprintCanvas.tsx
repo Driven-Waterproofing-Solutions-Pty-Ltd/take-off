@@ -340,6 +340,13 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     const [originalPdfWidth, setOriginalPdfWidth] = useState(0);
     const [pdfAspectRatio, setPdfAspectRatio] = useState<number>(0);
     const [fileUrl, setFileUrl] = useState<string | null>(null);
+    const [numPages, setNumPages] = useState<number | null>(null);
+    const [isCurrentPageLoaded, setIsCurrentPageLoaded] = useState(false);
+
+    // Reset loaded state when page changes so we prioritize the new page
+    useEffect(() => {
+        setIsCurrentPageLoaded(false);
+    }, [localPageIndex]);
 
     // Track if we have performed the initial "Fit to Screen" for the current file
     const [isFitted, setIsFitted] = useState(false);
@@ -523,23 +530,23 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 // Read the file as an ArrayBuffer
                 const arrayBuffer = await file.arrayBuffer();
                 const uint8Array = new Uint8Array(arrayBuffer);
-                
+
                 // Log the original PDF size for debugging
                 console.log('Original PDF size:', arrayBuffer.byteLength, 'bytes');
-                
+
                 // Flatten OCG layers to improve rendering performance
                 const flattenedPdfBytes = await flattenOCG(uint8Array);
-                
+
                 // Log the flattened PDF size for debugging
                 console.log('Flattened PDF size:', flattenedPdfBytes.byteLength, 'bytes');
-                
+
                 // Check if the flattened PDF is valid by checking its header
                 const isValidPdf = flattenedPdfBytes.byteLength > 0 &&
-                                   flattenedPdfBytes[0] === 0x25 &&
-                                   flattenedPdfBytes[1] === 0x50 &&
-                                   flattenedPdfBytes[2] === 0x44 &&
-                                   flattenedPdfBytes[3] === 0x46;
-                
+                    flattenedPdfBytes[0] === 0x25 &&
+                    flattenedPdfBytes[1] === 0x50 &&
+                    flattenedPdfBytes[2] === 0x44 &&
+                    flattenedPdfBytes[3] === 0x46;
+
                 if (!isValidPdf) {
                     console.error('Flattened PDF is not valid. Falling back to original PDF.');
                     // Fallback to original file if the flattened PDF is not valid
@@ -547,16 +554,16 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                     setFileUrl(url);
                     return () => URL.revokeObjectURL(url);
                 }
-                
+
                 // Create a Blob from the flattened PDF
                 const flattenedBlob = new Blob([flattenedPdfBytes as BlobPart], { type: 'application/pdf' });
                 const url = URL.createObjectURL(flattenedBlob);
-                
+
                 // Log the Blob URL for debugging
                 console.log('Flattened PDF Blob URL:', url);
-                
+
                 setFileUrl(url);
-                
+
                 return () => URL.revokeObjectURL(url);
             } catch (error) {
                 console.error('Error processing PDF:', error);
@@ -616,7 +623,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         // This avoids race conditions where a stale zoomLevel from a previous page
         // is applied to the new page before the "fit to screen" logic can run.
         if (contentWidth === 0 || !viewportRef.current || !isFitted) return;
-        
+
         // If we just performed a fit, we need to wait for the zoomLevel prop to match
         // the value we requested. If it's still the old value (from before the page switch),
         // we ignore it to prevent the view from jumping back to the old zoom level.
@@ -1291,7 +1298,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 onDeleteShape(itemId, shapeId);
             } else {
                 updateShapeValue(item, shape, newPoints);
-                
+
                 // Update selected vertex index if needed
                 if (selectedVertex && selectedVertex.itemId === itemId && selectedVertex.shapeId === shapeId) {
                     if (selectedVertex.pointIndex === pointIndex) {
@@ -1441,7 +1448,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     const finalizeNote = (points: Point[]) => {
         const pdfScale = originalPdfWidth > 0 && contentWidth > 0 ? originalPdfWidth / contentWidth : 1;
         const pdfPoints = points.map(p => ({ x: p.x * pdfScale, y: p.y * pdfScale }));
-        
+
         setNoteModal({
             isOpen: true,
             text: '',
@@ -1561,38 +1568,14 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                         <Document
                             file={fileUrl}
                             loading={<div className="p-10">Loading PDF...</div>}
-                            onLoadError={() => {}}
-                        >
-                            <Page
-                                key={localPageIndex}
-                                pageNumber={localPageIndex + 1}
-                                scale={RENDER_SCALE}
-                                renderTextLayer={false}
-                                renderAnnotationLayer={false}
-                                onLoadSuccess={(page) => {
-                                    const viewport = page.getViewport({ scale: RENDER_SCALE });
-                                    setContentWidth(viewport.width);
-                                    setOriginalPdfWidth(viewport.width / RENDER_SCALE);
-                                    setPdfAspectRatio(viewport.height / viewport.width);
-                                    onPageWidthChange(viewport.width / RENDER_SCALE);
-                                    if (onPageLoaded) onPageLoaded();
-                                }}
-                            />
-                        </Document>
-                    ) : (
-                        <div className="flex items-center justify-center h-96 text-slate-400">Upload Blueprint</div>
-                    )}
-                    {fileUrl && (
-                        <Document
-                            file={fileUrl}
-                            loading={<div className="p-10">Loading PDF...</div>}
                             onLoadError={(error) => {
                                 console.error('Error loading PDF:', error);
                                 addToast('Error loading PDF. Please try again.', 'error');
                             }}
                             error={<div className="p-10 text-red-500">Error loading PDF. Please try again.</div>}
-                            onLoadSuccess={() => {
-                                console.log('PDF loaded successfully');
+                            onLoadSuccess={({ numPages }) => {
+                                console.log('PDF loaded successfully. Total pages:', numPages);
+                                setNumPages(numPages);
                             }}
                             onLoadProgress={({ loaded, total }) => {
                                 console.log(`Loading PDF: ${Math.round(loaded / total * 100)}%`);
@@ -1612,6 +1595,8 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                     setPdfAspectRatio(viewport.height / viewport.width);
                                     onPageWidthChange(viewport.width / RENDER_SCALE);
                                     if (onPageLoaded) onPageLoaded();
+                                    // Mark current page as loaded to trigger prefetching
+                                    setIsCurrentPageLoaded(true);
                                 }}
                                 onLoadError={(error) => {
                                     console.error('Error loading page:', error);
@@ -1622,7 +1607,27 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                     addToast('Error rendering page. Please try again.', 'error');
                                 }}
                             />
+
+                            {/* Sequential Prefetching: Only load next page AFTER current page is done */}
+                            {isCurrentPageLoaded && numPages && localPageIndex + 1 < numPages && (
+                                <div style={{ position: 'absolute', left: -10000, top: 0, visibility: 'hidden' }}>
+                                    <Page
+                                        key={`prefetch-${localPageIndex + 1}`}
+                                        pageNumber={localPageIndex + 2}
+                                        scale={RENDER_SCALE}
+                                        renderTextLayer={false}
+                                        renderAnnotationLayer={false}
+                                        loading={null}
+                                        error={null}
+                                    />
+                                </div>
+                            )}
+
                         </Document>
+                    ) : (
+                        <div className="flex items-center justify-center h-96 text-slate-400">
+                            Upload Blueprint
+                        </div>
                     )}
                 </div>
 
