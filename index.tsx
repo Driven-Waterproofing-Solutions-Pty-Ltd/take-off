@@ -3,7 +3,11 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import { ToastProvider } from './contexts/ToastContext';
 import { LicenseProvider } from './contexts/LicenseContext';
+import { suppressConsoleWarnings } from './utils/suppressWarnings';
 import { RouterProvider } from './components/Router';
+
+// Suppress specific PDF.js warnings to prevent performance issues
+suppressConsoleWarnings();
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

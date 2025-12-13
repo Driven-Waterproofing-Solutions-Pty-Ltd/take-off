@@ -34,8 +34,19 @@
       ]
     },
     {
+      "identifier": "fs:allow-remove",
+      "allow": [
+        {
+          "path": "$APPLOCALDATA/protakeoff/pdf_store/*"
+        }
+      ]
+    },
+    {
       "identifier": "fs:allow-exists",
       "allow": [
+        {
+          "path": "$APPLOCALDATA/protakeoff/pdf_store"
+        },
         {
           "path": "$APPLOCALDATA/protakeoff/pdf_store/*"
         }

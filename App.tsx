@@ -623,7 +623,23 @@ const App: React.FC = () => {
   useKeyboardShortcuts({
     undo, redo, setTool: (t) => { setActiveTool(t); if (t === ToolType.SELECT) setActiveTakeoffId(null); },
     toggleDeductionMode: () => { if (activeTakeoffId) setIsDeductionMode(p => !p); },
-    deleteSelectedItem: () => { if (activeTakeoffId) handleDeleteItem(activeTakeoffId); },
+    deleteSelectedItem: () => {
+      if (activeTakeoffId) {
+        // Context-aware delete:
+        // If shapes exist on current page, delete only those (Clear from Page)
+        // If NO shapes on current page, delete the entire item (Delete Item)
+        const item = items.find(i => i.id === activeTakeoffId);
+        if (item) {
+          const shapesOnPage = item.shapes.filter(s => s.pageIndex === pageIndex);
+          if (shapesOnPage.length > 0) {
+            handleDeleteShapes(shapesOnPage.map(s => ({ itemId: item.id, shapeId: s.id })));
+            addToast(`Cleared ${shapesOnPage.length} measurement(s) from this page`, 'info');
+          } else {
+            handleDeleteItem(activeTakeoffId);
+          }
+        }
+      }
+    },
     cancelAction: () => { setActiveTakeoffId(null); setActiveTool(ToolType.SELECT); },
     zoomIn: () => setZoomLevel(z => Math.min(10, z + 0.25)), zoomOut: () => setZoomLevel(z => Math.max(0.1, z - 0.25)),
     saveProject: handleSaveProject, nextPage: () => pageIndex < totalPages - 1 && setPageIndex(p => p + 1),
@@ -669,6 +685,7 @@ const App: React.FC = () => {
         isSaving={isSaving} lastSavedAt={lastSavedAt} activeTool={activeTool} onOpenExportModal={() => setShowExportModal(true)}
         onOpenHelp={() => setShowHelpModal(true)}
         onOpenLicense={() => setShowLicenseModal(true)}
+        onDeleteShapes={handleDeleteShapes}
       />
       <main className="flex-1 relative flex flex-col h-full overflow-hidden">
         {viewMode === 'estimates' ? (

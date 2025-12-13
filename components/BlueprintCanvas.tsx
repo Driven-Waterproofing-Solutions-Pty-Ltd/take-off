@@ -383,7 +383,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 
     // Paste options modal state
     const [showPasteOptions, setShowPasteOptions] = useState(false);
-    
+
     // State to track pending selection after paste
     const [pendingSelection, setPendingSelection] = useState<{ itemId: string, shapeId: string }[] | null>(null);
 
@@ -401,18 +401,18 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         // Check if we have a pending selection to apply after items update
         if (pendingSelection) {
             console.log('[SELECTION EFFECT] Items updated, applying pending selection:', pendingSelection);
-            
+
             // Verify that all selected items exist in the new items array
             const validSelections = pendingSelection.filter(({ itemId, shapeId }) => {
                 const item = items.find(i => i.id === itemId);
                 const exists = item && item.shapes.some(s => s.id === shapeId);
                 return exists;
             });
-            
+
             if (validSelections.length > 0) {
                 console.log('[SELECTION EFFECT] Setting selected items:', validSelections);
                 setSelectedItems(validSelections);
-                
+
                 // If only one item is selected, we can also set selectedShape for backward compatibility
                 // (though rectangular selection logic handles arrays of shapes)
                 if (validSelections.length === 1) {
@@ -429,7 +429,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 const item = items.find(i => i.id === itemId);
                 return item && item.shapes.some(s => s.id === shapeId);
             });
-            
+
             // Only update if some selections became invalid
             if (validSelections.length !== selectedItems.length) {
                 setSelectedItems(validSelections);
@@ -454,6 +454,10 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         if (match) return match.label;
         return "Custom Scale";
     }, [scaleInfo]);
+
+    const shapeRenderScale = useMemo(() => {
+        return (originalPdfWidth > 0 && contentWidth > 0) ? contentWidth / originalPdfWidth : 1;
+    }, [contentWidth, originalPdfWidth]);
 
     // Calculate Focused Shapes (The specific shape selected, plus any relevant children like cutouts)
     const focusedShapeIds = useMemo(() => {
@@ -808,10 +812,11 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 shape.points.forEach(pt => {
                     if (excludePoint && pt.x === excludePoint.x && pt.y === excludePoint.y) return;
 
-                    const d = calculateDistance(cursor, pt);
+                    const scaledPt = { x: pt.x * shapeRenderScale, y: pt.y * shapeRenderScale };
+                    const d = calculateDistance(cursor, scaledPt);
                     if (d < threshold && d < minDist) {
                         minDist = d;
-                        closest = pt;
+                        closest = scaledPt;
                     }
                 });
             });
@@ -824,8 +829,8 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         // Handle entire shape dragging (all points together) - supports multiple shapes
         if (draggedShapes.length > 0 && activeTool === ToolType.SELECT && dragStartPoint.current) {
             const currentPoint = getInternalCoordinates(e.clientX, e.clientY);
-            const dx = currentPoint.x - dragStartPoint.current.x;
-            const dy = currentPoint.y - dragStartPoint.current.y;
+            const dx = (currentPoint.x - dragStartPoint.current.x) / shapeRenderScale;
+            const dy = (currentPoint.y - dragStartPoint.current.y) / shapeRenderScale;
 
             const updates: { itemId: string, shape: Shape }[] = [];
             draggedShapes.forEach(draggedShape => {
@@ -863,7 +868,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 const newPoint = snapped || rawPoint;
 
                 const newPoints = [...shape.points];
-                newPoints[draggedVertex.pointIndex] = newPoint;
+                newPoints[draggedVertex.pointIndex] = { x: newPoint.x / shapeRenderScale, y: newPoint.y / shapeRenderScale };
 
                 updateShapeValue(item, shape, newPoints, true);
             }
@@ -920,10 +925,13 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             items.forEach(item => {
                 if (item.visible === false) return;
 
+                const scaledStart = { x: start.x / shapeRenderScale, y: start.y / shapeRenderScale };
+                const scaledEnd = { x: end.x / shapeRenderScale, y: end.y / shapeRenderScale };
+
                 item.shapes
                     .filter(shape => shape.pageIndex === globalPageIndex)
                     .forEach(shape => {
-                        if (isShapeIntersectingRect(shape, start, end)) {
+                        if (isShapeIntersectingRect(shape, scaledStart, scaledEnd)) {
                             selected.push({ itemId: item.id, shapeId: shape.id });
                         }
                     });
@@ -1149,7 +1157,8 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             setSelectedItems([]);
         }
 
-        const clickPt = getInternalCoordinates(e.clientX, e.clientY);
+        const rawClickPt = getInternalCoordinates(e.clientX, e.clientY);
+        const clickPt = { x: rawClickPt.x / shapeRenderScale, y: rawClickPt.y / shapeRenderScale };
         const item = items.find(i => i.id === itemId);
         const shape = item?.shapes.find(s => s.id === shapeId);
 
@@ -1186,10 +1195,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         });
     };
 
-    const handleExecuteDeletePoint = () => {
-        if (!contextMenu || contextMenu.pointIndex === undefined || !contextMenu.shapeId) return;
-        const { itemId, shapeId, pointIndex } = contextMenu;
-
+    const deletePoint = (itemId: string, shapeId: string, pointIndex: number) => {
         const item = items.find(i => i.id === itemId);
         const shape = item?.shapes.find(s => s.id === shapeId);
 
@@ -1203,6 +1209,13 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 updateShapeValue(item, shape, newPoints);
             }
         }
+    };
+
+    const handleExecuteDeletePoint = () => {
+        if (!contextMenu || contextMenu.pointIndex === undefined || !contextMenu.shapeId) return;
+        const { itemId, shapeId, pointIndex } = contextMenu;
+        deletePoint(itemId, shapeId, pointIndex);
+
         setContextMenu(null);
     };
 
@@ -1492,11 +1505,11 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                     const isSelected = selectedItems.some(s => s.itemId === item.id && s.shapeId === shape.id);
                                     const isFocused = focusedShapeIds.has(shape.id);
                                     const isDimmed = focusedShapeIds.size > 0 && !isFocused;
-                                    
+
                                     const opacity = item.type === ToolType.AREA ? 0.4 : 1;
                                     const strokeColor = isSelected ? '#3b82f6' : item.color;
                                     const strokeWidth = (isSelected ? 4.5 : 3) * visualScaleFactor;
-                                    
+
                                     return (
                                         <Group
                                             key={shape.id}
@@ -1522,7 +1535,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                                     const currentSel = isMulti
                                                         ? (alreadySelected && !e.evt.shiftKey ? selectedItems : [...(alreadySelected ? [] : selectedItems), ...(!alreadySelected ? [{ itemId: item.id, shapeId: shape.id }] : [])])
                                                         : [{ itemId: item.id, shapeId: shape.id }];
-                                                    
+
                                                     // Re-evaluate current selection for dragging if we modified it
                                                     let itemsToDrag = selectedItems;
                                                     if (!isMulti && !alreadySelected) {
@@ -1536,7 +1549,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                                         const s = i?.shapes.find(x => x.id === sel.shapeId);
                                                         return { itemId: sel.itemId, shapeId: sel.shapeId, initialPoints: s ? [...s.points] : [] };
                                                     });
-                                                    
+
                                                     setDraggedShapes(shapesToDrag);
                                                     dragStartPoint.current = getInternalCoordinates(e.evt.clientX, e.evt.clientY);
                                                 }
@@ -1544,11 +1557,11 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                             onContextMenu={(e) => handleShapeContextMenu(e.evt as unknown as React.MouseEvent, item.id, shape.id)}
                                             onMouseEnter={(e) => {
                                                 const container = e.target.getStage()?.container();
-                                                if(container) container.style.cursor = activeTool === ToolType.SELECT ? 'move' : 'crosshair';
+                                                if (container) container.style.cursor = activeTool === ToolType.SELECT ? 'move' : 'crosshair';
                                             }}
                                             onMouseLeave={(e) => {
                                                 const container = e.target.getStage()?.container();
-                                                if(container) container.style.cursor = activeTool === ToolType.SELECT ? 'default' : 'crosshair';
+                                                if (container) container.style.cursor = activeTool === ToolType.SELECT ? 'default' : 'crosshair';
                                             }}
                                         >
                                             {item.type === ToolType.AREA && (
@@ -1556,14 +1569,14 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                                     {shape.deduction ? (
                                                         <>
                                                             <KonvaLine
-                                                                points={shape.points.flatMap(p => [p.x, p.y])}
+                                                                points={shape.points.flatMap(p => [p.x * shapeRenderScale, p.y * shapeRenderScale])}
                                                                 closed={true}
                                                                 fill="black"
                                                                 globalCompositeOperation="destination-out"
                                                                 opacity={1}
                                                             />
                                                             <KonvaLine
-                                                                points={shape.points.flatMap(p => [p.x, p.y])}
+                                                                points={shape.points.flatMap(p => [p.x * shapeRenderScale, p.y * shapeRenderScale])}
                                                                 closed={true}
                                                                 stroke={strokeColor}
                                                                 strokeWidth={strokeWidth}
@@ -1574,7 +1587,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                                         </>
                                                     ) : (
                                                         <KonvaLine
-                                                            points={shape.points.flatMap(p => [p.x, p.y])}
+                                                            points={shape.points.flatMap(p => [p.x * shapeRenderScale, p.y * shapeRenderScale])}
                                                             closed={true}
                                                             fill={item.color}
                                                             opacity={opacity}
@@ -1586,7 +1599,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                             )}
                                             {(item.type === ToolType.LINEAR || item.type === ToolType.SEGMENT || item.type === ToolType.DIMENSION) && (
                                                 <KonvaLine
-                                                    points={shape.points.flatMap(p => [p.x, p.y])}
+                                                    points={shape.points.flatMap(p => [p.x * shapeRenderScale, p.y * shapeRenderScale])}
                                                     stroke={strokeColor}
                                                     strokeWidth={strokeWidth}
                                                     opacity={opacity}
@@ -1597,8 +1610,8 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                             {item.type === ToolType.COUNT && shape.points.map((p, i) => (
                                                 <Circle
                                                     key={i}
-                                                    x={p.x}
-                                                    y={p.y}
+                                                    x={p.x * shapeRenderScale}
+                                                    y={p.y * shapeRenderScale}
                                                     radius={6 * visualScaleFactor}
                                                     fill={item.color}
                                                     stroke="white"
@@ -1606,12 +1619,12 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                                     opacity={opacity}
                                                 />
                                             ))}
-                                            
+
                                             {item.type === ToolType.NOTE && shape.points.length > 0 && (
                                                 <>
                                                     {shape.points.length > 1 && (
                                                         <Arrow
-                                                            points={[shape.points[1].x, shape.points[1].y, shape.points[0].x, shape.points[0].y]}
+                                                            points={[shape.points[1].x * shapeRenderScale, shape.points[1].y * shapeRenderScale, shape.points[0].x * shapeRenderScale, shape.points[0].y * shapeRenderScale]}
                                                             stroke={item.color}
                                                             fill={item.color}
                                                             strokeWidth={2 * visualScaleFactor}
@@ -1621,8 +1634,8 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                                         />
                                                     )}
                                                     <Label
-                                                        x={shape.points[shape.points.length > 1 ? 1 : 0].x}
-                                                        y={shape.points[shape.points.length > 1 ? 1 : 0].y}
+                                                        x={shape.points[shape.points.length > 1 ? 1 : 0].x * shapeRenderScale}
+                                                        y={shape.points[shape.points.length > 1 ? 1 : 0].y * shapeRenderScale}
                                                         scale={{ x: visualScaleFactor, y: visualScaleFactor }}
                                                     >
                                                         <Tag fill="white" stroke={item.color} strokeWidth={1} cornerRadius={4} opacity={0.9} />
@@ -1633,8 +1646,8 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 
                                             {item.type === ToolType.DIMENSION && shape.points.length > 1 && (
                                                 <Label
-                                                    x={(shape.points[0].x + shape.points[1].x) / 2}
-                                                    y={(shape.points[0].y + shape.points[1].y) / 2}
+                                                    x={(shape.points[0].x * shapeRenderScale + shape.points[1].x * shapeRenderScale) / 2}
+                                                    y={(shape.points[0].y * shapeRenderScale + shape.points[1].y * shapeRenderScale) / 2}
                                                     scale={{ x: visualScaleFactor, y: visualScaleFactor }}
                                                 >
                                                     <Tag fill="white" stroke={item.color} cornerRadius={2} opacity={0.8} />
@@ -1650,8 +1663,8 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                             {isSelected && activeTool === ToolType.SELECT && shape.points.map((p, i) => (
                                                 <Circle
                                                     key={`handle-${i}`}
-                                                    x={p.x}
-                                                    y={p.y}
+                                                    x={p.x * shapeRenderScale}
+                                                    y={p.y * shapeRenderScale}
                                                     radius={5 * visualScaleFactor}
                                                     fill="white"
                                                     stroke="#3b82f6"
@@ -1663,8 +1676,11 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                                     }}
                                                     onDragEnd={() => setDraggedVertex(null)}
                                                     onMouseDown={(e) => {
-                                                        e.cancelBubble = true;
                                                         if (e.evt.button === 2) handlePointContextMenu(e.evt as unknown as React.MouseEvent, item.id, shape.id, i);
+                                                    }}
+                                                    onDblClick={(e) => {
+                                                        e.cancelBubble = true;
+                                                        deletePoint(item.id, shape.id, i);
                                                     }}
                                                 />
                                             ))}
@@ -1697,7 +1713,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                     strokeWidth={2 * visualScaleFactor}
                                 />
                             )}
-                            
+
                             {getLiveLabel()}
 
                             {selectionRect && selectionRect.active && (

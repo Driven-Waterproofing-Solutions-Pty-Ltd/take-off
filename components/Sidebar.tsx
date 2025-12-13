@@ -28,6 +28,7 @@ interface SidebarProps {
     onEditItem: (item: TakeoffItem) => void;
     onRenameItem: (itemId: string, newName: string) => void;
     onMoveShapesToItem?: (shapesToMove: { itemId: string, shapeId: string }[], targetItemId: string) => void;
+    onDeleteShapes?: (shapesToDelete: { itemId: string, shapeId: string }[]) => void;
 
     // Project Actions
     projectName: string;
@@ -62,6 +63,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     onEditItem,
     onRenameItem,
     onMoveShapesToItem,
+    onDeleteShapes,
     projectName,
     onNewProject,
     onSaveProject,
@@ -521,6 +523,25 @@ const Sidebar: React.FC<SidebarProps> = ({
                             className="px-3 py-2 text-left hover:bg-red-50 flex items-center gap-2 text-red-600"
                         >
                             <Trash2 size={14} /> Delete Item
+                        </button>
+
+                        {/* New "Clear from Page" option */}
+                        <div className="border-t border-slate-100 my-1"></div>
+                        <button
+                            onClick={() => {
+                                const shapesOnPage = contextMenu.item.shapes
+                                    .filter(s => s.pageIndex === pageIndex)
+                                    .map(s => ({ itemId: contextMenu.item.id, shapeId: s.id }));
+
+                                if (shapesOnPage.length > 0 && onDeleteShapes) {
+                                    onDeleteShapes(shapesOnPage);
+                                }
+                                setContextMenu(null);
+                            }}
+                            className={`px-3 py-2 text-left flex items-center gap-2 ${contextMenu.item.shapes.some(s => s.pageIndex === pageIndex) ? 'hover:bg-red-50 text-red-600' : 'text-slate-300 cursor-not-allowed'}`}
+                            disabled={!contextMenu.item.shapes.some(s => s.pageIndex === pageIndex)}
+                        >
+                            <Trash2 size={14} /> Clear from Page
                         </button>
                     </div>
                 </>
