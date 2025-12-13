@@ -1,10 +1,11 @@
+import './mupdfConfig'; // MUST be the first import to configure WASM path before MuPDF loads
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import { ToastProvider } from './contexts/ToastContext';
 import { LicenseProvider } from './contexts/LicenseContext';
 import { suppressConsoleWarnings } from './utils/suppressWarnings';
-import './utils/pdfWorker';
 import { RouterProvider } from './components/Router';
 
 // Suppress specific PDF.js warnings to prevent performance issues

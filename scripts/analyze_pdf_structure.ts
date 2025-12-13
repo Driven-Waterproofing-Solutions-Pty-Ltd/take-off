@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 
 async function analyzePdf() {
-    const filePath = path.resolve('public/2pageshard.pdf');
+    const filePath = path.resolve('public/02-MA NY ALT 2 INTERIOR DESIGN.pdf');
     console.log(`Analyzing: ${filePath}`);
 
     const buffer = fs.readFileSync(filePath);

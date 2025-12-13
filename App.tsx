@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
+
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
-import { pdfjs } from 'react-pdf';
+// import { pdfjs } from 'react-pdf'; // Removed for MuPDF implementation
 import Sidebar from './components/Sidebar';
 import BlueprintCanvas, { BlueprintCanvasRef } from './components/BlueprintCanvas';
 import Tools from './components/Tools';
@@ -23,6 +24,8 @@ import { useProjectManager } from './hooks/useProjectManager';
 import { useLicense } from './contexts/LicenseContext';
 import { useViewRouter } from './components/Router';
 import { savePlanFile } from './utils/storage';
+import { flattenOCG } from './utils/flattenOCG';
+import { mupdfController } from './utils/mupdfController';
 
 const App: React.FC = () => {
   const { addToast } = useToast();
@@ -105,7 +108,7 @@ const App: React.FC = () => {
       // This happens when switching pages while shapes are selected
       if (validSelectedShapes.length !== selectedShapes.length) {
         setSelectedShapes(validSelectedShapes);
-        
+
         // Note: We deliberately DO NOT clear activeTakeoffId here.
         // We want to persist the "Active Recording Item" across pages so the user
         // can continue measuring the same item on the new page.
@@ -152,7 +155,7 @@ const App: React.FC = () => {
         } else if (set.pages && set.pages.length <= localIdx) {
           pdfPageIndex = localIdx;
         }
-        return { file: set.file, localPageIndex: pdfPageIndex, name: set.name };
+        return { file: set.file, localPageIndex: pdfPageIndex, name: set.name, id: set.id };
       }
     }
     return null;
@@ -161,7 +164,8 @@ const App: React.FC = () => {
   const handleUpload = async (files: File[], names: string[]) => {
     setShowUploadModal(false);
     setIsUploadingPdf(true);
-    setUploadLoadingMessage("Uploading PDF Plans...");
+    setIsUploadingPdf(true);
+    setUploadLoadingMessage("Optimizing PDF Plans (this may take a moment)...");
     try {
       let newPlanSets = [...planSets];
       let currentTotalPages = totalPages;
@@ -175,18 +179,32 @@ const App: React.FC = () => {
         const buffer = await fileCopy.arrayBuffer();
         const bufferCopy = buffer.slice(0);
 
-        const pdf = await pdfjs.getDocument(bufferCopy).promise;
-        const numPages = pdf.numPages;
+        // Flatten OCGs for performance
+        let finalBuffer = bufferCopy;
+        try {
+          const flattened = await flattenOCG(new Uint8Array(bufferCopy));
+          finalBuffer = flattened.buffer as ArrayBuffer;
+        } catch (e) {
+          console.warn(`Failed to flatten ${name}, using original`, e);
+        }
+
+        // const pdf = await pdfjs.getDocument(finalBuffer.slice(0) as ArrayBuffer).promise;
+        const numPages = await mupdfController.countPagesTransient(new Uint8Array(finalBuffer));
+
+        // Re-create file from flattened buffer
+        // Use Uint8Array view for Blob to avoid ArrayBuffer/SharedArrayBuffer mismatch
+        const flattenedBlob = new Blob([new Uint8Array(finalBuffer)], { type: 'application/pdf' });
+        const flattenedFile = new File([flattenedBlob], file.name, { type: 'application/pdf', lastModified: Date.now() });
 
         const newPlanSet: PlanSet = {
           id: crypto.randomUUID(),
-          file: fileCopy,
+          file: flattenedFile,
           name,
           pageCount: numPages,
           startPageIndex: currentTotalPages,
           pages: Array.from({ length: numPages }, (_, i) => i)
         };
-        await savePlanFile(newPlanSet.id, fileCopy);
+        await savePlanFile(newPlanSet.id, flattenedFile);
         newPlanSets.push(newPlanSet);
         currentTotalPages += numPages;
       }
@@ -706,6 +724,7 @@ const App: React.FC = () => {
               key={pageIndex}
               ref={canvasRef}
               file={activePlan?.file || null}
+              fileId={activePlan?.id || ''}
               localPageIndex={activePlan?.localPageIndex || 0}
               globalPageIndex={pageIndex}
               onPageWidthChange={() => { }} activeTool={activeTool} items={items} activeTakeoffId={activeTakeoffId} isDeductionMode={isDeductionMode}

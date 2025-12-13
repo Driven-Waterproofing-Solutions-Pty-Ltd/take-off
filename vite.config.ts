@@ -16,5 +16,18 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, '.'),
     }
+  },
+  build: {
+    target: "esnext"
+  },
+  esbuild: {
+    supported: {
+      'top-level-await': true //browsers can handle top-level-await features
+    },
+  },
+  optimizeDeps: {
+    esbuildOptions: {
+      target: "esnext",
+    }
   }
 });

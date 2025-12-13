@@ -1,17 +1,18 @@
 import React, { useState, useRef, useEffect, useImperativeHandle, forwardRef, useMemo } from 'react';
 import { Stage, Layer, Rect, Circle, Line as KonvaLine, Path, Group, Label, Tag, Text as KonvaText, Arrow } from 'react-konva';
 import Konva from 'konva';
-import { Document, Page, pdfjs } from 'react-pdf';
+// import { Document, Page, pdfjs } from 'react-pdf'; // Removed for MuPDF
 import { Point, ToolType, TakeoffItem, Shape, Unit, LegendSettings } from '../types';
 import { calculateDistance, calculatePolylineLength, calculatePolygonArea, getScaledValue, getScaledArea, parseDimensionInput, PresetScale, isPointInPolygon, PRESET_SCALES } from '../utils/geometry';
 import { AlertCircle, Trash2, Scissors, Plus, Eraser, MessageSquare, Ruler, Edit2 } from 'lucide-react';
-import '../utils/pdfWorker';
+// import '../utils/pdfWorker'; // Removed for MuPDF
 import { useToast } from '../contexts/ToastContext';
 import DraggableLegend from './DraggableLegend';
 import NoteInputModal from './NoteInputModal';
 import PasteOptionsModal from './PasteOptionsModal';
 import ChangeItemModal from './ChangeItemModal';
-import { flattenOCG } from '../utils/flattenOCG';
+import { getPageImage, savePageImage } from '../utils/pdfCache';
+import { mupdfController } from '../utils/mupdfController';
 
 // Removed html2canvas import as we now use pdf-lib for vector export
 
@@ -21,6 +22,7 @@ export interface BlueprintCanvasRef {
 
 interface BlueprintCanvasProps {
     file: File | null;
+    fileId: string;
     localPageIndex: number;  // The index within the specific file (0-based)
     globalPageIndex: number; // The project-wide index (for saving shapes)
     onPageWidthChange: (width: number) => void;
@@ -297,6 +299,7 @@ const getPasteAsNewItemsPayload = (
 
 const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     file,
+    fileId,
     localPageIndex,
     globalPageIndex,
     onPageWidthChange,
@@ -342,6 +345,9 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     const [fileUrl, setFileUrl] = useState<string | null>(null);
     const [numPages, setNumPages] = useState<number | null>(null);
     const [isCurrentPageLoaded, setIsCurrentPageLoaded] = useState(false);
+    const [backgroundImage, setBackgroundImage] = useState<string | null>(null);
+    const [muPdfLoaded, setMuPdfLoaded] = useState(false);
+    const vectorCanvasRef = useRef<HTMLCanvasElement>(null);
 
     // Reset loaded state when page changes so we prioritize the new page
     useEffect(() => {
@@ -519,68 +525,114 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             return;
         }
 
-        // If it's already a URL string (unlikely given types but possible), use it
         if (typeof file === 'string') {
             setFileUrl(file);
             return;
         }
+        const url = URL.createObjectURL(file);
+        setFileUrl(url);
+        return () => URL.revokeObjectURL(url);
+    }, [file]);
 
-        const processFile = async () => {
-            try {
-                // Read the file as an ArrayBuffer
-                const arrayBuffer = await file.arrayBuffer();
-                const uint8Array = new Uint8Array(arrayBuffer);
+    // Handle Image Caching (Sophisticated Memory)
+    useEffect(() => {
+        setBackgroundImage(null);
+        if (!fileId) return;
 
-                // Log the original PDF size for debugging
-                console.log('Original PDF size:', arrayBuffer.byteLength, 'bytes');
+        let active = true;
 
-                // Flatten OCG layers to improve rendering performance
-                const flattenedPdfBytes = await flattenOCG(uint8Array);
-
-                // Log the flattened PDF size for debugging
-                console.log('Flattened PDF size:', flattenedPdfBytes.byteLength, 'bytes');
-
-                // Check if the flattened PDF is valid by checking its header
-                const isValidPdf = flattenedPdfBytes.byteLength > 0 &&
-                    flattenedPdfBytes[0] === 0x25 &&
-                    flattenedPdfBytes[1] === 0x50 &&
-                    flattenedPdfBytes[2] === 0x44 &&
-                    flattenedPdfBytes[3] === 0x46;
-
-                if (!isValidPdf) {
-                    console.error('Flattened PDF is not valid. Falling back to original PDF.');
-                    // Fallback to original file if the flattened PDF is not valid
-                    const url = URL.createObjectURL(file);
-                    setFileUrl(url);
-                    return () => URL.revokeObjectURL(url);
-                }
-
-                // Create a Blob from the flattened PDF
-                const flattenedBlob = new Blob([flattenedPdfBytes as BlobPart], { type: 'application/pdf' });
-                const url = URL.createObjectURL(flattenedBlob);
-
-                // Log the Blob URL for debugging
-                console.log('Flattened PDF Blob URL:', url);
-
-                setFileUrl(url);
-
-                return () => URL.revokeObjectURL(url);
-            } catch (error) {
-                console.error('Error processing PDF:', error);
-                // Fallback to original file if processing fails
-                try {
-                    const url = URL.createObjectURL(file);
-                    setFileUrl(url);
-                    return () => URL.revokeObjectURL(url);
-                } catch (fallbackError) {
-                    console.error('Error creating fallback URL:', fallbackError);
-                    setFileUrl(null);
-                }
+        const loadCachedImage = async () => {
+            const blob = await getPageImage(fileId, localPageIndex);
+            if (blob && active) {
+                const url = URL.createObjectURL(blob);
+                setBackgroundImage(url);
             }
         };
 
-        processFile();
+        loadCachedImage();
+
+        return () => { active = false; };
+    }, [fileId, localPageIndex]);
+
+    // Render page to cache if missing (Background)
+    useEffect(() => {
+        if (!isCurrentPageLoaded || !fileId || !muPdfLoaded) return;
+
+        // Check if we already have it
+        getPageImage(fileId, localPageIndex).then(existing => {
+            if (!existing) {
+                // Render in background using MuPDF
+                const renderAndSave = async () => {
+                    try {
+                        // Create a temporary canvas
+                        const canvas = document.createElement('canvas');
+                        // Use the controller to render (scale 2.0 for high res cache)
+                        await mupdfController.renderPageToCanvas(localPageIndex, canvas, 2.0);
+
+                        canvas.toBlob(async (blob) => {
+                            if (blob) {
+                                await savePageImage(fileId, localPageIndex, blob);
+                            }
+                        }, 'image/png');
+                    } catch (e) {
+                        console.warn("Background cache render failed", e);
+                    }
+                };
+                renderAndSave();
+            }
+        });
+    }, [isCurrentPageLoaded, fileId, localPageIndex, muPdfLoaded]);
+
+    // MU-PDF INTEGRATION
+
+    // Load Document into MuPDF
+    useEffect(() => {
+        if (!file) return;
+
+        const loadDoc = async () => {
+            try {
+                const buffer = await file.arrayBuffer();
+                const pageCount = await mupdfController.loadDocument(new Uint8Array(buffer));
+                setNumPages(pageCount);
+                setMuPdfLoaded(true);
+                console.log("MuPDF loaded document, pages:", pageCount);
+
+                // Get dimensions of first page to set content width
+                const dims = mupdfController.getPageDimensions(0);
+                const initialWidth = dims.width * RENDER_SCALE; // Render at high res
+
+                setContentWidth(initialWidth);
+                setOriginalPdfWidth(dims.width);
+                setPdfAspectRatio(dims.height / dims.width);
+                onPageWidthChange(dims.width);
+
+                if (onPageLoaded) onPageLoaded();
+                setIsCurrentPageLoaded(true); // Mark as ready
+
+            } catch (e) {
+                console.error("MuPDF Load Error", e);
+                addToast("Failed to load PDF with MuPDF engine", "error");
+            }
+        };
+        loadDoc();
+
+        return () => { setMuPdfLoaded(false); };
     }, [file]);
+
+    // Render Page with MuPDF
+    useEffect(() => {
+        if (!muPdfLoaded || !vectorCanvasRef.current) return;
+
+        const render = async () => {
+            try {
+                // Render at our fixed internal high-res scale
+                await mupdfController.renderPageToCanvas(localPageIndex, vectorCanvasRef.current, RENDER_SCALE);
+            } catch (e) {
+                console.error("MuPDF Render Error", e);
+            }
+        };
+        render();
+    }, [muPdfLoaded, localPageIndex]);
 
     // Handle Initial Fit-to-Screen
     useEffect(() => {
@@ -1564,69 +1616,28 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                     className="absolute top-0 left-0 origin-top-left will-change-transform shadow-xl bg-white"
                     style={{ width: contentWidth, height: pdfAspectRatio ? contentWidth * pdfAspectRatio : 'auto' }}
                 >
-                    {fileUrl ? (
-                        <Document
-                            file={fileUrl}
-                            loading={<div className="p-10">Loading PDF...</div>}
-                            onLoadError={(error) => {
-                                console.error('Error loading PDF:', error);
-                                addToast('Error loading PDF. Please try again.', 'error');
-                            }}
-                            error={<div className="p-10 text-red-500">Error loading PDF. Please try again.</div>}
-                            onLoadSuccess={({ numPages }) => {
-                                console.log('PDF loaded successfully. Total pages:', numPages);
-                                setNumPages(numPages);
-                            }}
-                            onLoadProgress={({ loaded, total }) => {
-                                console.log(`Loading PDF: ${Math.round(loaded / total * 100)}%`);
-                            }}
-                        >
-                            <Page
-                                key={localPageIndex}
-                                pageNumber={localPageIndex + 1}
-                                scale={RENDER_SCALE}
-                                renderTextLayer={false}
-                                renderAnnotationLayer={false}
-                                onLoadSuccess={(page) => {
-                                    console.log('Page loaded successfully:', page.pageNumber);
-                                    const viewport = page.getViewport({ scale: RENDER_SCALE });
-                                    setContentWidth(viewport.width);
-                                    setOriginalPdfWidth(viewport.width / RENDER_SCALE);
-                                    setPdfAspectRatio(viewport.height / viewport.width);
-                                    onPageWidthChange(viewport.width / RENDER_SCALE);
-                                    if (onPageLoaded) onPageLoaded();
-                                    // Mark current page as loaded to trigger prefetching
-                                    setIsCurrentPageLoaded(true);
-                                }}
-                                onLoadError={(error) => {
-                                    console.error('Error loading page:', error);
-                                    addToast('Error loading page. Please try again.', 'error');
-                                }}
-                                onRenderError={(error) => {
-                                    console.error('Error rendering page:', error);
-                                    addToast('Error rendering page. Please try again.', 'error');
-                                }}
-                            />
+                    {/* Cached Image Layer (Low Res / Immediate) */}
+                    {backgroundImage && (
+                        <img
+                            src={backgroundImage}
+                            style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, objectFit: 'contain' }}
+                            alt="Cached Page"
+                        />
+                    )}
 
-                            {/* Sequential Prefetching: Only load next page AFTER current page is done */}
-                            {isCurrentPageLoaded && numPages && localPageIndex + 1 < numPages && (
-                                <div style={{ position: 'absolute', left: -10000, top: 0, visibility: 'hidden' }}>
-                                    <Page
-                                        key={`prefetch-${localPageIndex + 1}`}
-                                        pageNumber={localPageIndex + 2}
-                                        scale={RENDER_SCALE}
-                                        renderTextLayer={false}
-                                        renderAnnotationLayer={false}
-                                        loading={null}
-                                        error={null}
-                                    />
-                                </div>
-                            )}
-
-                        </Document>
+                    {/* MuPDF Vector Render Layer (High Performance) */}
+                    {muPdfLoaded ? (
+                        <canvas
+                            ref={vectorCanvasRef}
+                            style={{
+                                display: 'block',
+                                width: '100%',
+                                height: '100%'
+                            }}
+                        />
                     ) : (
-                        <div className="flex items-center justify-center h-96 text-slate-400">
-                            Upload Blueprint
+                        <div className="flex items-center justify-center h-full">
+                            {file ? "Loading MuPDF Engine..." : "Upload Blueprint"}
                         </div>
                     )}
                 </div>

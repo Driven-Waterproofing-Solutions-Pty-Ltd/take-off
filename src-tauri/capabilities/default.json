@@ -19,6 +19,9 @@
       "allow": [
         {
           "path": "$APPLOCALDATA/protakeoff/pdf_store/*"
+        },
+        {
+          "path": "$APPLOCALDATA/protakeoff/pdf_store/cache/*"
         }
       ]
     },
@@ -30,6 +33,9 @@
         },
         {
           "path": "$APPLOCALDATA/protakeoff/pdf_store/*"
+        },
+        {
+          "path": "$APPLOCALDATA/protakeoff/pdf_store/cache/*"
         }
       ]
     },
@@ -38,6 +44,9 @@
       "allow": [
         {
           "path": "$APPLOCALDATA/protakeoff/pdf_store/*"
+        },
+        {
+          "path": "$APPLOCALDATA/protakeoff/pdf_store/cache/*"
         }
       ]
     },
@@ -49,6 +58,12 @@
         },
         {
           "path": "$APPLOCALDATA/protakeoff/pdf_store/*"
+        },
+        {
+          "path": "$APPLOCALDATA/protakeoff/pdf_store/cache"
+        },
+        {
+          "path": "$APPLOCALDATA/protakeoff/pdf_store/cache/*"
         }
       ]
     },
@@ -60,6 +75,9 @@
         },
         {
           "path": "$APPLOCALDATA/protakeoff"
+        },
+        {
+          "path": "$APPLOCALDATA/protakeoff/pdf_store/cache"
         }
       ]
     },
