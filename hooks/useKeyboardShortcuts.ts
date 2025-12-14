@@ -19,6 +19,7 @@ interface UseKeyboardShortcutsProps {
     finishShape: () => void;
     copyItem: () => void;
     pasteItem: () => void;
+    openSearch?: () => void;
 }
 
 export const useKeyboardShortcuts = ({
@@ -39,6 +40,7 @@ export const useKeyboardShortcuts = ({
     finishShape,
     copyItem,
     pasteItem,
+    openSearch,
 }: UseKeyboardShortcutsProps) => {
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
@@ -94,6 +96,13 @@ export const useKeyboardShortcuts = ({
             if (isCtrlOrCmd && key === 'v') {
                 event.preventDefault();
                 pasteItem();
+                return;
+            }
+
+            // Search in PDF (Cmd+F / Ctrl+F)
+            if (isCtrlOrCmd && key === 'f') {
+                event.preventDefault();
+                openSearch?.();
                 return;
             }
 
@@ -191,6 +200,6 @@ export const useKeyboardShortcuts = ({
     }, [
         undo, redo, setTool, toggleDeductionMode, deleteSelectedItem, cancelAction,
         zoomIn, zoomOut, saveProject, nextPage, prevPage, zoomToFit,
-        toggleRecord, toggleViewMode, finishShape, copyItem, pasteItem
+        toggleRecord, toggleViewMode, finishShape, copyItem, pasteItem, openSearch
     ]);
 };

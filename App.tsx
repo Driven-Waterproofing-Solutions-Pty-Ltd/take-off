@@ -15,6 +15,7 @@ import PromptModal from './components/PromptModal';
 import ExportModal from './components/ExportModal';
 import ConfirmModal from './components/ConfirmModal';
 import EstimatesView from './components/EstimatesView';
+import PDFSearch from './components/PDFSearch';
 import { ToolType, ProjectData, TakeoffItem, Shape, Unit, PlanSet, LegendSettings } from './types';
 import { PresetScale, getAreaUnitFromLinear, isPointInPolygon } from './utils/geometry';
 import { useToast } from './contexts/ToastContext';
@@ -89,6 +90,9 @@ const AppContent: React.FC = () => {
   const [showExportModal, setShowExportModal] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState({ current: 0, total: 0 });
+
+  // PDF Search state
+  const [showPDFSearch, setShowPDFSearch] = useState(false);
 
   const [isUploadingPdf, setIsUploadingPdf] = useState(false);
   const [uploadLoadingMessage, setUploadLoadingMessage] = useState("Uploading PDF Plans...");
@@ -751,7 +755,8 @@ const AppContent: React.FC = () => {
     saveProject: handleSaveProject, nextPage: () => pageIndex < totalPages - 1 && setPageIndex(p => p + 1),
     prevPage: () => pageIndex > 0 && setPageIndex(p => p - 1), zoomToFit: () => setZoomLevel(1.0),
     toggleRecord: () => activeTakeoffId && handleStopTakeoff(), toggleViewMode: () => setViewMode(viewMode === 'canvas' ? 'estimates' : 'canvas'),
-    finishShape: () => activeTakeoffId && handleStopTakeoff(), copyItem: () => { }, pasteItem: () => { }
+    finishShape: () => activeTakeoffId && handleStopTakeoff(), copyItem: () => { }, pasteItem: () => { },
+    openSearch: () => setShowPDFSearch(prev => !prev)
   });
 
   if (isInitializing || isUploadingPdf) {
@@ -804,7 +809,9 @@ const AppContent: React.FC = () => {
                 onInitiateTool={handleInitiateTool} scale={zoomLevel} setScale={setZoomLevel} onSetPresetScale={setPendingPreset}
                 isRecording={!!activeTakeoffId && activeTool !== ToolType.SELECT} onUndo={undo} onRedo={redo} canUndo={canUndo} canRedo={canRedo}
                 isLegendVisible={currentLegend.visible ?? true} onToggleLegend={() => handleUpdateLegend({ visible: !(currentLegend.visible ?? true) })}
-                isPageScaled={currentScale.isSet} />
+                isPageScaled={currentScale.isSet}
+                onOpenSearch={() => setShowPDFSearch(prev => !prev)}
+                isSearchOpen={showPDFSearch} />
             )}
             <BlueprintCanvas
               key={pageIndex}
@@ -823,6 +830,12 @@ const AppContent: React.FC = () => {
               onStopRecording={handleStopTakeoff} onInteractionEnd={commitHistory}
               scaleInfo={{ isSet: currentScale.isSet, ppu: currentScale.pixelsPerUnit, unit: currentScale.unit }}
               zoomLevel={zoomLevel} setZoomLevel={setZoomLevel} pendingPreset={pendingPreset} clearPendingPreset={() => setPendingPreset(null)} />
+            <PDFSearch
+              isOpen={showPDFSearch}
+              onClose={() => setShowPDFSearch(false)}
+              onNavigateToPage={setPageIndex}
+              currentPageIndex={pageIndex}
+            />
           </>
         )}
       </main>

@@ -29,6 +29,11 @@ export default defineConfig({
   optimizeDeps: {
     esbuildOptions: {
       target: "esnext",
-    }
-  }
+    },
+    exclude: ['mupdf'] // Don't pre-bundle mupdf (WASM module)
+  },
+  worker: {
+    format: 'es', // Use ES modules for workers
+  },
+  assetsInclude: ['**/*.wasm'] // Treat WASM as assets
 });

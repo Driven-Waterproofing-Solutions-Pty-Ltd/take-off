@@ -647,6 +647,19 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         render();
     }, [muPdfLoaded, localPageIndex]);
 
+    // Pre-cache adjacent pages for instant navigation
+    useEffect(() => {
+        if (!isCurrentPageLoaded || !muPdfLoaded || numPages === null) return;
+
+        // Pre-load DisplayLists for adjacent pages (runs async, doesn't block UI)
+        const pagesToPreload = [localPageIndex - 1, localPageIndex + 1]
+            .filter(i => i >= 0 && i < numPages);
+
+        pagesToPreload.forEach(pageIdx => {
+            mupdfController.preloadPage(pageIdx);
+        });
+    }, [isCurrentPageLoaded, localPageIndex, numPages, muPdfLoaded]);
+
     // Handle Initial Fit-to-Screen
     useEffect(() => {
         if (!viewportRef.current) {

@@ -104,7 +104,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     const [sourceItemIdForChange, setSourceItemIdForChange] = useState<string | null>(null);
 
     // Sidebar Resizing State
-    const [sidebarWidth, setSidebarWidth] = useState<number>(310);
+    const [sidebarWidth, setSidebarWidth] = useState<number>(360);
     const [isResizing, setIsResizing] = useState(false);
     const dragStartX = useRef(0);
     const dragStartWidth = useRef(280);
@@ -116,17 +116,17 @@ const Sidebar: React.FC<SidebarProps> = ({
         const savedWidth = localStorage.getItem('sidebarWidth');
         if (savedWidth) {
             const width = parseInt(savedWidth, 10);
-            if (!isNaN(width) && width >= 310 && width <= 600) {
+            if (!isNaN(width) && width >= 370 && width <= 600) {
                 setSidebarWidth(width);
                 dragStartWidth.current = width;
-            } else if (!isNaN(width) && width < 310) {
+            } else if (!isNaN(width) && width < 370) {
                 // Enforce min width if saved value is too small
-                setSidebarWidth(310);
-                dragStartWidth.current = 310;
+                setSidebarWidth(360);
+                dragStartWidth.current = 370;
             }
         } else {
             // Default if nothing saved, ensure we start > min
-            setSidebarWidth(310);
+            setSidebarWidth(370);
         }
     }, []);
 
@@ -151,7 +151,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             const delta = e.clientX - dragStartX.current;
             const newWidth = dragStartWidth.current + delta;
             // Clamp width between min and max
-            const clamped = Math.max(310, Math.min(500, newWidth));
+            const clamped = Math.max(370, Math.min(500, newWidth));
             setSidebarWidth(clamped);
         };
 
@@ -256,15 +256,15 @@ const Sidebar: React.FC<SidebarProps> = ({
 
     // Safety check to strictly enforce min width
     useEffect(() => {
-        if (sidebarWidth < 310) {
-            setSidebarWidth(310);
+        if (sidebarWidth < 360) {
+            setSidebarWidth(370);
         }
     }, [sidebarWidth]);
 
     return (
         <div
-            className="bg-background border-r border-border flex flex-col h-full z-20 flex-shrink-0 relative font-sans text-sm shadow-xl shadow-black/5 min-w-[310px]"
-            style={{ width: `${sidebarWidth}px`, minWidth: '310px' }}
+            className="bg-background border-r border-border flex flex-col h-full z-20 flex-shrink-0 relative font-sans text-sm shadow-xl shadow-black/5 min-w-[370px]"
+            style={{ width: `${sidebarWidth}px`, minWidth: '370px' }}
         >
             {/* Resize handle */}
             <div
@@ -497,7 +497,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                                                             className="h-5 text-xs py-0 px-1"
                                                                         />
                                                                     ) : (
-                                                                        <span className={`text-xs truncate flex-1 ${isHighlighted ? 'text-foreground font-medium' : ''}`}>
+                                                                        <span className={`text-xs truncate flex-1 ${isHighlighted ? 'text-foreground font-medium' : ''}`} style={{ maxWidth: '200px' }}>
                                                                             {item.label}
                                                                         </span>
                                                                     )}

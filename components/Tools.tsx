@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { MousePointer2, Ruler, Spline, Scan, Hash, ZoomIn, ZoomOut, ChevronDown, Activity, Undo, Redo, ArrowLeftRight, MessageSquare, Type, VectorSquare, Waypoints, RulerDimensionLine, List } from 'lucide-react';
+import { MousePointer2, Ruler, Spline, Scan, Hash, ZoomIn, ZoomOut, ChevronDown, Activity, Undo, Redo, ArrowLeftRight, MessageSquare, Type, VectorSquare, Waypoints, RulerDimensionLine, List, Search } from 'lucide-react';
 import { ToolType } from '../types';
 import { PRESET_SCALES, PresetScale } from '../utils/geometry';
 import { Button } from "@/components/ui/button";
@@ -36,6 +36,9 @@ interface ToolsProps {
   isLegendVisible?: boolean;
   onToggleLegend?: () => void;
   isPageScaled: boolean;
+  // PDF features
+  onOpenSearch?: () => void;
+  isSearchOpen?: boolean;
 }
 
 const Tools: React.FC<ToolsProps> = ({
@@ -52,7 +55,9 @@ const Tools: React.FC<ToolsProps> = ({
   canRedo,
   isLegendVisible,
   onToggleLegend,
-  isPageScaled
+  isPageScaled,
+  onOpenSearch,
+  isSearchOpen,
 }) => {
   const displayScale = Math.round(scale * 100);
 
@@ -261,6 +266,24 @@ const Tools: React.FC<ToolsProps> = ({
                 <TooltipContent>{isLegendVisible ? "Hide Legend" : "Show Legend"}</TooltipContent>
               </Tooltip>
             )}
+
+            {onOpenSearch && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={isSearchOpen ? "default" : "ghost"}
+                    size="icon"
+                    onClick={onOpenSearch}
+                    className="h-9 w-9"
+                  >
+                    <Search size={18} strokeWidth={2} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Search in PDF (Ctrl+F)</TooltipContent>
+              </Tooltip>
+            )}
+
+            <Separator orientation="vertical" className="h-6 mx-1" />
 
             <Tooltip>
               <TooltipTrigger asChild>
