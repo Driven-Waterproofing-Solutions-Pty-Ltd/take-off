@@ -1,6 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom';
-import { X, Keyboard, BookOpen, MousePointer2, Layers, FileDown, Save, Calculator, Settings } from 'lucide-react';
+import { X, Keyboard, BookOpen, MousePointer2, Layers, FileDown, Save, Calculator, Settings, Crown, ExternalLink, VectorSquare, Waypoints, Spline, Hash, RulerDimensionLine } from 'lucide-react';
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+    DialogDescription,
+} from "@/components/ui/dialog"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Separator } from "@/components/ui/separator"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
 interface HelpModalProps {
     isOpen: boolean;
@@ -10,7 +22,6 @@ interface HelpModalProps {
 
 const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose, initialTab }) => {
     const [activeTab, setActiveTab] = useState<'guide' | 'shortcuts' | 'properties'>('guide');
-    const [mounted, setMounted] = useState(false);
 
     useEffect(() => {
         if (initialTab) {
@@ -18,410 +29,382 @@ const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose, initialTab }) =>
         }
     }, [initialTab, isOpen]);
 
-    useEffect(() => {
-        setMounted(true);
-        return () => setMounted(false);
-    }, []);
-
-    if (!isOpen || !mounted) return null;
-
-    return createPortal(
-        <div
-            className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200"
-            onClick={onClose}
-        >
-            <div
-                className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200"
-                onClick={(e) => e.stopPropagation()}
-            >
-
-                {/* Header */}
-                <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-                    <div className="flex items-center gap-3">
-                        <div className="p-2 bg-blue-100 text-blue-600 rounded-lg">
-                            <BookOpen size={20} />
+    return (
+        <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+            <DialogContent className="sm:max-w-[800px] h-[80vh] flex flex-col p-0 gap-0 overflow-hidden bg-white dark:bg-slate-950">
+                <DialogHeader className="px-6 py-4 border-b bg-muted/20 flex flex-row items-center justify-between space-y-0">
+                    <div className="flex items-center gap-4">
+                        <div className="p-2 bg-primary/10 text-primary rounded-lg">
+                            <BookOpen size={24} />
                         </div>
                         <div>
-                            <h2 className="text-lg font-bold text-slate-800">ProTakeoff Guide</h2>
-                            <p className="text-xs text-slate-500">Documentation, Properties & Shortcuts</p>
+                            <DialogTitle className="text-xl">ProTakeoff Guide</DialogTitle>
+                            <DialogDescription>Documentation, Properties & Shortcuts</DialogDescription>
                         </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                        <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-100 rounded-lg border border-slate-200">
-                            <img src="/prologo.svg" alt="ProTakeoff" className="w-9 h-9" />
-                        </div>
-                        <button
-                            onClick={onClose}
-                            className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors"
-                        >
-                            <X size={20} />
-                        </button>
+                    {/* Close button is automatically added by DialogContent, but we can have extra header content here if needed */}
+                </DialogHeader>
+
+                <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)} className="flex-1 flex flex-col overflow-hidden">
+                    <div className="border-b px-6 py-2 bg-muted/20">
+                        <TabsList className="grid w-full grid-cols-3 max-w-xl">
+                            <TabsTrigger value="guide" className="gap-2">
+                                <BookOpen size={14} /> User Manual
+                            </TabsTrigger>
+                            <TabsTrigger value="properties" className="gap-2">
+                                <Calculator size={14} /> Properties & Formulas
+                            </TabsTrigger>
+                            <TabsTrigger value="shortcuts" className="gap-2">
+                                <Keyboard size={14} /> Keyboard Shortcuts
+                            </TabsTrigger>
+                        </TabsList>
                     </div>
-                </div>
 
-                {/* Tabs */}
-                <div className="flex border-b border-slate-100 px-6">
-                    <button
-                        onClick={() => setActiveTab('guide')}
-                        className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'guide' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-                    >
-                        <BookOpen size={16} /> User Manual
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('properties')}
-                        className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'properties' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-                    >
-                        <Calculator size={16} /> Properties & Formulas
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('shortcuts')}
-                        className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'shortcuts' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-                    >
-                        <Keyboard size={16} /> Keyboard Shortcuts
-                    </button>
-                </div>
-
-                {/* Content */}
-                <div className="flex-1 overflow-y-auto p-6 bg-slate-50/30">
-
-                    {activeTab === 'guide' && (
-                        <div className="space-y-8 max-w-4xl mx-auto">
-
-                            <section className="space-y-4">
-                                <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                                    <Layers className="text-blue-500" size={24} /> Getting Started
-                                </h3>
-                                <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4 text-slate-600 leading-relaxed">
-                                    <p>
-                                        <strong>1. Create or Load a Project:</strong> Start by creating a new project or loading an existing `.takeoff` file using the folder icons in the sidebar.
-                                    </p>
-                                    <p>
-                                        <strong>2. Upload Plans:</strong> Click the <span className="inline-flex items-center justify-center w-5 h-5 bg-slate-100 rounded text-slate-600 text-xs font-bold">+</span> icon in the sidebar to upload PDF plan sets. You can upload multiple files at once.
-                                    </p>
-                                    <p>
-                                        <strong>3. Set Scale:</strong> Before measuring, you must set the scale for each page. Select the <strong>Scale Tool (S)</strong> and either:
-                                        <ul className="list-disc pl-5 mt-2 space-y-1">
-                                            <li>Choose a preset scale (e.g., 1/4" = 1') from the dropdown.</li>
-                                            <li>Calibrate manually by measuring a known dimension on the plan.</li>
-                                        </ul>
-                                    </p>
-                                </div>
-                            </section>
-
-                            <section className="space-y-4">
-                                <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                                    <MousePointer2 className="text-green-500" size={24} /> Measurement Tools
-                                </h3>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:border-blue-300 transition-colors">
-                                        <h4 className="font-bold text-slate-800 mb-2">Area (1)</h4>
-                                        <p className="text-sm text-slate-600">Measure square footage. Click points to define a polygon. Press <strong>C</strong> to close and finish.</p>
-                                    </div>
-                                    <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:border-blue-300 transition-colors">
-                                        <h4 className="font-bold text-slate-800 mb-2">Linear (2)</h4>
-                                        <p className="text-sm text-slate-600">Measure continuous lines (walls, curbing). Click points to trace. Double-click or press <strong>C</strong> to finish.</p>
-                                    </div>
-                                    <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:border-blue-300 transition-colors">
-                                        <h4 className="font-bold text-slate-800 mb-2">Segment (3)</h4>
-                                        <p className="text-sm text-slate-600">Measure individual line segments (beams, headers). Click start and end points for each segment.</p>
-                                    </div>
-                                    <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:border-blue-300 transition-colors">
-                                        <h4 className="font-bold text-slate-800 mb-2">Count (4)</h4>
-                                        <p className="text-sm text-slate-600">Count individual items (fixtures, outlets). Click to place a marker.</p>
-                                    </div>
-                                </div>
-                            </section>
-
-                            <section className="space-y-4">
-                                <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                                    <Settings className="text-purple-500" size={24} /> Advanced Features
-                                </h3>
-                                <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4 text-slate-600">
-                                    <div className="flex gap-4">
-                                        <div className="p-2 bg-purple-50 text-purple-600 rounded-lg shrink-0 h-fit"><FileDown size={20} /></div>
-                                        <div>
-                                            <h4 className="font-bold text-slate-800 mb-1">Exporting</h4>
-                                            <p className="text-sm mb-2">Click the <strong>Export</strong> button in the sidebar to generate a PDF.</p>
-                                            <ul className="list-disc pl-4 text-sm space-y-1">
-                                                <li><strong>Burn-in Markups:</strong> Your measurements will be visually drawn onto the PDF pages.</li>
-                                                <li><strong>Scale:</strong> The PDF retains the original quality and scale.</li>
-                                                <li><strong>Legend:</strong> A legend of items can be optionally added (future feature).</li>
-                                            </ul>
-                                        </div>
-                                    </div>
-                                    <hr className="border-slate-100" />
-                                    <div className="flex gap-4">
-                                        <div className="p-2 bg-orange-50 text-orange-600 rounded-lg shrink-0 h-fit"><Save size={20} /></div>
-                                        <div>
-                                            <h4 className="font-bold text-slate-800 mb-1">Item Templates</h4>
-                                            <p className="text-sm mb-2">Save frequently used items (like specific wall assemblies) as templates.</p>
-                                            <ul className="list-disc pl-4 text-sm space-y-1">
-                                                <li><strong>Save:</strong> In the Item Properties modal, click "Save as Template".</li>
-                                                <li><strong>Reuse:</strong> When creating a new item, you can select from your saved templates (coming soon to the New Item modal).</li>
-                                            </ul>
-                                        </div>
-                                    </div>
-                                </div>
-                            </section>
-
-                        </div>
-                    )}
-
-                    {activeTab === 'properties' && (
-                        <div className="space-y-8 max-w-4xl mx-auto">
-
-                            <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex items-start gap-3">
-                                <Calculator className="text-blue-500 shrink-0 mt-0.5" size={20} />
-                                <div className="text-sm text-blue-800">
-                                    <p className="font-semibold mb-1">Power User Feature</p>
-                                    <p>Use Properties and Sub-Items to build complex assemblies. Define variables and formulas to automatically calculate materials based on your measurements.</p>
-                                </div>
-                            </div>
-
-                            <section className="space-y-4">
-                                <h3 className="text-xl font-bold text-slate-800">1. Item Properties</h3>
-                                <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm text-slate-600 space-y-4">
-                                    <p>Right-click any item in the sidebar and select <strong>Properties</strong> to open the editor.</p>
-                                    <ul className="list-disc pl-5 space-y-2">
-                                        <li><strong>Name & Group:</strong> Organize your items.</li>
-                                        <li><strong>Color:</strong> Change the visual appearance on the canvas.</li>
-                                        <li><strong>Custom Variables:</strong> Add your own variables (e.g., "Wall Height", "Depth", "Waste %") to use in formulas.</li>
-                                    </ul>
-                                </div>
-                            </section>
-
-                            <section className="space-y-4">
-                                <h3 className="text-xl font-bold text-slate-800">2. Sub-Items (Parts)</h3>
-                                <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm text-slate-600 space-y-4">
-                                    <p>Sub-items allow you to break down a measurement into material lists. For example, a "Wall" linear measurement can generate sub-items for Studs, Drywall, and Insulation.</p>
-                                    <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
-                                        <h4 className="font-bold text-slate-700 mb-2">How to add Sub-Items:</h4>
-                                        <ol className="list-decimal pl-5 space-y-1 text-sm">
-                                            <li>Open Item Properties.</li>
-                                            <li>Switch to the <strong>Sub-Items</strong> tab.</li>
-                                            <li>Enter a Name (e.g., "2x4 Studs").</li>
-                                            <li>Enter a Formula (e.g., `Qty / 1.33`).</li>
-                                            <li>Click <strong>Add</strong>.</li>
-                                        </ol>
-                                    </div>
-                                </div>
-                            </section>
-
-                            <section className="space-y-4">
-                                <h3 className="text-xl font-bold text-slate-800">3. Formulas & Variables</h3>
-                                <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm text-slate-600 space-y-4">
-                                    <p>Formulas allow dynamic calculations. You can use standard math (`+`, `-`, `*`, `/`, `()`) and variables.</p>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                        <div>
-                                            <h4 className="font-bold text-slate-700 mb-2">Standard Variables</h4>
-                                            <ul className="space-y-2 text-sm">
-                                                <li className="flex items-center justify-between border-b border-slate-100 pb-1">
-                                                    <code className="bg-slate-100 px-1.5 rounded text-blue-600 font-bold">Qty</code>
-                                                    <span>The base measurement value</span>
-                                                </li>
-                                                <li className="flex items-center justify-between border-b border-slate-100 pb-1">
-                                                    <code className="bg-slate-100 px-1.5 rounded text-blue-600 font-bold">Price</code>
-                                                    <span>The unit price of the item</span>
-                                                </li>
-                                            </ul>
-                                        </div>
-                                        <div>
+                    <div className="flex-1 overflow-y-auto bg-muted/10">
+                        <div className="p-8 max-w-4xl mx-auto">
+                            <TabsContent value="guide" className="space-y-8 mt-0">
+                                <section className="space-y-4">
+                                    <h3 className="text-xl font-bold flex items-center gap-2">
+                                        <Layers className="text-primary" size={24} /> Getting Started
+                                    </h3>
+                                    <Card>
+                                        <CardContent className="pt-6 space-y-4 leading-relaxed">
+                                            <p>
+                                                <strong>1. Create or Load a Project:</strong> Start by creating a new project or loading an existing `.takeoff` file using the folder icons in the sidebar.
+                                            </p>
+                                            <p>
+                                                <strong>2. Upload Plans:</strong> Click the <Badge variant="outline" className="px-1.5 py-0 mx-1 bg-muted">+</Badge> icon in the sidebar to upload PDF plan sets. You can upload multiple files at once.
+                                            </p>
                                             <div>
-                                                <h4 className="font-bold text-slate-700 mb-2">Math Functions</h4>
-                                                <p className="text-sm text-slate-500 mb-2">Use these simplified functions in your formulas:</p>
-                                                <ul className="space-y-2 text-sm">
-                                                    <li className="border-b border-slate-100 pb-1">
-                                                        <div className="flex items-center gap-2 mb-1">
-                                                            <code className="bg-green-100 px-1.5 rounded text-green-700 font-bold text-xs">roundup(x)</code>
-                                                            <span className="text-xs text-slate-400">or</span>
-                                                            <code className="bg-slate-100 px-1.5 rounded text-slate-600 font-bold text-xs">Math.ceil(x)</code>
-                                                        </div>
-                                                        <span className="text-slate-600">Rounds up to the nearest whole number. Essential for materials like sheets or studs where you can't buy a fraction.</span>
-                                                        <div className="text-xs text-slate-400 mt-0.5">Ex: roundup(4.2) = 5</div>
-                                                    </li>
-                                                    <li className="border-b border-slate-100 pb-1">
-                                                        <div className="flex items-center gap-2 mb-1">
-                                                            <code className="bg-green-100 px-1.5 rounded text-green-700 font-bold text-xs">round(x)</code>
-                                                            <span className="text-xs text-slate-400">or</span>
-                                                            <code className="bg-slate-100 px-1.5 rounded text-slate-600 font-bold text-xs">Math.round(x)</code>
-                                                        </div>
-                                                        <span className="text-slate-600">Rounds to the nearest whole number.</span>
-                                                        <div className="text-xs text-slate-400 mt-0.5">Ex: round(4.6) = 5, round(4.4) = 4</div>
-                                                    </li>
-                                                    <li className="border-b border-slate-100 pb-1">
-                                                        <div className="flex items-center gap-2 mb-1">
-                                                            <code className="bg-green-100 px-1.5 rounded text-green-700 font-bold text-xs">floor(x)</code>
-                                                            <span className="text-xs text-slate-400">or</span>
-                                                            <code className="bg-slate-100 px-1.5 rounded text-slate-600 font-bold text-xs">Math.floor(x)</code>
-                                                        </div>
-                                                        <span className="text-slate-600">Rounds down to the nearest whole number.</span>
-                                                        <div className="text-xs text-slate-400 mt-0.5">Ex: floor(4.9) = 4</div>
-                                                    </li>
-                                                    <li className="border-b border-slate-100 pb-1">
-                                                        <div className="flex items-center gap-2 mb-1">
-                                                            <code className="bg-green-100 px-1.5 rounded text-green-700 font-bold text-xs">max(x, y)</code>
-                                                            <span className="text-xs text-slate-400">or</span>
-                                                            <code className="bg-slate-100 px-1.5 rounded text-slate-600 font-bold text-xs">Math.max(x, y)</code>
-                                                        </div>
-                                                        <span className="text-slate-600">Returns the larger of two numbers. Great for setting minimums.</span>
-                                                        <div className="text-xs text-slate-400 mt-0.5">Ex: max(Qty, 10) = At least 10</div>
-                                                    </li>
-                                                    <li className="pb-1">
-                                                        <div className="flex items-center gap-2 mb-1">
-                                                            <code className="bg-green-100 px-1.5 rounded text-green-700 font-bold text-xs">min(x, y)</code>
-                                                            <span className="text-xs text-slate-400">•</span>
-                                                            <code className="bg-green-100 px-1.5 rounded text-green-700 font-bold text-xs">abs(x)</code>
-                                                            <span className="text-xs text-slate-400">•</span>
-                                                            <code className="bg-green-100 px-1.5 rounded text-green-700 font-bold text-xs">sqrt(x)</code>
-                                                            <span className="text-xs text-slate-400">•</span>
-                                                            <code className="bg-green-100 px-1.5 rounded text-green-700 font-bold text-xs">pow(x,y)</code>
-                                                        </div>
-                                                        <span className="text-slate-600 text-xs">Additional functions: minimum, absolute value, square root, and power.</span>
-                                                    </li>
+                                                <strong>3. Set Scale:</strong> Before measuring, you must set the scale for each page. Select the <strong>Scale Tool (S)</strong> and either:
+                                                <ul className="list-disc pl-5 mt-2 space-y-1 text-muted-foreground">
+                                                    <li>Choose a preset scale (e.g., 1/4" = 1') from the dropdown.</li>
+                                                    <li>Calibrate manually by measuring a known dimension on the plan.</li>
                                                 </ul>
                                             </div>
-                                        </div>
+                                        </CardContent>
+                                    </Card>
+                                </section>
+
+                                <section className="space-y-4">
+                                    <h3 className="text-xl font-bold flex items-center gap-2">
+                                        <MousePointer2 className="text-secondary-foreground" size={24} /> Measurement Tools
+                                    </h3>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <Card className="hover:border-primary/50 transition-colors">
+                                            <CardHeader>
+                                                <CardTitle className="text-base flex items-center gap-2">
+                                                    <VectorSquare size={16} /> Area (1)
+                                                </CardTitle>
+                                            </CardHeader>
+                                            <CardContent className="text-sm text-muted-foreground">
+                                                Measure square footage. Click points to define a polygon. Press <strong>C</strong> to close and finish.
+                                            </CardContent>
+                                        </Card>
+                                        <Card className="hover:border-primary/50 transition-colors">
+                                            <CardHeader>
+                                                <CardTitle className="text-base flex items-center gap-2">
+                                                    <Waypoints size={16} /> Linear (2)
+                                                </CardTitle>
+                                            </CardHeader>
+                                            <CardContent className="text-sm text-muted-foreground">
+                                                Measure continuous lines (walls, curbing). Click points to trace. Double-click or press <strong>C</strong> to finish.
+                                            </CardContent>
+                                        </Card>
+                                        <Card className="hover:border-primary/50 transition-colors">
+                                            <CardHeader>
+                                                <CardTitle className="text-base flex items-center gap-2">
+                                                    <Spline size={16} /> Segment (3)
+                                                </CardTitle>
+                                            </CardHeader>
+                                            <CardContent className="text-sm text-muted-foreground">
+                                                Measure individual line segments (beams, headers). Click start and end points for each segment.
+                                            </CardContent>
+                                        </Card>
+                                        <Card className="hover:border-primary/50 transition-colors">
+                                            <CardHeader>
+                                                <CardTitle className="text-base flex items-center gap-2">
+                                                    <Hash size={16} /> Count (4)
+                                                </CardTitle>
+                                            </CardHeader>
+                                            <CardContent className="text-sm text-muted-foreground">
+                                                Count individual items (fixtures, outlets). Click to place a marker.
+                                            </CardContent>
+                                        </Card>
+                                        <Card className="hover:border-primary/50 transition-colors">
+                                            <CardHeader>
+                                                <CardTitle className="text-base flex items-center gap-2">
+                                                    <RulerDimensionLine size={16} /> Dimension (D)
+                                                </CardTitle>
+                                            </CardHeader>
+                                            <CardContent className="text-sm text-muted-foreground">
+                                                Measure specific distances/dimensions between two points without recording an item to the list.
+                                            </CardContent>
+                                        </Card>
+                                    </div>
+                                </section>
+
+                                <section className="space-y-4">
+                                    <h3 className="text-xl font-bold flex items-center gap-2">
+                                        <Settings className="text-muted-foreground" size={24} /> Advanced Features
+                                    </h3>
+                                    <Card>
+                                        <CardContent className="pt-6 space-y-6">
+                                            <div className="flex gap-4">
+                                                <div className="p-2 bg-primary/10 text-primary rounded-lg shrink-0 h-fit"><FileDown size={20} /></div>
+                                                <div>
+                                                    <h4 className="font-bold mb-1">Exporting</h4>
+                                                    <p className="text-sm text-muted-foreground mb-2">Click the <strong>Export</strong> button in the sidebar to generate a PDF.</p>
+                                                    <ul className="list-disc pl-4 text-sm text-muted-foreground space-y-1">
+                                                        <li><strong>Burn-in Markups:</strong> Your measurements will be visually drawn onto the PDF pages.</li>
+                                                        <li><strong>Scale:</strong> The PDF retains the original quality and scale.</li>
+                                                        <li><strong>Legend:</strong> A legend of items can be optionally added (future feature).</li>
+                                                    </ul>
+                                                </div>
+                                            </div>
+                                            <Separator />
+                                            <div className="flex gap-4">
+                                                <div className="p-2 bg-primary/10 text-primary rounded-lg shrink-0 h-fit"><Save size={20} /></div>
+                                                <div>
+                                                    <h4 className="font-bold mb-1">Item Templates</h4>
+                                                    <p className="text-sm text-muted-foreground mb-2">Save frequently used items (like specific wall assemblies) as templates.</p>
+                                                    <ul className="list-disc pl-4 text-sm text-muted-foreground space-y-1">
+                                                        <li><strong>Save:</strong> In the Item Properties modal, click "Save as Template".</li>
+                                                        <li><strong>Reuse:</strong> When creating a new item, you can select from your saved templates (coming soon to the New Item modal).</li>
+                                                    </ul>
+                                                </div>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                </section>
+                            </TabsContent>
+
+                            <TabsContent value="properties" className="space-y-8 mt-0">
+                                <div className="bg-primary/5 border border-primary/20 rounded-xl p-4 flex items-start gap-3">
+                                    <Calculator className="text-primary shrink-0 mt-0.5" size={20} />
+                                    <div className="text-sm text-foreground">
+                                        <p className="font-semibold mb-1">Power User Feature</p>
+                                        <p>Use Properties and Sub-Items to build complex assemblies. Define variables and formulas to automatically calculate materials based on your measurements.</p>
                                     </div>
                                 </div>
-                            </section>
 
-                            <section className="space-y-4">
-                                <h3 className="text-xl font-bold text-slate-800">4. Example: Wall Assembly</h3>
-                                <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                                    <div className="bg-slate-50 px-6 py-3 border-b border-slate-200">
-                                        <h4 className="font-bold text-slate-700">Scenario: 10ft High Interior Wall</h4>
+                                <section className="space-y-4">
+                                    <h3 className="text-xl font-bold">1. Item Properties</h3>
+                                    <Card>
+                                        <CardContent className="pt-6 space-y-4">
+                                            <p>Right-click any item in the sidebar and select <strong>Properties</strong> to open the editor.</p>
+                                            <ul className="list-disc pl-5 space-y-2 text-muted-foreground">
+                                                <li><strong>Name & Group:</strong> Organize your items.</li>
+                                                <li><strong>Color:</strong> Change the visual appearance on the canvas.</li>
+                                                <li><strong>Custom Variables:</strong> Add your own variables (e.g., "Wall Height", "Depth", "Waste %") to use in formulas.</li>
+                                            </ul>
+                                        </CardContent>
+                                    </Card>
+                                </section>
+
+                                <section className="space-y-4">
+                                    <h3 className="text-xl font-bold">2. Sub-Items (Parts)</h3>
+                                    <Card>
+                                        <CardContent className="pt-6 space-y-4">
+                                            <p>Sub-items allow you to break down a measurement into material lists. For example, a "Wall" linear measurement can generate sub-items for Studs, Drywall, and Insulation.</p>
+                                            <div className="bg-muted p-4 rounded-lg border border-border">
+                                                <h4 className="font-bold mb-2">How to add Sub-Items:</h4>
+                                                <ol className="list-decimal pl-5 space-y-1 text-sm text-muted-foreground">
+                                                    <li>Open Item Properties.</li>
+                                                    <li>Switch to the <strong>Sub-Items</strong> tab.</li>
+                                                    <li>Enter a Name (e.g., "2x4 Studs").</li>
+                                                    <li>Enter a Formula (e.g., `Qty / 1.33`).</li>
+                                                    <li>Click <strong>Add</strong>.</li>
+                                                </ol>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                </section>
+
+                                <section className="space-y-4">
+                                    <h3 className="text-xl font-bold">3. Formulas & Variables</h3>
+                                    <Card>
+                                        <CardContent className="pt-6 space-y-4">
+                                            <p>Formulas allow dynamic calculations. You can use standard math (`+`, `-`, `*`, `/`, `()`) and variables.</p>
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                                <div>
+                                                    <h4 className="font-bold mb-2">Standard Variables</h4>
+                                                    <ul className="space-y-2 text-sm">
+                                                        <li className="flex items-center justify-between border-b pb-1">
+                                                            <Badge variant="secondary" className="font-mono text-primary">Qty</Badge>
+                                                            <span className="text-muted-foreground">The base measurement value</span>
+                                                        </li>
+                                                        <li className="flex items-center justify-between border-b pb-1">
+                                                            <Badge variant="secondary" className="font-mono text-primary">Price</Badge>
+                                                            <span className="text-muted-foreground">The unit price of the item</span>
+                                                        </li>
+                                                    </ul>
+                                                </div>
+                                                <div>
+                                                    <h4 className="font-bold mb-2">Math Functions</h4>
+                                                    <p className="text-sm text-muted-foreground mb-2">Use these simplified functions in your formulas:</p>
+                                                    <div className="space-y-3">
+                                                        <div className="border-b pb-2">
+                                                            <div className="flex flex-wrap items-center gap-2 mb-1">
+                                                                <code className="text-xs bg-muted px-1.5 py-0.5 rounded font-bold text-primary">roundup(x)</code>
+                                                                <span className="text-xs text-muted-foreground">or</span>
+                                                                <code className="text-xs bg-muted px-1.5 py-0.5 rounded font-bold">Math.ceil(x)</code>
+                                                            </div>
+                                                            <p className="text-xs text-muted-foreground">Rounds up to nearest whole #. (Ex: roundup(4.2) = 5)</p>
+                                                        </div>
+                                                        <div className="border-b pb-2">
+                                                            <div className="flex flex-wrap items-center gap-2 mb-1">
+                                                                <code className="text-xs bg-muted px-1.5 py-0.5 rounded font-bold text-primary">round(x)</code>
+                                                                <span className="text-xs text-muted-foreground">or</span>
+                                                                <code className="text-xs bg-muted px-1.5 py-0.5 rounded font-bold">Math.round(x)</code>
+                                                            </div>
+                                                            <p className="text-xs text-muted-foreground">Rounds to nearest whole #. (Ex: round(4.6) = 5)</p>
+                                                        </div>
+                                                        <div className="pb-1">
+                                                            <div className="flex flex-wrap items-center gap-2 mb-1 text-xs">
+                                                                <code className="bg-muted px-1.5 py-0.5 rounded font-bold text-primary">floor(x)</code>
+                                                                <code className="bg-muted px-1.5 py-0.5 rounded font-bold text-primary">max(x,y)</code>
+                                                                <code className="bg-muted px-1.5 py-0.5 rounded font-bold text-primary">min(x,y)</code>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                </section>
+
+                                <section className="space-y-4">
+                                    <h3 className="text-xl font-bold">4. Example: Wall Assembly</h3>
+                                    <div className="border rounded-xl overflow-hidden shadow-sm">
+                                        <div className="bg-muted px-6 py-3 border-b">
+                                            <h4 className="font-bold">Scenario: 10ft High Interior Wall</h4>
+                                        </div>
+                                        <div className="p-6 space-y-6 bg-card">
+                                            <div>
+                                                <h5 className="font-bold mb-2 text-sm uppercase tracking-wider text-muted-foreground">Step 1: Define Variables</h5>
+                                                <p className="text-sm text-muted-foreground mb-2">In the <strong>General</strong> tab, add a custom variable for height.</p>
+                                                <div className="flex items-center gap-4 text-sm bg-muted/50 p-3 rounded border">
+                                                    <span className="font-semibold">Wall Height</span>
+                                                    <span className="text-muted-foreground">→</span>
+                                                    <code className="bg-background px-2 py-1 rounded border shadow-sm">10</code>
+                                                </div>
+                                            </div>
+
+                                            <div>
+                                                <h5 className="font-bold mb-2 text-sm uppercase tracking-wider text-muted-foreground">Step 2: Create Sub-Items</h5>
+                                                <p className="text-sm text-muted-foreground mb-3">In the <strong>Sub-Items</strong> tab, add the materials.</p>
+
+                                                <div className="space-y-3">
+                                                    <div className="flex items-center justify-between bg-muted/30 p-3 rounded border">
+                                                        <div>
+                                                            <div className="font-bold text-sm">5/8" Drywall (4x10 Sheets)</div>
+                                                            <div className="text-xs text-muted-foreground">Double sided</div>
+                                                        </div>
+                                                        <code className="text-xs bg-background text-primary px-2 py-1 rounded font-mono border border-border">
+                                                            roundup((Qty * Wall_Height * 2) / 40)
+                                                        </code>
+                                                    </div>
+
+                                                    <div className="flex items-center justify-between bg-muted/30 p-3 rounded border">
+                                                        <div>
+                                                            <div className="font-bold text-sm">3-5/8" Metal Studs</div>
+                                                            <div className="text-xs text-muted-foreground">16" OC + Top/Bottom Track</div>
+                                                        </div>
+                                                        <code className="text-xs bg-background text-primary px-2 py-1 rounded font-mono border border-border">
+                                                            roundup(Qty * 0.75) + 2
+                                                        </code>
+                                                    </div>
+
+                                                    <div className="flex items-center justify-between bg-muted/30 p-3 rounded border">
+                                                        <div>
+                                                            <div className="font-bold text-sm">R-13 Insulation</div>
+                                                            <div className="text-xs text-muted-foreground">Square Footage</div>
+                                                        </div>
+                                                        <code className="text-xs bg-background text-primary px-2 py-1 rounded font-mono border border-border">
+                                                            Qty * Wall_Height
+                                                        </code>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
                                     </div>
-                                    <div className="p-6 space-y-6">
+                                </section>
+                            </TabsContent>
 
-                                        <div>
-                                            <h5 className="font-bold text-slate-800 mb-2 text-sm uppercase tracking-wider">Step 1: Define Variables</h5>
-                                            <p className="text-sm text-slate-600 mb-2">In the <strong>General</strong> tab, add a custom variable for height.</p>
-                                            <div className="flex items-center gap-4 text-sm bg-slate-50 p-3 rounded border border-slate-100">
-                                                <span className="font-semibold">Wall Height</span>
-                                                <span className="text-slate-400">→</span>
-                                                <code className="bg-white px-2 py-1 rounded border">10</code>
+                            <TabsContent value="shortcuts" className="mt-0">
+                                <div className="space-y-6">
+                                    <div className="bg-primary/5 border border-primary/20 rounded-xl p-4 flex items-start gap-3">
+                                        <Keyboard className="text-primary shrink-0 mt-0.5" size={20} />
+                                        <div className="text-sm text-foreground">
+                                            <p className="font-semibold mb-1">Pro Tip:</p>
+                                            <p>These shortcuts are designed to match PlanSwift where possible for a familiar experience.</p>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                        <div className="space-y-4">
+                                            <h4 className="font-bold border-b pb-2">Tools</h4>
+                                            <div className="space-y-2">
+                                                <ShortcutRow label="Area Tool" keys={['1']} />
+                                                <ShortcutRow label="Linear Tool" keys={['2']} />
+                                                <ShortcutRow label="Segment Tool" keys={['3']} />
+                                                <ShortcutRow label="Count Tool" keys={['4']} />
+                                                <ShortcutRow label="Note Tool" keys={['5']} />
+                                                <ShortcutRow label="Select Tool" keys={['V']} />
+                                                <ShortcutRow label="Scale Tool" keys={['S']} />
+                                                <ShortcutRow label="Dimension Tool" keys={['D']} />
                                             </div>
                                         </div>
 
-                                        <div>
-                                            <h5 className="font-bold text-slate-800 mb-2 text-sm uppercase tracking-wider">Step 2: Create Sub-Items</h5>
-                                            <p className="text-sm text-slate-600 mb-3">In the <strong>Sub-Items</strong> tab, add the materials.</p>
-
-                                            <div className="space-y-3">
-                                                <div className="flex items-center justify-between bg-white p-3 rounded border border-slate-200 shadow-sm">
-                                                    <div>
-                                                        <div className="font-bold text-slate-700">5/8" Drywall (4x10 Sheets)</div>
-                                                        <div className="text-xs text-slate-500">Double sided</div>
-                                                    </div>
-                                                    <code className="text-xs bg-blue-50 text-blue-700 px-2 py-1 rounded font-mono">
-                                                        roundup((Qty * Wall_Height * 2) / 40)
-                                                    </code>
-                                                </div>
-
-                                                <div className="flex items-center justify-between bg-white p-3 rounded border border-slate-200 shadow-sm">
-                                                    <div>
-                                                        <div className="font-bold text-slate-700">3-5/8" Metal Studs</div>
-                                                        <div className="text-xs text-slate-500">16" OC + Top/Bottom Track</div>
-                                                    </div>
-                                                    <code className="text-xs bg-blue-50 text-blue-700 px-2 py-1 rounded font-mono">
-                                                        roundup(Qty * 0.75) + 2
-                                                    </code>
-                                                </div>
-
-                                                <div className="flex items-center justify-between bg-white p-3 rounded border border-slate-200 shadow-sm">
-                                                    <div>
-                                                        <div className="font-bold text-slate-700">R-13 Insulation</div>
-                                                        <div className="text-xs text-slate-500">Square Footage</div>
-                                                    </div>
-                                                    <code className="text-xs bg-blue-50 text-blue-700 px-2 py-1 rounded font-mono">
-                                                        Qty * Wall_Height
-                                                    </code>
-                                                </div>
+                                        <div className="space-y-4">
+                                            <h4 className="font-bold border-b pb-2">Actions</h4>
+                                            <div className="space-y-2">
+                                                <ShortcutRow label="Undo" keys={['Cmd', 'Z']} />
+                                                <ShortcutRow label="Redo" keys={['Cmd', 'Shift', 'Z']} />
+                                                <ShortcutRow label="Save Project" keys={['Cmd', 'S']} />
+                                                <ShortcutRow label="Copy Item" keys={['Cmd', 'C']} />
+                                                <ShortcutRow label="Paste Item" keys={['Cmd', 'V']} />
+                                                <ShortcutRow label="Delete Item" keys={['Backspace']} />
+                                                <ShortcutRow label="Finish Shape" keys={['C']} />
+                                                <ShortcutRow label="Cut Out (Deduction)" keys={['X']} />
+                                                <ShortcutRow label="Toggle Record" keys={['R']} />
+                                                <ShortcutRow label="Cancel / Deselect" keys={['Esc']} />
                                             </div>
                                         </div>
 
+                                        <div className="space-y-4">
+                                            <h4 className="font-bold border-b pb-2">Navigation & View</h4>
+                                            <div className="space-y-2">
+                                                <ShortcutRow label="Next Page" keys={['Page Down']} />
+                                                <ShortcutRow label="Previous Page" keys={['Page Up']} />
+                                                <ShortcutRow label="Zoom In" keys={['+']} />
+                                                <ShortcutRow label="Zoom Out" keys={['-']} />
+                                                <ShortcutRow label="Zoom to Fit" keys={['F7']} />
+                                                <ShortcutRow label="Toggle View" keys={['F12']} />
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
-                            </section>
-
+                            </TabsContent>
                         </div>
-                    )}
-
-                    {activeTab === 'shortcuts' && (
-                        <div className="max-w-3xl mx-auto">
-                            <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 mb-6 flex items-start gap-3">
-                                <Keyboard className="text-blue-500 shrink-0 mt-0.5" size={20} />
-                                <div className="text-sm text-blue-800">
-                                    <p className="font-semibold mb-1">Pro Tip:</p>
-                                    <p>These shortcuts are designed to match PlanSwift where possible for a familiar experience.</p>
-                                </div>
-                            </div>
-
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-
-                                <div className="space-y-4">
-                                    <h4 className="font-bold text-slate-900 border-b border-slate-200 pb-2">Tools</h4>
-                                    <div className="space-y-2">
-                                        <ShortcutRow label="Area Tool" keys={['1']} />
-                                        <ShortcutRow label="Linear Tool" keys={['2']} />
-                                        <ShortcutRow label="Segment Tool" keys={['3']} />
-                                        <ShortcutRow label="Count Tool" keys={['4']} />
-                                        <ShortcutRow label="Note Tool" keys={['5']} />
-                                        <ShortcutRow label="Select Tool" keys={['V']} />
-                                        <ShortcutRow label="Scale Tool" keys={['S']} />
-                                        <ShortcutRow label="Dimension Tool" keys={['D']} />
-                                    </div>
-                                </div>
-
-                                <div className="space-y-4">
-                                    <h4 className="font-bold text-slate-900 border-b border-slate-200 pb-2">Actions</h4>
-                                    <div className="space-y-2">
-                                        <ShortcutRow label="Undo" keys={['Cmd', 'Z']} />
-                                        <ShortcutRow label="Redo" keys={['Cmd', 'Shift', 'Z']} />
-                                        <ShortcutRow label="Save Project" keys={['Cmd', 'S']} />
-                                        <ShortcutRow label="Copy Item" keys={['Cmd', 'C']} />
-                                        <ShortcutRow label="Paste Item" keys={['Cmd', 'V']} />
-                                        <ShortcutRow label="Delete Item" keys={['Backspace']} />
-                                        <ShortcutRow label="Finish Shape" keys={['C']} />
-                                        <ShortcutRow label="Cut Out (Deduction)" keys={['X']} />
-                                        <ShortcutRow label="Toggle Record" keys={['R']} />
-                                        <ShortcutRow label="Cancel / Deselect" keys={['Esc']} />
-                                    </div>
-                                </div>
-
-                                <div className="space-y-4">
-                                    <h4 className="font-bold text-slate-900 border-b border-slate-200 pb-2">Navigation & View</h4>
-                                    <div className="space-y-2">
-                                        <ShortcutRow label="Next Page" keys={['Page Down']} />
-                                        <ShortcutRow label="Previous Page" keys={['Page Up']} />
-                                        <ShortcutRow label="Zoom In" keys={['+']} />
-                                        <ShortcutRow label="Zoom Out" keys={['-']} />
-                                        <ShortcutRow label="Zoom to Fit" keys={['F7']} />
-                                        <ShortcutRow label="Toggle View" keys={['F12']} />
-                                    </div>
-                                </div>
-
-                            </div>
-                        </div>
-                    )}
-
-                </div>
-            </div>
-        </div >,
-        document.body
+                    </div>
+                </Tabs>
+            </DialogContent>
+        </Dialog>
     );
 };
 
 const ShortcutRow: React.FC<{ label: string; keys: string[] }> = ({ label, keys }) => (
-    <div className="flex items-center justify-between group">
-        <span className="text-slate-600 text-sm font-medium group-hover:text-slate-900 transition-colors">{label}</span>
+    <div className="flex items-center justify-between group py-1">
+        <span className="text-muted-foreground text-sm font-medium group-hover:text-foreground transition-colors">{label}</span>
         <div className="flex items-center gap-1">
             {keys.map((k, i) => (
                 <React.Fragment key={i}>
-                    <kbd className="px-2 py-1 bg-white border border-slate-200 rounded-md text-xs font-mono text-slate-500 shadow-sm min-w-[24px] text-center font-bold">
+                    <kbd className="px-2 py-1 bg-muted border border-border rounded-md text-xs font-mono text-muted-foreground shadow-sm min-w-[24px] text-center font-bold">
                         {k}
                     </kbd>
-                    {i < keys.length - 1 && <span className="text-slate-300 text-xs">+</span>}
+                    {i < keys.length - 1 && <span className="text-muted-foreground/30 text-xs">+</span>}
                 </React.Fragment>
             ))}
         </div>

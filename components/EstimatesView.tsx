@@ -1,11 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { TakeoffItem, ToolType, Unit } from '../types';
 import { evaluateFormula, convertValue, toVariableName } from '../utils/math';
-import { FileSpreadsheet, ArrowLeft, Trash2, GripVertical, Plus, ChevronDown, ChevronRight, Edit2, CornerDownRight, FileText, Tag } from 'lucide-react';
+import { FileSpreadsheet, ArrowLeft, Trash2, GripVertical, Plus, ChevronDown, ChevronRight, Edit2, CornerDownRight, FileText, Tag, Loader2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useToast } from '../contexts/ToastContext';
 import PromptModal from './PromptModal';
 import TemplateManager from './TemplateManager';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 
 interface EstimatesViewProps {
     items: TakeoffItem[];
@@ -212,14 +217,14 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
     const handleMouseUp = (e: React.MouseEvent, target?: { type: 'item', id: string } | { type: 'group', name: string }) => {
         if (!isDragging) return;
         e.stopPropagation();
-        
+
         console.log('[MOUSE-DRAG] MouseUp', { draggedItemId, draggedGroup, target });
 
         // Handle item drop on item (reorder)
         if (draggedItemId && target?.type === 'item' && draggedItemId !== target.id) {
             const draggedItem = items.find(i => i.id === draggedItemId);
             const targetItem = items.find(i => i.id === target.id);
-            
+
             if (draggedItem && targetItem) {
                 console.log('[MOUSE-DRAG] Reordering item to target position');
                 const newItems = items.filter(i => i.id !== draggedItemId);
@@ -229,7 +234,7 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                 onReorderItems(newItems);
             }
         }
-        
+
         // Handle item drop on group (move to group)
         else if (draggedItemId && target?.type === 'group') {
             const draggedItem = items.find(i => i.id === draggedItemId);
@@ -241,7 +246,7 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                 onReorderItems(newItems);
             }
         }
-        
+
         // Handle group reordering
         else if (draggedGroup) {
             let targetGroupName: string | undefined;
@@ -451,21 +456,23 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
     };
 
     return (
-        <div className="flex-1 h-full bg-slate-50 overflow-y-auto p-8 font-sans">
+        <div className="flex-1 h-full bg-background overflow-y-auto p-8 font-sans">
             <div className="max-w-7xl mx-auto space-y-6">
 
                 {/* Header */}
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-4">
-                        <button
+                        <Button
+                            variant="ghost"
+                            size="icon"
                             onClick={onBack}
-                            className="p-2 hover:bg-white rounded-lg border border-transparent hover:border-slate-200 transition-all text-slate-500 hover:text-slate-900 hover:shadow-sm"
+                            className="text-muted-foreground hover:text-foreground"
                         >
                             <ArrowLeft size={20} />
-                        </button>
+                        </Button>
                         <div>
-                            <h1 className="text-2xl font-semibold text-slate-900">Project Estimates</h1>
-                            <p className="text-slate-500 text-sm mt-0.5">
+                            <h1 className="text-2xl font-semibold text-foreground">Project Estimates</h1>
+                            <p className="text-muted-foreground text-sm mt-0.5">
                                 {activeTab === 'estimates' ? 'Drag rows to reorder or move between groups.' : 'Manage your item templates for quick reuse.'}
                             </p>
                         </div>
@@ -473,31 +480,32 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
 
                     <div className="flex gap-3">
                         {activeTab === 'estimates' && (
-                            <button
+                            <Button
+                                variant="outline"
                                 onClick={() => setShowNewGroupModal(true)}
-                                className="flex items-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 text-slate-700 px-4 py-2 rounded-lg font-medium shadow-sm transition-all"
+                                className="gap-2"
                             >
-                                <Plus size={18} /> New Group
-                            </button>
+                                <Plus size={16} /> New Group
+                            </Button>
                         )}
                         {activeTab === 'estimates' && (
-                            <button
+                            <Button
                                 onClick={handleExport}
-                                className="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg font-medium shadow-sm transition-all"
+                                className="gap-2"
                             >
-                                <FileSpreadsheet size={18} /> Export to Excel
-                            </button>
+                                <FileSpreadsheet size={16} /> Export to Excel
+                            </Button>
                         )}
                     </div>
                 </div>
 
                 {/* Tabs */}
-                <div className="flex border-b border-slate-200 bg-white rounded-t-lg">
+                <div className="flex border-b border-border bg-card rounded-t-lg">
                     <button
                         onClick={() => setActiveTab('estimates')}
                         className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'estimates'
-                            ? 'border-blue-500 text-blue-600 bg-blue-50'
-                            : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                            ? 'border-primary text-primary bg-primary/5'
+                            : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50'
                             }`}
                     >
                         <FileText size={16} /> Estimates
@@ -505,8 +513,8 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                     <button
                         onClick={() => setActiveTab('templates')}
                         className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'templates'
-                            ? 'border-blue-500 text-blue-600 bg-blue-50'
-                            : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                            ? 'border-primary text-primary bg-primary/5'
+                            : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50'
                             }`}
                     >
                         <Tag size={16} /> Templates
@@ -517,304 +525,246 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                 {activeTab === 'estimates' ? (
                     <>
                         {/* Grouped Table */}
-                        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                            <table className="w-full text-left border-collapse table-fixed" onDragOver={handleDragOver}>
-                                <thead>
-                                    <tr className="bg-slate-50 border-b border-slate-100 text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                                        <th className="w-8"></th>
-                                        <th className="px-6 py-3 w-1/3">Label</th>
-                                        <th className="px-6 py-3 w-32">Type</th>
-                                        <th className="px-6 py-3 text-right">Qty</th>
-                                        <th className="px-6 py-3">Unit</th>
-                                        <th className="px-6 py-3 text-right">Unit Price</th>
-                                        <th className="px-6 py-3 text-right">Total Cost</th>
-                                        <th className="px-6 py-3 text-center w-24">Actions</th>
-                                    </tr>
-                                </thead>
+                        <Card className="border-border shadow-sm overflow-hidden">
+                            <CardContent className="p-0">
+                                <Table onDragOver={handleDragOver}>
+                                    <TableHeader>
+                                        <TableRow className="bg-muted/50 hover:bg-muted/50 border-b border-border">
+                                            <TableHead className="w-8"></TableHead>
+                                            <TableHead className="w-1/3">Label</TableHead>
+                                            <TableHead className="w-32">Type</TableHead>
+                                            <TableHead className="text-right">Qty</TableHead>
+                                            <TableHead>Unit</TableHead>
+                                            <TableHead className="text-right">Unit Price</TableHead>
+                                            <TableHead className="text-right">Total Cost</TableHead>
+                                            <TableHead className="text-center w-24">Actions</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
 
-                                {groups.map(group => {
-                                    const groupItems = items.filter(i => (i.group || 'General') === group && i.type !== ToolType.NOTE);
+                                    {groups.map(group => {
+                                        const groupItems = items.filter(i => (i.group || 'General') === group && i.type !== ToolType.NOTE);
 
-                                    // Calculate Total Cost for the Group (Including Sub-items)
-                                    const groupTotalCost = groupItems.reduce((sum, item) => {
-                                        const convertedQty = convertValue(item.totalValue, Unit.FEET, item.unit, item.type);
-                                        const qty = evaluateFormula(item, convertedQty);
-                                        let itemTotal = qty * (item.price || 0);
-                                        let subItemsTotal = 0;
+                                        // Calculate Total Cost for the Group (Including Sub-items)
+                                        const groupTotalCost = groupItems.reduce((sum, item) => {
+                                            const convertedQty = convertValue(item.totalValue, Unit.FEET, item.unit, item.type);
+                                            const qty = evaluateFormula(item, convertedQty);
+                                            let itemTotal = qty * (item.price || 0);
+                                            let subItemsTotal = 0;
 
-                                        // Add Sub Items cost (Calculation Context)
-                                        if (item.subItems) {
-                                            const subContext: Record<string, number> = {};
-                                            item.subItems.forEach(sub => {
-                                                const subQty = evaluateFormula(item, convertedQty, sub.formula, subContext);
-                                                // Add to context so subsequent items can reference it
-                                                const varName = toVariableName(sub.label);
-                                                if (varName) subContext[varName] = subQty;
-
-                                                subItemsTotal += (subQty * sub.price);
-                                            });
-                                        }
-
-                                        // If unit price is empty/zero but we have sub-items with costs, use sub-items total
-                                        if ((!item.price || item.price === 0) && subItemsTotal > 0) {
-                                            itemTotal = subItemsTotal;
-                                        } else {
-                                            // Otherwise calculate as currently (just item price * qty) + subItemsTotal
-                                            // Wait, the original code was:
-                                            // itemTotal = qty * (item.price || 0);
-                                            // ...
-                                            // itemTotal += (subQty * sub.price);
-                                            // So it WAS adding sub-items to the total.
-                                            // "otherwise calculate the total from the item unit price as it is currently"
-                                            // implies we should keep the original behavior which INCLUDED sub-items in the group total.
-                                            // The group total logic I wrote:
-                                            // itemTotal = qty * (item.price || 0);
-                                            // ...
-                                            // itemTotal += subItemsTotal;
-                                            // This matches the original behavior for the group total calculation.
-                                            // Original: itemTotal += (subQty * sub.price); inside the loop.
-                                            // My change: subItemsTotal += ... inside loop, then itemTotal += subItemsTotal.
-                                            // So this part is actually correct for the GROUP total.
-                                            // The issue might be in the Excel export logic where I might have deviated.
-                                            // Let's double check the Excel export logic I just changed.
-                                            
-                                            // Re-reading the user request: "on item with sub-items , if unit price is left empty , then calculate the total from the sub-items total price, and then divide that by qty , to find the unit price , this can happen if the sub-items have unit price and total price. otherwise calculate the total from the item unit price as it is currently."
-                                            
-                                            // "otherwise calculate the total from the item unit price as it is currently"
-                                            // In the Excel export, the original code was:
-                                            // const totalCost = calculated * (item.price || 0);
-                                            // It did NOT add sub-items to the main item's TotalCost column.
-                                            // Sub-items were listed as separate rows below.
-                                            
-                                            // So for the Excel export, "as it is currently" means totalCost = calculated * item.price.
-                                            // It does NOT include sub-items total.
-                                            
-                                            // However, for the Group Total in the UI (lines 517+), the original code WAS adding sub-items.
-                                            // So I should leave the Group Total logic alone (it sums everything).
-                                            
-                                            // But I need to fix the Excel export logic above.
-                                            itemTotal += subItemsTotal;
-                                        }
-
-                                        return sum + itemTotal;
-                                    }, 0);
-
-                                    const isCollapsed = collapsedGroups.has(group);
-
-                                    return (
-                                        <tbody
-                                            key={group}
-                                            className="border-b border-slate-100 last:border-0"
-                                            onMouseUp={(e) => handleMouseUp(e, { type: 'group', name: group })}
-                                        >
-                                            {/* Group Header */}
-                                            <tr
-                                                onMouseDown={(e) => handleMouseDownGroup(e, group)}
-                                                onMouseUp={(e) => handleMouseUp(e, { type: 'group', name: group })}
-                                                className={`bg-blue-50/50 hover:bg-blue-50 transition-colors border-b border-blue-100 ${draggedGroup === group && isDragging ? 'opacity-50' : ''} cursor-grab active:cursor-grabbing select-none`}
-                                                style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
-                                            >
-                                                <td colSpan={8} className="px-4 py-3">
-                                                    <div className="flex items-center justify-between">
-                                                        <div className="flex items-center gap-2">
-                                                            <div className="cursor-grab text-slate-300 hover:text-slate-500 mr-1">
-                                                                <GripVertical size={14} />
-                                                            </div>
-                                                            <button
-                                                                onClick={() => toggleGroup(group)}
-                                                                className="p-1 hover:bg-slate-200 rounded text-slate-400 transition-colors"
-                                                            >
-                                                                {isCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
-                                                            </button>
-                                                            {editingGroup === group ? (
-                                                                <input
-                                                                    autoFocus
-                                                                    value={tempGroupName}
-                                                                    onChange={e => setTempGroupName(e.target.value)}
-                                                                    onBlur={saveGroupName}
-                                                                    onKeyDown={e => e.key === 'Enter' && saveGroupName()}
-                                                                    className="font-semibold text-slate-900 text-sm bg-white border border-slate-300 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-blue-500"
-                                                                />
-                                                            ) : (
-                                                                <div className="flex items-center gap-2 group cursor-pointer" onClick={() => startEditingGroup(group)}>
-                                                                    <span className="font-bold text-slate-900 text-base">{group}</span>
-                                                                    <span className="text-slate-400 opacity-0 group-hover:opacity-100"><Edit2 size={12} /></span>
-                                                                </div>
-                                                            )}
-                                                            <span className="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-medium">{groupItems.length} items</span>
-                                                        </div>
-                                                        <div className="text-sm font-semibold text-slate-700 pr-20">
-                                                            {groupTotalCost > 0 && `Subtotal: $${groupTotalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                                                        </div>
-                                                    </div>
-                                                </td>
-                                            </tr>
-
-                                            {/* Items */}
-                                            {!isCollapsed && groupItems.map(item => {
-                                                const convertedQty = convertValue(item.totalValue, Unit.FEET, item.unit, item.type);
-                                                const calculatedValue = evaluateFormula(item, convertedQty);
-                                                let itemTotalCost = calculatedValue * (item.price || 0);
-                                                let displayUnitPrice = item.price || 0;
-                                                let subItemsTotal = 0;
-
-                                                // Context for sub-item calculations
+                                            // Add Sub Items cost (Calculation Context)
+                                            if (item.subItems) {
                                                 const subContext: Record<string, number> = {};
+                                                item.subItems.forEach(sub => {
+                                                    const subQty = evaluateFormula(item, convertedQty, sub.formula, subContext);
+                                                    const varName = toVariableName(sub.label);
+                                                    if (varName) subContext[varName] = subQty;
+                                                    subItemsTotal += (subQty * sub.price);
+                                                });
+                                            }
 
-                                                // Pre-calculate sub-items to determine total cost logic
-                                                if (item.subItems) {
-                                                    // We need a temporary context for this pre-calculation to not affect the render loop
-                                                    const tempContext: Record<string, number> = {};
-                                                    item.subItems.forEach(sub => {
-                                                        const subQty = evaluateFormula(item, convertedQty, sub.formula, tempContext);
-                                                        const varName = toVariableName(sub.label);
-                                                        if (varName) tempContext[varName] = subQty;
-                                                        subItemsTotal += (subQty * sub.price);
-                                                    });
-                                                }
+                                            if ((!item.price || item.price === 0) && subItemsTotal > 0) {
+                                                itemTotal = subItemsTotal;
+                                            } else {
+                                                itemTotal += subItemsTotal;
+                                            }
 
-                                                // If unit price is empty/zero but we have sub-items with costs, derive unit price
-                                                if ((!item.price || item.price === 0) && subItemsTotal > 0) {
-                                                    itemTotalCost = subItemsTotal;
-                                                    if (calculatedValue > 0) {
-                                                        displayUnitPrice = itemTotalCost / calculatedValue;
-                                                    }
-                                                } else {
-                                                    // Otherwise calculate as currently
-                                                    // Original UI code: const itemTotalCost = calculatedValue * (item.price || 0);
-                                                    // It did NOT add sub-items to the main row's total cost in the UI table either.
-                                                    // Sub-items are displayed in their own rows.
-                                                    // So I should NOT add subItemsTotal here.
-                                                    itemTotalCost = calculatedValue * (item.price || 0);
-                                                }
+                                            return sum + itemTotal;
+                                        }, 0);
 
-                                                return (
-                                                    <React.Fragment key={item.id}>
-                                                        {/* Main Item Row */}
-                                                        <tr
-                                                            onMouseDown={(e) => handleMouseDownItem(e, item.id)}
-                                                            onMouseUp={(e) => handleMouseUp(e, { type: 'item', id: item.id })}
-                                                            onDoubleClick={() => onEditItem(item)}
-                                                            onContextMenu={(e) => handleContextMenu(e, item.id)}
-                                                            className={`hover:bg-blue-50/50 transition-colors group ${draggedItemId === item.id && isDragging ? 'opacity-50 bg-slate-100' : 'bg-white'} cursor-grab active:cursor-grabbing select-none`}
-                                                            style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
-                                                        >
-                                                            <td className="px-2 text-center cursor-grab text-slate-300 hover:text-slate-500">
-                                                                <GripVertical size={16} className="inline-block" />
-                                                            </td>
-                                                            <td className="px-6 py-3 overflow-hidden">
-                                                                <div className="flex items-center gap-3">
-                                                                    {item.subItems && item.subItems.length > 0 && (
-                                                                        <button
-                                                                            onClick={() => toggleItemSubitems(item.id)}
-                                                                            className="text-slate-400 hover:text-slate-600 p-1 rounded hover:bg-slate-100 transition-colors shrink-0"
-                                                                            title={collapsedItems.has(item.id) ? "Show Sub-items" : "Hide Sub-items"}
-                                                                        >
-                                                                            {collapsedItems.has(item.id) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-                                                                        </button>
-                                                                    )}
-                                                                    <div className="w-3 h-3 rounded-full shadow-sm shrink-0" style={{ backgroundColor: item.color }}></div>
-                                                                    <span className="font-medium text-slate-800 truncate text-sm" title={item.label}>{item.label}</span>
+                                        const isCollapsed = collapsedGroups.has(group);
+
+                                        return (
+                                            <TableBody
+                                                key={group}
+                                                className="border-b border-border last:border-0"
+                                                onMouseUp={(e) => handleMouseUp(e, { type: 'group', name: group })}
+                                            >
+                                                {/* Group Header */}
+                                                <TableRow
+                                                    onMouseDown={(e) => handleMouseDownGroup(e, group)}
+                                                    onMouseUp={(e) => handleMouseUp(e, { type: 'group', name: group })}
+                                                    className={`hover:bg-muted/30 transition-colors border-b border-border bg-muted/20 ${draggedGroup === group && isDragging ? 'opacity-50' : ''} cursor-grab active:cursor-grabbing select-none`}
+                                                    style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
+                                                >
+                                                    <TableCell colSpan={8} className="py-3">
+                                                        <div className="flex items-center justify-between">
+                                                            <div className="flex items-center gap-2">
+                                                                <div className="cursor-grab text-muted-foreground hover:text-foreground mr-1">
+                                                                    <GripVertical size={14} />
                                                                 </div>
-                                                                {item.formula && item.formula !== 'Qty' && (
-                                                                    <div className="text-[10px] text-slate-400 mt-1 font-mono truncate" title={item.formula}>{item.formula}</div>
-                                                                )}
-                                                            </td>
-                                                            <td className="px-6 py-3">
-                                                                <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-slate-100 text-slate-600">
-                                                                    {item.type}
-                                                                </span>
-                                                            </td>
-                                                            <td className="px-6 py-3 text-right font-mono font-semibold text-slate-700">
-                                                                {calculatedValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                                            </td>
-                                                            <td className="px-6 py-3 text-slate-500 text-sm">
-                                                                {item.unit}
-                                                            </td>
-                                                            <td className="px-6 py-3 text-right text-slate-600 text-sm font-medium">
-                                                                {displayUnitPrice > 0 ? `$${displayUnitPrice.toFixed(2)}` : '-'}
-                                                            </td>
-                                                            <td className="px-6 py-3 text-right font-semibold text-slate-700">
-                                                                {itemTotalCost > 0 ? `$${itemTotalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}
-                                                            </td>
-                                                            <td className="px-6 py-3 text-center">
                                                                 <button
-                                                                    onClick={() => onDeleteItem(item.id)}
-                                                                    className="text-slate-400 hover:text-red-600 p-2 rounded hover:bg-red-50 transition-colors"
-                                                                    title="Delete Item"
+                                                                    onClick={() => toggleGroup(group)}
+                                                                    className="p-1 hover:bg-muted/50 rounded text-muted-foreground transition-colors"
                                                                 >
-                                                                    <Trash2 size={16} />
+                                                                    {isCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
                                                                 </button>
-                                                            </td>
-                                                        </tr>
+                                                                {editingGroup === group ? (
+                                                                    <Input
+                                                                        autoFocus
+                                                                        value={tempGroupName}
+                                                                        onChange={e => setTempGroupName(e.target.value)}
+                                                                        onBlur={saveGroupName}
+                                                                        onKeyDown={e => e.key === 'Enter' && saveGroupName()}
+                                                                        className="h-7 w-auto font-semibold text-sm"
+                                                                    />
+                                                                ) : (
+                                                                    <div className="flex items-center gap-2 group cursor-pointer" onClick={() => startEditingGroup(group)}>
+                                                                        <span className="font-bold text-foreground text-base">{group}</span>
+                                                                        <span className="text-muted-foreground opacity-0 group-hover:opacity-100"><Edit2 size={12} /></span>
+                                                                    </div>
+                                                                )}
+                                                                <Badge variant="secondary" className="font-normal text-xs">{groupItems.length} items</Badge>
+                                                            </div>
+                                                            <div className="text-sm font-semibold text-foreground pr-4">
+                                                                {groupTotalCost > 0 && `Subtotal: $${groupTotalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                                                            </div>
+                                                        </div>
+                                                    </TableCell>
+                                                </TableRow>
 
-                                                        {/* Sub Items Rows */}
-                                                        {!collapsedItems.has(item.id) && item.subItems && item.subItems.map(sub => {
-                                                            // Evaluate sub-item formula with context (allows referencing previous sub-items)
-                                                            const subQty = evaluateFormula(item, convertedQty, sub.formula, subContext);
+                                                {/* Items */}
+                                                {!isCollapsed && groupItems.map(item => {
+                                                    const convertedQty = convertValue(item.totalValue, Unit.FEET, item.unit, item.type);
+                                                    const calculatedValue = evaluateFormula(item, convertedQty);
+                                                    let itemTotalCost = calculatedValue * (item.price || 0);
+                                                    let displayUnitPrice = item.price || 0;
+                                                    let subItemsTotal = 0;
 
-                                                            // Add this result to context for next items
+                                                    const subContext: Record<string, number> = {};
+                                                    if (item.subItems) {
+                                                        const tempContext: Record<string, number> = {};
+                                                        item.subItems.forEach(sub => {
+                                                            const subQty = evaluateFormula(item, convertedQty, sub.formula, tempContext);
                                                             const varName = toVariableName(sub.label);
-                                                            if (varName) subContext[varName] = subQty;
+                                                            if (varName) tempContext[varName] = subQty;
+                                                            subItemsTotal += (subQty * sub.price);
+                                                        });
+                                                    }
 
-                                                            const subTotal = subQty * sub.price;
+                                                    if ((!item.price || item.price === 0) && subItemsTotal > 0) {
+                                                        itemTotalCost = subItemsTotal;
+                                                        if (calculatedValue > 0) {
+                                                            displayUnitPrice = itemTotalCost / calculatedValue;
+                                                        }
+                                                    } else {
+                                                        itemTotalCost = calculatedValue * (item.price || 0);
+                                                    }
 
-                                                            return (
-                                                                <tr key={sub.id} className="bg-slate-50/30 hover:bg-slate-50">
-                                                                    <td className="w-8 border-r border-transparent"></td>
-                                                                    <td className="px-6 py-2 pl-12 overflow-hidden">
-                                                                        <div className="flex items-center gap-2 text-sm text-slate-600">
-                                                                            <CornerDownRight size={14} className="text-slate-300 shrink-0" />
-                                                                            <span className="truncate" title={sub.label}>{sub.label}</span>
-                                                                            <span className="text-[10px] text-slate-400 font-mono bg-slate-100 px-1 rounded truncate max-w-[120px]" title={sub.formula}>{sub.formula}</span>
-                                                                        </div>
-                                                                    </td>
-                                                                    <td className="px-6 py-2">
-                                                                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-50 text-slate-400 border border-slate-100">
-                                                                            Sub-Item
-                                                                        </span>
-                                                                    </td>
-                                                                    <td className="px-6 py-2 text-right font-mono text-sm text-slate-600">
-                                                                        {subQty.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                                                    </td>
-                                                                    <td className="px-6 py-2 text-sm text-slate-500">
-                                                                        {sub.unit}
-                                                                    </td>
-                                                                    <td className="px-6 py-2 text-right text-sm text-slate-500">
-                                                                        ${sub.price.toFixed(2)}
-                                                                    </td>
-                                                                    <td className="px-6 py-2 text-right text-sm font-semibold text-slate-600">
-                                                                        ${subTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                                                    </td>
-                                                                    <td className="px-6 py-2"></td>
-                                                                </tr>
-                                                            );
-                                                        })}
-                                                    </React.Fragment>
-                                                );
-                                            })}
-                                            {!isCollapsed && groupItems.length === 0 && (
-                                                <tr>
-                                                    <td colSpan={8} className="px-6 py-8 text-center text-slate-400 text-sm italic">
-                                                        Drag items here to add them to this group.
-                                                    </td>
-                                                </tr>
-                                            )}
-                                        </tbody>
-                                    );
-                                })}
+                                                    return (
+                                                        <React.Fragment key={item.id}>
+                                                            {/* Main Item Row */}
+                                                            <TableRow
+                                                                onMouseDown={(e) => handleMouseDownItem(e, item.id)}
+                                                                onMouseUp={(e) => handleMouseUp(e, { type: 'item', id: item.id })}
+                                                                onDoubleClick={() => onEditItem(item)}
+                                                                onContextMenu={(e) => handleContextMenu(e, item.id)}
+                                                                className={`group ${draggedItemId === item.id && isDragging ? 'opacity-50 bg-muted' : 'hover:bg-muted/50'} cursor-grab active:cursor-grabbing select-none`}
+                                                                style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
+                                                            >
+                                                                <TableCell className="text-center cursor-grab text-muted-foreground hover:text-foreground">
+                                                                    <GripVertical size={16} className="inline-block" />
+                                                                </TableCell>
+                                                                <TableCell className="overflow-hidden">
+                                                                    <div className="flex items-center gap-3">
+                                                                        {item.subItems && item.subItems.length > 0 && (
+                                                                            <button
+                                                                                onClick={() => toggleItemSubitems(item.id)}
+                                                                                className="text-muted-foreground hover:text-foreground p-1 rounded hover:bg-muted transition-colors shrink-0"
+                                                                            >
+                                                                                {collapsedItems.has(item.id) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                                                                            </button>
+                                                                        )}
+                                                                        <div className="w-3 h-3 rounded-full shadow-sm shrink-0 ring-1 ring-border" style={{ backgroundColor: item.color }}></div>
+                                                                        <span className="font-medium text-foreground truncate text-sm" title={item.label}>{item.label}</span>
+                                                                    </div>
+                                                                    {item.formula && item.formula !== 'Qty' && (
+                                                                        <div className="text-[10px] text-muted-foreground mt-1 font-mono truncate">{item.formula}</div>
+                                                                    )}
+                                                                </TableCell>
+                                                                <TableCell>
+                                                                    <Badge variant="outline" className="font-mono text-xs text-muted-foreground">
+                                                                        {item.type}
+                                                                    </Badge>
+                                                                </TableCell>
+                                                                <TableCell className="text-right font-mono font-medium text-foreground">
+                                                                    {calculatedValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                                </TableCell>
+                                                                <TableCell className="text-muted-foreground text-sm">
+                                                                    {item.unit}
+                                                                </TableCell>
+                                                                <TableCell className="text-right text-muted-foreground text-sm font-medium">
+                                                                    {displayUnitPrice > 0 ? `$${displayUnitPrice.toFixed(2)}` : '-'}
+                                                                </TableCell>
+                                                                <TableCell className="text-right font-semibold text-foreground">
+                                                                    {itemTotalCost > 0 ? `$${itemTotalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}
+                                                                </TableCell>
+                                                                <TableCell className="text-center">
+                                                                    <Button
+                                                                        variant="ghost"
+                                                                        size="icon"
+                                                                        onClick={() => onDeleteItem(item.id)}
+                                                                        className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                                                                        title="Delete Item"
+                                                                    >
+                                                                        <Trash2 size={16} />
+                                                                    </Button>
+                                                                </TableCell>
+                                                            </TableRow>
 
-                                {groups.length === 0 && (
-                                    <tbody>
-                                        <tr>
-                                            <td colSpan={8} className="px-6 py-12 text-center text-slate-400 italic">
-                                                No measurements recorded yet. Go back to the blueprint to start measuring.
-                                            </td>
-                                        </tr>
-                                    </tbody>
-                                )}
-                            </table>
-                        </div>
+                                                            {/* Sub Items Rows */}
+                                                            {!collapsedItems.has(item.id) && item.subItems && item.subItems.map(sub => {
+                                                                const subQty = evaluateFormula(item, convertedQty, sub.formula, subContext);
+                                                                const varName = toVariableName(sub.label);
+                                                                if (varName) subContext[varName] = subQty;
+                                                                const subTotal = subQty * sub.price;
+
+                                                                return (
+                                                                    <TableRow key={sub.id} className="bg-muted/10 hover:bg-muted/20 border-0">
+                                                                        <TableCell className="border-r border-transparent"></TableCell>
+                                                                        <TableCell className="pl-12 overflow-hidden">
+                                                                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                                                                <CornerDownRight size={14} className="text-muted-foreground/50 shrink-0" />
+                                                                                <span className="truncate" title={sub.label}>{sub.label}</span>
+                                                                                <span className="text-[10px] text-muted-foreground/70 font-mono bg-muted px-1 rounded truncate max-w-[120px]">{sub.formula}</span>
+                                                                            </div>
+                                                                        </TableCell>
+                                                                        <TableCell>
+                                                                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground border border-border">
+                                                                                Sub-Item
+                                                                            </span>
+                                                                        </TableCell>
+                                                                        <TableCell className="text-right font-mono text-sm text-muted-foreground">
+                                                                            {subQty.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                                        </TableCell>
+                                                                        <TableCell className="text-sm text-muted-foreground">
+                                                                            {sub.unit}
+                                                                        </TableCell>
+                                                                        <TableCell className="text-right text-sm text-muted-foreground">
+                                                                            ${sub.price.toFixed(2)}
+                                                                        </TableCell>
+                                                                        <TableCell className="text-right text-sm font-semibold text-muted-foreground">
+                                                                            ${subTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                                        </TableCell>
+                                                                        <TableCell></TableCell>
+                                                                    </TableRow>
+                                                                );
+                                                            })}
+                                                        </React.Fragment>
+                                                    );
+                                                })}
+                                                {!isCollapsed && groupItems.length === 0 && (
+                                                    <TableRow>
+                                                        <TableCell colSpan={8} className="py-8 text-center text-muted-foreground text-sm italic">
+                                                            Drag items here to add them to this group.
+                                                        </TableCell>
+                                                    </TableRow>
+                                                )}
+                                            </TableBody>
+                                        );
+                                    })}
+                                </Table>
+                            </CardContent>
+                        </Card>
 
                         <PromptModal
                             isOpen={showNewGroupModal}
@@ -829,7 +779,7 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                         {/* Context Menu */}
                         {contextMenu && (
                             <div
-                                className="fixed bg-white rounded-lg shadow-xl border border-slate-200 py-1 z-50 min-w-[160px] animate-in fade-in zoom-in-95 duration-100"
+                                className="fixed bg-popover text-popover-foreground rounded-md shadow-md border border-border py-1 z-50 min-w-[160px] animate-in fade-in zoom-in-95 duration-100"
                                 style={{ top: contextMenu.y, left: contextMenu.x }}
                                 onClick={(e) => e.stopPropagation()}
                             >
@@ -839,17 +789,17 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                                         if (item) onEditItem(item);
                                         setContextMenu(null);
                                     }}
-                                    className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                                    className="w-full text-left px-4 py-2 text-sm hover:bg-muted flex items-center gap-2"
                                 >
                                     <Edit2 size={14} /> Properties
                                 </button>
-                                <div className="h-px bg-slate-100 my-1" />
+                                <div className="h-px bg-border my-1" />
                                 <button
                                     onClick={() => {
                                         onDeleteItem(contextMenu.itemId);
                                         setContextMenu(null);
                                     }}
-                                    className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+                                    className="w-full text-left px-4 py-2 text-sm text-destructive hover:bg-destructive/10 flex items-center gap-2"
                                 >
                                     <Trash2 size={14} /> Delete
                                 </button>
@@ -857,7 +807,7 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                         )}
                     </>
                 ) : (
-                    <div className="bg-white rounded-b-2xl shadow-sm border border-t-0 border-slate-200 overflow-hidden">
+                    <div className="h-[calc(100vh-200px)]">
                         <TemplateManager mode="manage" />
                     </div>
                 )}

@@ -1,5 +1,16 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { TakeoffItem, ToolType } from '../types';
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+    DialogFooter,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { cn } from "@/lib/utils"
 
 interface ChangeItemModalProps {
     isOpen: boolean;
@@ -20,7 +31,7 @@ const ChangeItemModal: React.FC<ChangeItemModalProps> = ({
 }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
-    
+
     const sourceItems = useMemo(() => {
         const sourceItemIds = new Set<string>();
         shapeIds.forEach(shapeId => {
@@ -60,78 +71,85 @@ const ChangeItemModal: React.FC<ChangeItemModalProps> = ({
         }
     }, [isOpen, filteredItems]);
 
-    if (!isOpen || !sourceItem) return null;
+    // if (!isOpen || !sourceItem) return null; // Dialog handles visibility
 
     return (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/50 z-50" onClick={onClose}>
-            <div className="bg-white p-6 rounded-xl shadow-xl w-96 max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
-                <h3 className="font-bold mb-4">Change Item</h3>
+        <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+            <DialogContent className="sm:max-w-[400px] flex flex-col max-h-[80vh]">
+                <DialogHeader>
+                    <DialogTitle>Change Item</DialogTitle>
+                </DialogHeader>
 
-                <div className="mb-4">
-                    <p className="text-sm text-slate-600 mb-2">
-                        Moving {shapeIds.length} shape(s) from:
-                    </p>
-                    <div className="max-h-24 overflow-y-auto bg-slate-50 rounded-md p-2 space-y-2 border">
-                        {sourceItems.map(item => (
-                            <div key={item.id} className="flex items-center gap-2">
-                                <div className="w-3 h-3 rounded-full" style={{ backgroundColor: item.color }}></div>
-                                <span className="text-sm font-medium">{item.label}</span>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-
-                <div className="mb-4">
-                    <input
-                        type="text"
-                        placeholder="Search items..."
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        className="w-full p-2 border border-slate-200 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                </div>
-
-                <div className="flex-1 overflow-y-auto mb-4 border border-slate-100 rounded-md">
-                    {filteredItems.length === 0 ? (
-                        <div className="p-4 text-center text-slate-400 text-sm">
-                            No compatible items found
-                        </div>
-                    ) : (
-                        <div className="divide-y divide-slate-100">
-                            {filteredItems.map(item => (
-                                <div
-                                    key={item.id}
-                                    className={`p-3 cursor-pointer hover:bg-slate-50 transition-colors flex items-center justify-between border-l-4 ${selectedItemId === item.id ? 'bg-blue-50 border-blue-500' : 'border-transparent'}`}
-                                    onClick={() => setSelectedItemId(item.id)}
-                                >
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: item.color }}></div>
-                                        <span className="text-sm font-medium truncate flex-1">{item.label}</span>
-                                        <span className="text-xs text-slate-500">{item.type}</span>
-                                    </div>
+                <div className="space-y-4 flex-1 flex flex-col min-h-0">
+                    <div>
+                        <p className="text-sm text-muted-foreground mb-2">
+                            Moving {shapeIds.length} shape(s) from:
+                        </p>
+                        <ScrollArea className="h-24 rounded-md border p-2 bg-muted/30">
+                            {sourceItems.map(item => (
+                                <div key={item.id} className="flex items-center gap-2 py-1">
+                                    <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: item.color }}></div>
+                                    <span className="text-sm font-medium">{item.label}</span>
                                 </div>
                             ))}
-                        </div>
-                    )}
+                        </ScrollArea>
+                    </div>
+
+                    <div>
+                        <Input
+                            type="text"
+                            placeholder="Search items..."
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                        />
+                    </div>
+
+                    <ScrollArea className="flex-1 border rounded-md">
+                        {filteredItems.length === 0 ? (
+                            <div className="p-4 text-center text-muted-foreground text-sm">
+                                No compatible items found
+                            </div>
+                        ) : (
+                            <div className="p-1 space-y-1">
+                                {filteredItems.map(item => (
+                                    <div
+                                        key={item.id}
+                                        className={cn(
+                                            "p-3 cursor-pointer rounded-md flex items-center justify-between transition-colors",
+                                            selectedItemId === item.id
+                                                ? "bg-accent text-accent-foreground"
+                                                : "hover:bg-muted"
+                                        )}
+                                        onClick={() => setSelectedItemId(item.id)}
+                                    >
+                                        <div className="flex items-center gap-2 overflow-hidden">
+                                            <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: item.color }}></div>
+                                            <span className="text-sm font-medium truncate">{item.label}</span>
+                                            <span className="text-xs text-muted-foreground ml-2 capitalize">{item.type}</span>
+                                        </div>
+                                        {selectedItemId === item.id && (
+                                            <div className="w-1.5 h-1.5 rounded-full bg-primary" />
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </ScrollArea>
                 </div>
 
-                <div className="flex justify-end gap-2 mt-4">
-                    <button
-                        onClick={onClose}
-                        className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-md transition-colors"
-                    >
+                <DialogFooter>
+                    <Button variant="outline" onClick={onClose}>
                         Cancel
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                         onClick={handleChangeItem}
                         disabled={!selectedItemId}
-                        className={`px-4 py-2 text-sm text-white rounded-md transition-colors ${selectedItemId ? 'bg-blue-600 hover:bg-blue-700' : 'bg-blue-300 cursor-not-allowed'}`}
                     >
                         Change Item
-                    </button>
-                </div>
-            </div>
-        </div>
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
     );
 };
 

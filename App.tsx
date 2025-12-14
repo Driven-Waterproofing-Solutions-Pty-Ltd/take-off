@@ -10,7 +10,7 @@ import HelpModal from './components/HelpModal';
 import NewItemModal from './components/NewItemModal';
 import UploadModal from './components/UploadModal';
 import PropertiesModal from './components/PropertiesModal';
-import LicenseSettingsModal from './components/LicenseSettingsModal';
+import LicenseModal from './components/LicenseModal';
 import PromptModal from './components/PromptModal';
 import ExportModal from './components/ExportModal';
 import ConfirmModal from './components/ConfirmModal';
@@ -707,6 +707,7 @@ const AppContent: React.FC = () => {
           if (status.valid && status.licenseType === 'paid') {
             const dateStr = status.expiresAt ? new Date(status.expiresAt).toLocaleDateString() : 'Lifetime';
             addToast(`Purchase Successful! Valid until: ${dateStr}`, 'success');
+            setShowLicenseModal(true);
             // Force a reload of the license context or just let the updated state flow? 
             // Since useLicense calls checkLicense on mount, we might need to trigger a re-check if we want the context to update globally immediately.
             // However, for now, the toast is the feedback requested.
@@ -829,7 +830,7 @@ const AppContent: React.FC = () => {
       {showNewItemModal && pendingTool && <NewItemModal toolType={pendingTool} existingCount={items.length} onCreate={handleCreateTakeoffItem} onCancel={() => { setShowNewItemModal(false); setPendingTool(null); }} />}
       {editingItem && <PropertiesModal item={editingItem} items={items} onSave={handleUpdateItem} onClose={() => setEditingItem(null)} />}
       <HelpModal isOpen={showHelpModal} onClose={() => setShowHelpModal(false)} initialTab={helpModalTab} />
-      <LicenseSettingsModal isOpen={showLicenseModal} onClose={() => setShowLicenseModal(false)} />
+      <LicenseModal isOpen={showLicenseModal} onClose={() => setShowLicenseModal(false)} allowClose={true} />
       <ExportModal isOpen={showExportModal} planSets={planSets} projectData={projectData} currentPageIndex={pageIndex} isExporting={isExporting} progress={exportProgress} onClose={() => setShowExportModal(false)} onExport={handleExportPDF} />
       <PromptModal isOpen={showNewProjectPrompt} title="Create New Project" message="Enter a name for the new project." placeholder="My Project" onConfirm={(name) => handleNewProjectConfirmed(name).then(() => setViewMode('canvas'))} onCancel={() => setShowNewProjectPrompt(false)} confirmText="Create Project" />
       <ConfirmModal isOpen={showImportConfirm} title="Import Project?" message="Loading a project will replace the current workspace." onConfirm={() => handleImportConfirmed().then(() => setViewMode('canvas'))} onCancel={() => { setShowImportConfirm(false); setPendingImportPath(null); }} confirmText="Import Project" isDestructive />

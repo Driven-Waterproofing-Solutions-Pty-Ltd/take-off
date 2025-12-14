@@ -1,9 +1,32 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { TakeoffItem, ItemProperty, ToolType, Unit, ItemTemplate, SubItem } from '../types';
 import { evaluateFormula, convertValue, sanitizeFormula, toVariableName, replaceLabelsWithVars, renameVariable } from '../utils/math';
 import { saveTemplate } from '../utils/storage';
 import { Plus, Trash2, Calculator, DollarSign, Ruler, LayoutGrid, Save, Check, Layers, Package, Edit2, X, FolderInput, GripVertical } from 'lucide-react';
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+    DialogDescription,
+    DialogFooter,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Button } from "@/components/ui/button"
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Card, CardContent } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Separator } from "@/components/ui/separator"
+import { cn } from "@/lib/utils"
 
 interface PropertiesModalProps {
     item: TakeoffItem;
@@ -79,57 +102,57 @@ const FormulaInput: React.FC<FormulaInputProps> = ({ value, onChange, onBlur, pl
     }, []);
 
     return (
-        <div className="relative" ref={containerRef}>
-            <div className="bg-slate-800 text-green-400 p-2 rounded-lg font-mono text-sm relative flex items-center">
-                <span className="text-slate-500 mr-2">ƒ:</span>
-                <input
-                    ref={inputRef}
-                    value={value}
-                    onChange={(e) => {
-                        onChange(e.target.value);
-                        setShowSuggestions(true);
-                    }}
-                    onFocus={() => setShowSuggestions(true)}
-                    onBlur={(e) => {
-                        // Delay blur to allow click on suggestion to register
-                        setTimeout(() => {
-                            if (document.activeElement !== inputRef.current) {
-                                setShowSuggestions(false);
-                                onBlur();
-                            }
-                        }, 200);
-                    }}
-                    onKeyDown={(e) => {
-                        if (e.key === 'Escape') setShowSuggestions(false);
-                    }}
-                    className="bg-transparent w-full outline-none placeholder-slate-600 text-green-400"
-                    placeholder={placeholder || "Qty"}
-                    autoComplete="off"
-                />
-                {previewValue !== undefined && (
-                    <div className="absolute right-2 top-1/2 transform -translate-y-1/2 text-xs bg-slate-700 px-2 py-1 rounded text-slate-300 pointer-events-none">
-                        = {previewValue.toFixed(2)}
-                    </div>
-                )}
-            </div>
-
-            {/* Suggestions Dropdown */}
-            {showSuggestions && filteredSuggestions.length > 0 && (
-                <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-xl max-h-48 overflow-y-auto">
-                    {filteredSuggestions.map((s) => (
-                        <button
-                            key={s.value}
-                            onMouseDown={(e) => e.preventDefault()} // Prevent focus loss
-                            onClick={() => insertSuggestion(s.value)}
-                            className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 flex justify-between items-center group"
-                        >
-                            <span className="font-mono font-bold text-slate-700">{s.value}</span>
-                            <span className="text-xs text-slate-400 group-hover:text-blue-500">{s.desc || s.label}</span>
-                        </button>
-                    ))}
+        <div className="flex h-10 w-full items-center rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 relative font-mono" ref={containerRef}>
+            <span className="text-muted-foreground mr-2 select-none font-sans italic">ƒ:</span>
+            <input
+                ref={inputRef}
+                value={value}
+                onChange={(e) => {
+                    onChange(e.target.value);
+                    setShowSuggestions(true);
+                }}
+                onFocus={() => setShowSuggestions(true)}
+                onBlur={(e) => {
+                    // Delay blur to allow click on suggestion to register
+                    setTimeout(() => {
+                        if (document.activeElement !== inputRef.current) {
+                            setShowSuggestions(false);
+                            onBlur();
+                        }
+                    }, 200);
+                }}
+                onKeyDown={(e) => {
+                    if (e.key === 'Escape') setShowSuggestions(false);
+                }}
+                className="bg-transparent w-full outline-none placeholder:text-muted-foreground"
+                placeholder={placeholder || "Qty"}
+                autoComplete="off"
+            />
+            {previewValue !== undefined && (
+                <div className="absolute right-2 top-1/2 transform -translate-y-1/2 text-xs bg-muted px-2 py-1 rounded text-muted-foreground pointer-events-none select-none border">
+                    = {previewValue.toFixed(2)}
                 </div>
             )}
-        </div>
+
+            {/* Suggestions Dropdown */}
+            {
+                showSuggestions && filteredSuggestions.length > 0 && (
+                    <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-popover text-popover-foreground border rounded-md shadow-md max-h-48 overflow-y-auto">
+                        {filteredSuggestions.map((s) => (
+                            <button
+                                key={s.value}
+                                onMouseDown={(e) => e.preventDefault()} // Prevent focus loss
+                                onClick={() => insertSuggestion(s.value)}
+                                className="w-full text-left px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground flex justify-between items-center group transition-colors"
+                            >
+                                <span className="font-mono font-bold">{s.value}</span>
+                                <span className="text-xs text-muted-foreground group-hover:text-accent-foreground">{s.desc || s.label}</span>
+                            </button>
+                        ))}
+                    </div>
+                )
+            }
+        </div >
     );
 };
 
@@ -448,210 +471,181 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
     // Simplified View for Ruler (Dimension)
     if (item.type === ToolType.DIMENSION) {
         return (
-            <div className="fixed inset-0 flex items-center justify-center bg-black/50 z-[100]" onMouseDown={(e) => e.stopPropagation()}>
-                <div className="bg-white rounded-2xl shadow-2xl w-[350px] overflow-hidden flex flex-col animate-in zoom-in-95 duration-200">
-                    <div className="px-6 py-4 border-b border-slate-100 bg-white flex justify-between items-center">
-                        <h2 className="text-lg font-semibold text-slate-900">Ruler Properties</h2>
-                        <button onClick={onClose} className="text-slate-400 hover:text-slate-700 transition-colors">✕</button>
-                    </div>
-
-                    <div className="p-6 space-y-5">
-                        <div>
-                            <label className="block text-xs font-semibold text-slate-600 mb-2">Name</label>
-                            <input
+            <Dialog open={true} onOpenChange={(open) => !open && onClose()}>
+                <DialogContent className="sm:max-w-[400px]">
+                    <DialogHeader>
+                        <DialogTitle>Ruler Properties</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4 py-2">
+                        <div className="space-y-2">
+                            <Label>Name</Label>
+                            <Input
                                 value={label}
                                 onChange={e => setLabel(e.target.value)}
-                                className="w-full border border-slate-200 px-3 py-2 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white text-slate-900 transition-all"
                                 autoFocus
                             />
                         </div>
-                        <div>
-                            <label className="block text-xs font-semibold text-slate-600 mb-2">Color</label>
-                            <div className="flex items-center gap-2">
-                                <input
-                                    type="color"
-                                    value={color}
-                                    onChange={e => setColor(e.target.value)}
-                                    className="h-10 w-full p-1 border border-slate-200 rounded-lg cursor-pointer"
-                                />
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <Label>Color</Label>
+                                <div className="flex items-center gap-2">
+                                    <Input
+                                        type="color"
+                                        value={color}
+                                        onChange={e => setColor(e.target.value)}
+                                        className="h-10 w-16 p-1 cursor-pointer"
+                                    />
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Unit Display</Label>
+                                <Select value={unit} onValueChange={(val) => setUnit(val as Unit)}>
+                                    <SelectTrigger>
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {availableUnits.map(u => (
+                                            <SelectItem key={u} value={u}>{u}</SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
                             </div>
                         </div>
-                        <div>
-                            <label className="block text-xs font-semibold text-slate-600 mb-2">Unit Display</label>
-                            <select
-                                value={unit}
-                                onChange={(e) => setUnit(e.target.value as Unit)}
-                                className="w-full border border-slate-200 px-3 py-2 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white text-slate-900 transition-all"
-                            >
-                                {availableUnits.map(u => (
-                                    <option key={u} value={u}>{u}</option>
-                                ))}
-                            </select>
-                        </div>
                     </div>
-
-                    <div className="px-6 py-4 border-t border-slate-100 bg-slate-50/50 flex justify-end gap-3">
-                        <button onClick={onClose} className="text-slate-600 hover:bg-slate-100 px-4 py-2 rounded-lg text-sm font-medium transition-colors">Cancel</button>
-                        <button onClick={handleSave} className="bg-slate-900 hover:bg-slate-800 text-white px-6 py-2 rounded-lg text-sm font-medium shadow-sm transition-colors">Save</button>
-                    </div>
-                </div>
-            </div>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={onClose}>Cancel</Button>
+                        <Button onClick={handleSave}>Save</Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         );
     }
 
     // Simplified View for Note
     if (item.type === ToolType.NOTE) {
         return (
-            <div className="fixed inset-0 flex items-center justify-center bg-black/50 z-[100]" onMouseDown={(e) => e.stopPropagation()}>
-                <div className="bg-white rounded-2xl shadow-2xl w-[350px] overflow-hidden flex flex-col animate-in zoom-in-95 duration-200">
-                    <div className="px-6 py-4 border-b border-slate-100 bg-white flex justify-between items-center">
-                        <h2 className="text-lg font-semibold text-slate-900">Note Properties</h2>
-                        <button onClick={onClose} className="text-slate-400 hover:text-slate-700 transition-colors">✕</button>
-                    </div>
-
-                    <div className="p-6 space-y-4">
-                        <div>
-                            <label className="block text-xs font-bold text-slate-500 mb-1">Name</label>
-                            <input
+            <Dialog open={true} onOpenChange={(open) => !open && onClose()}>
+                <DialogContent className="sm:max-w-[400px]">
+                    <DialogHeader>
+                        <DialogTitle>Note Properties</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4 py-2">
+                        <div className="space-y-2">
+                            <Label>Name</Label>
+                            <Input
                                 value={label}
                                 onChange={e => setLabel(e.target.value)}
-                                className="w-full border p-2 rounded text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white text-slate-900"
                                 autoFocus
                             />
                         </div>
-                        <div>
-                            <label className="block text-xs font-bold text-slate-500 mb-1 flex items-center gap-1">
-                                <FolderInput size={12} /> Group
-                            </label>
-                            <input
+                        <div className="space-y-2">
+                            <Label className="flex items-center gap-1">
+                                <FolderInput size={14} /> Group
+                            </Label>
+                            <Input
                                 value={group}
                                 onChange={e => setGroup(e.target.value)}
-                                list="group-suggestions"
-                                className="w-full border p-2 rounded text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white text-slate-900"
+                                list="group-suggestions-note"
                             />
-                            <datalist id="group-suggestions">
+                            <datalist id="group-suggestions-note">
                                 <option value="General" />
                                 <option value="Notes" />
                                 <option value="Annotations" />
                             </datalist>
                         </div>
-                        <div>
-                            <label className="block text-xs font-bold text-slate-500 mb-1">Color</label>
+                        <div className="space-y-2">
+                            <Label>Color</Label>
                             <div className="flex items-center gap-2">
-                                <input
+                                <Input
                                     type="color"
                                     value={color}
                                     onChange={e => setColor(e.target.value)}
-                                    className="h-10 w-full p-1 border border-slate-200 rounded cursor-pointer"
+                                    className="h-10 w-full p-1 cursor-pointer"
                                 />
                             </div>
                         </div>
                     </div>
-
-                    <div className="px-6 py-4 border-t border-slate-100 bg-slate-50/50 flex justify-end gap-3">
-                        <button onClick={onClose} className="text-slate-600 hover:bg-slate-100 px-4 py-2 rounded-lg text-sm font-medium transition-colors">Cancel</button>
-                        <button onClick={handleSave} className="bg-slate-900 hover:bg-slate-800 text-white px-6 py-2 rounded-lg text-sm font-medium shadow-sm transition-colors">Save</button>
-                    </div>
-                </div>
-            </div>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={onClose}>Cancel</Button>
+                        <Button onClick={handleSave}>Save</Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         );
     }
 
     return (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/50 z-[100]" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="bg-white rounded-2xl shadow-2xl w-[650px] max-h-[90vh] overflow-hidden flex flex-col">
-                <div className="px-6 py-4 border-b border-slate-100 bg-white flex justify-between items-center">
-                    <h2 className="text-lg font-semibold text-slate-900">Item Properties</h2>
-                    <button onClick={onClose} className="text-slate-400 hover:text-slate-700 transition-colors">✕</button>
-                </div>
+        <Dialog open={true} onOpenChange={(open) => !open && onClose()}>
+            <DialogContent className="sm:max-w-fit w-full sm:w-auto min-w-[600px] h-[90vh] flex flex-col p-0 gap-0">
+                <DialogHeader className="px-6 py-4 border-b">
+                    <DialogTitle>Item Properties</DialogTitle>
+                </DialogHeader>
 
-                <div className="flex border-b border-slate-100 bg-white">
-                    <button
-                        onClick={() => handleTabChange('general')}
-                        className={`flex-1 py-3 px-4 text-sm font-medium border-b-2 transition-all ${activeTab === 'general' ? 'border-slate-900 text-slate-900 bg-slate-50/50' : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50/30'}`}
-                    >
-                        General & Variables
-                    </button>
-                    <button
-                        onClick={() => handleTabChange('subitems')}
-                        className={`flex-1 py-3 px-4 text-sm font-medium border-b-2 transition-all flex items-center justify-center gap-2 ${activeTab === 'subitems' ? 'border-slate-900 text-slate-900 bg-slate-50/50' : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50/30'}`}
-                    >
-                        <Layers size={14} /> Sub-Items <span className="text-xs bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded-full font-semibold">{subItems.length}</span>
-                    </button>
-                </div>
+                <Tabs value={activeTab} onValueChange={(v) => handleTabChange(v as 'general' | 'subitems')} className="flex-1 flex flex-col overflow-hidden">
+                    <div className="px-6 pt-2 pb-2">
+                        <TabsList className="w-full grid grid-cols-2 h-auto p-1 bg-muted rounded-lg">
+                            <TabsTrigger value="general">General & Variables</TabsTrigger>
+                            <TabsTrigger value="subitems" className="gap-2">
+                                <Layers size={14} /> Sub-Items
+                                <Badge variant="secondary" className="px-1.5 py-0 h-5 min-w-[1.25rem]">{subItems.length}</Badge>
+                            </TabsTrigger>
+                        </TabsList>
+                    </div>
 
-                <div className="p-5 overflow-y-auto flex-1 space-y-4">
-
-                    {activeTab === 'general' ? (
-                        <>
-                            <div className="grid grid-cols-3 gap-3">
-                                <div className="col-span-2">
-                                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">Name</label>
-                                    <input
-                                        value={label}
-                                        onChange={e => setLabel(e.target.value)}
-                                        className="w-full border border-slate-200 px-3 py-2 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white text-slate-900 transition-all"
-                                    />
+                    <ScrollArea className="flex-1 min-h-0">
+                        <TabsContent value="general" className="mt-0 space-y-6 p-6">
+                            <div className="grid grid-cols-3 gap-4">
+                                <div className="col-span-2 space-y-2">
+                                    <Label>Name</Label>
+                                    <Input value={label} onChange={e => setLabel(e.target.value)} />
                                 </div>
-                                <div>
-                                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">Color</label>
-                                    <input
-                                        type="color"
-                                        value={color}
-                                        onChange={e => setColor(e.target.value)}
-                                        className="h-[38px] w-full p-1 border border-slate-200 rounded-lg cursor-pointer"
-                                    />
+                                <div className="space-y-2">
+                                    <Label>Color</Label>
+                                    <Input type="color" value={color} onChange={e => setColor(e.target.value)} className="h-10 w-full p-1 cursor-pointer" />
                                 </div>
-                                <div>
-                                    <label className="block text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1">
-                                        <FolderInput size={12} /> Group
-                                    </label>
-                                    <input
-                                        value={group}
-                                        onChange={e => setGroup(e.target.value)}
-                                        list="group-suggestions"
-                                        className="w-full border border-slate-200 px-3 py-2 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white text-slate-900 transition-all"
-                                    />
+                                <div className="space-y-2">
+                                    <Label className="flex items-center gap-1"><FolderInput size={14} /> Group</Label>
+                                    <Input value={group} onChange={e => setGroup(e.target.value)} list="group-suggestions" />
                                     <datalist id="group-suggestions">
                                         {existingGroups.map(g => (
                                             <option key={g} value={g} />
                                         ))}
                                     </datalist>
                                 </div>
-                                <div>
-                                    <label className="block text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1">
-                                        {item.type === ToolType.AREA ? <LayoutGrid size={12} /> : <Ruler size={12} />}
-                                        Unit
-                                    </label>
-                                    <select
-                                        value={unit}
-                                        onChange={(e) => setUnit(e.target.value as Unit)}
-                                        className="w-full border border-slate-200 px-3 py-2 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white text-slate-900 transition-all"
-                                    >
-                                        {availableUnits.map(u => (
-                                            <option key={u} value={u}>{u}</option>
-                                        ))}
-                                    </select>
+                                <div className="space-y-2">
+                                    <Label className="flex items-center gap-1">
+                                        {item.type === ToolType.AREA ? <LayoutGrid size={14} /> : <Ruler size={14} />} Unit
+                                    </Label>
+                                    <Select value={unit} onValueChange={(val) => setUnit(val as Unit)}>
+                                        <SelectTrigger>
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {availableUnits.map(u => (
+                                                <SelectItem key={u} value={u}>{u}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
                                 </div>
-                                <div>
-                                    <label className="block text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1">
-                                        <DollarSign size={12} /> Price
-                                    </label>
+                                <div className="space-y-2">
+                                    <Label className="flex items-center gap-1"><DollarSign size={14} /> Price</Label>
                                     <div className="relative">
-                                        <span className="absolute left-3 top-2.5 text-slate-400 text-sm">$</span>
-                                        <input
+                                        <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground text-sm">$</span>
+                                        <Input
                                             type="number"
                                             placeholder="0.00"
                                             value={price}
                                             onChange={e => setPrice(e.target.value)}
-                                            className="w-full border border-slate-200 px-3 py-2 pl-7 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white text-slate-900 transition-all"
+                                            className="pl-7"
                                         />
                                     </div>
                                 </div>
                             </div>
 
-                            <div>
-                                <h3 className="text-xs font-semibold text-slate-600 uppercase tracking-wider mb-2 flex items-center gap-2">
+                            <Separator />
+
+                            <div className="space-y-3">
+                                <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
                                     <Calculator size={13} /> Formula
                                 </h3>
 
@@ -663,84 +657,90 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
                                     previewValue={previewValue}
                                 />
 
-                                <div className="mt-2 text-xs text-slate-500 flex flex-wrap gap-1.5">
+                                <div className="text-xs text-muted-foreground flex flex-wrap gap-1.5 items-center">
                                     <span>Variables:</span>
-                                    <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded border text-[11px]">Qty</span>
+                                    <Badge variant="outline" className="font-mono text-[10px] px-1.5 h-5">Qty</Badge>
                                     {properties.map(p => (
-                                        <span key={p.name} className="font-mono bg-slate-100 px-1.5 py-0.5 rounded border text-[11px]">{toVariableName(p.name)}</span>
+                                        <Badge key={p.name} variant="outline" className="font-mono text-[10px] px-1.5 h-5">{toVariableName(p.name)}</Badge>
                                     ))}
                                 </div>
                             </div>
 
-                            <div>
-                                <h3 className="text-xs font-semibold text-slate-600 uppercase tracking-wider mb-2">Variables</h3>
-                                <div className="space-y-1.5 mb-2">
+                            <div className="space-y-3">
+                                <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Variables</h3>
+                                <div className="space-y-2">
                                     {properties.map((prop, idx) => {
                                         const isEditing = editingPropertyIndex === idx;
                                         return (
-                                            <div key={idx} className={`flex items-center gap-2 ${isEditing ? 'bg-blue-50 border border-blue-200 rounded-lg p-2' : ''}`}>
-                                                <div className="flex-1 bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm font-medium text-slate-700">{prop.name}</div>
-                                                <div className="text-[11px] text-slate-400 font-mono">as {toVariableName(prop.name)}</div>
-                                                <div className="w-20 bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm font-mono text-right">{prop.value}</div>
-                                                <button
+                                            <div key={idx} className={cn("flex items-center gap-2", isEditing && "bg-muted p-2 rounded-md")}>
+                                                <div className="flex-1 px-3 py-2 rounded-md border text-sm font-medium bg-background">{prop.name}</div>
+                                                <div className="text-[11px] text-muted-foreground font-mono">as {toVariableName(prop.name)}</div>
+                                                <div className="w-24 px-3 py-2 rounded-md border text-sm font-mono text-right bg-background">{prop.value}</div>
+                                                <Button
+                                                    variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary"
                                                     onClick={() => startEditingProperty(idx)}
-                                                    className="text-slate-400 hover:text-blue-600 hover:bg-blue-50 p-1.5 rounded transition-colors"
-                                                    title="Edit"
                                                 >
                                                     <Edit2 size={14} />
-                                                </button>
-                                                <button onClick={() => removeProperty(idx)} className="text-slate-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded transition-colors"><Trash2 size={14} /></button>
+                                                </Button>
+                                                <Button
+                                                    variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                                    onClick={() => removeProperty(idx)}
+                                                >
+                                                    <Trash2 size={14} />
+                                                </Button>
                                             </div>
                                         );
                                     })}
                                 </div>
 
-                                <div ref={propertyEditRef} className="bg-slate-100 p-4 rounded-lg border border-slate-200">
-                                    <div className="flex justify-between items-center mb-4">
-                                        <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                                            {editingPropertyIndex !== null ? 'Edit Variable' : 'Add New Variable'}
-                                        </h4>
-                                        {editingPropertyIndex !== null && (
-                                            <button onClick={cancelEditProperty} className="text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1">
-                                                <X size={12} /> Cancel Edit
-                                            </button>
-                                        )}
-                                    </div>
-                                    <div className="flex gap-2 items-end">
-                                        <div className="flex-1">
-                                            <label className="text-[10px] font-semibold text-slate-500 uppercase">Name</label>
-                                            <input
-                                                placeholder="e.g. Wall Height"
-                                                value={newPropName}
-                                                onChange={e => setNewPropName(e.target.value)}
-                                                className={`w-full text-sm px-2.5 py-1.5 border rounded-lg mt-1 bg-white text-slate-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all ${editingPropertyIndex !== null ? 'border-blue-400 ring-2 ring-blue-200 bg-blue-50' : 'border-slate-200'}`}
-                                            />
+                                <Card ref={propertyEditRef} className="bg-muted/50 border-dashed rounded-xl border">
+                                    <CardContent className="p-3 space-y-3">
+                                        <div className="flex justify-between items-center">
+                                            <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                                                {editingPropertyIndex !== null ? 'Edit Variable' : 'Add New Variable'}
+                                            </h4>
+                                            {editingPropertyIndex !== null && (
+                                                <Button variant="ghost" size="sm" onClick={cancelEditProperty} className="h-6 text-xs gap-1">
+                                                    <X size={12} /> Cancel Edit
+                                                </Button>
+                                            )}
                                         </div>
-                                        <div className="w-20">
-                                            <label className="text-[10px] font-semibold text-slate-500 uppercase">Value</label>
-                                            <input
-                                                type="number"
-                                                placeholder="0.00"
-                                                value={newPropValue}
-                                                onChange={e => setNewPropValue(e.target.value)}
-                                                className={`w-full text-sm px-2.5 py-1.5 border rounded-lg mt-1 text-right bg-white text-slate-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all ${editingPropertyIndex !== null ? 'border-blue-400 ring-2 ring-blue-200 bg-blue-50' : 'border-slate-200'}`}
-                                            />
+                                        <div className="flex gap-2 items-end">
+                                            <div className="flex-1 space-y-1">
+                                                <Label className="text-[10px] uppercase text-muted-foreground">Name</Label>
+                                                <Input
+                                                    placeholder="e.g. Wall Height"
+                                                    value={newPropName}
+                                                    onChange={e => setNewPropName(e.target.value)}
+                                                    className="bg-background"
+                                                />
+                                            </div>
+                                            <div className="w-24 space-y-1">
+                                                <Label className="text-[10px] uppercase text-muted-foreground">Value</Label>
+                                                <Input
+                                                    type="number"
+                                                    placeholder="0.00"
+                                                    value={newPropValue}
+                                                    onChange={e => setNewPropValue(e.target.value)}
+                                                    className="bg-background text-right"
+                                                />
+                                            </div>
+                                            <Button
+                                                onClick={handleAddOrUpdateProperty}
+                                                disabled={!newPropName || !newPropValue}
+                                                size="icon"
+                                                className="mb-0.5"
+                                            >
+                                                {editingPropertyIndex !== null ? <Save size={16} /> : <Plus size={16} />}
+                                            </Button>
                                         </div>
-                                        <button
-                                            onClick={handleAddOrUpdateProperty}
-                                            disabled={!newPropName || !newPropValue}
-                                            className="bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white p-1.5 rounded-lg transition-colors flex items-center gap-1"
-                                        >
-                                            {editingPropertyIndex !== null ? <Save size={16} /> : <Plus size={16} />}
-                                            {editingPropertyIndex !== null ? 'Update' : 'Add'}
-                                        </button>
-                                    </div>
-                                </div>
+                                    </CardContent>
+                                </Card>
                             </div>
-                        </>
-                    ) : (
-                        <div className="space-y-4">
-                            <div className="bg-blue-50/50 text-blue-800 px-3 py-2 rounded-lg text-xs flex gap-2">
+                        </TabsContent>
+
+                        <TabsContent value="subitems" className="mt-0 space-y-6 p-6">
+                            <div className="bg-blue-50/50 text-blue-800 px-3 py-2 rounded-lg text-xs flex gap-2 border border-blue-100 dark:bg-blue-900/20 dark:text-blue-200 dark:border-blue-900">
                                 <Package size={14} className="shrink-0 mt-0.5" />
                                 <p>Sub-items break down this item into materials (e.g. Plywood, Studs) using custom formulas.</p>
                             </div>
@@ -749,10 +749,10 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
                                 {(() => {
                                     const displayContext: Record<string, number> = {};
                                     const convertedQty = convertValue(item.totalValue, item.unit, unit, item.type);
-                                    const tempItem = { ...item, properties, unit, totalValue: item.totalValue };
+                                    const tempItem2 = { ...item, properties, unit, totalValue: item.totalValue };
 
                                     return subItems.map((sub) => {
-                                        const subPreview = evaluateFormula(tempItem, convertedQty, sub.formula, displayContext);
+                                        const subPreview = evaluateFormula(tempItem2, convertedQty, sub.formula, displayContext);
 
                                         const varName = toVariableName(sub.label);
                                         if (varName) displayContext[varName] = subPreview;
@@ -764,39 +764,42 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
                                                 key={sub.id}
                                                 onMouseDown={(e) => handleSubItemMouseDown(e, sub.id)}
                                                 onMouseUp={(e) => handleSubItemMouseUp(e, sub.id)}
-                                                className={`bg-slate-50 border rounded-lg p-3 transition-colors cursor-grab active:cursor-grabbing select-none ${isEditing ? 'border-blue-400 ring-1 ring-blue-100' : 'border-slate-200 hover:border-blue-300'} ${draggedSubItemId === sub.id && isDraggingSub ? 'opacity-50' : ''}`}
-                                                style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
+                                                className={cn(
+                                                    "bg-card border rounded-lg p-3 transition-all cursor-grab active:cursor-grabbing select-none hover:border-primary/50",
+                                                    isEditing && "border-primary ring-1 ring-primary/20",
+                                                    draggedSubItemId === sub.id && isDraggingSub && "opacity-50"
+                                                )}
                                             >
                                                 <div className="flex justify-between items-start">
                                                     <div className="flex items-center gap-3">
-                                                        <div className="cursor-grab text-slate-300 hover:text-slate-500">
+                                                        <div className="cursor-grab text-muted-foreground hover:text-foreground">
                                                             <GripVertical size={16} />
                                                         </div>
-                                                        <div className="bg-white p-2 rounded border border-slate-200 text-slate-500">
+                                                        <div className="bg-muted p-2 rounded border text-muted-foreground">
                                                             <Layers size={16} />
                                                         </div>
                                                         <div>
-                                                            <h4 className="font-bold text-slate-800 text-sm">{sub.label}</h4>
-                                                            <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
-                                                                <span className="font-mono bg-white px-1.5 border rounded">{sub.formula}</span>
+                                                            <h4 className="font-bold text-sm">{sub.label}</h4>
+                                                            <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1">
+                                                                <code className="bg-muted px-1.5 border rounded">{sub.formula}</code>
                                                                 <span>= {subPreview.toFixed(2)} {sub.unit}</span>
                                                                 {sub.price > 0 && <span>@ ${sub.price.toFixed(2)}</span>}
                                                             </div>
                                                         </div>
                                                     </div>
                                                     <div className="flex gap-1">
-                                                        <button
+                                                        <Button
+                                                            variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary"
                                                             onClick={() => startEditingSubItem(sub)}
-                                                            className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded"
                                                         >
                                                             <Edit2 size={14} />
-                                                        </button>
-                                                        <button
+                                                        </Button>
+                                                        <Button
+                                                            variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive"
                                                             onClick={() => removeSubItem(sub.id)}
-                                                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded"
                                                         >
                                                             <Trash2 size={14} />
-                                                        </button>
+                                                        </Button>
                                                     </div>
                                                 </div>
                                             </div>
@@ -804,106 +807,110 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
                                     });
                                 })()}
                                 {subItems.length === 0 && (
-                                    <div className="text-center py-6 text-slate-400 text-sm italic border-2 border-dashed border-slate-200 rounded-lg">
+                                    <div className="text-center py-6 text-muted-foreground text-sm italic border-2 border-dashed rounded-lg">
                                         No sub-items yet. Add one below.
                                     </div>
                                 )}
                             </div>
 
-                            <div ref={subItemEditRef} className="bg-slate-100 p-4 rounded-lg border border-slate-200">
-                                <div className="flex justify-between items-center mb-4">
-                                    <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                                        {editingSubItemId ? 'Edit Sub-Item' : 'Add New Sub-Item'}
-                                    </h4>
-                                    {editingSubItemId && (
-                                        <button onClick={cancelEditSubItem} className="text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1">
-                                            <X size={12} /> Cancel Edit
-                                        </button>
-                                    )}
-                                </div>
-
-                                <div className="grid grid-cols-2 gap-3 mb-3">
-                                    <div>
-                                        <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Name</label>
-                                        <input
-                                            value={subLabel}
-                                            onChange={e => setSubLabel(e.target.value)}
-                                            placeholder="e.g. Drywall Sheets"
-                                            className={`w-full text-sm p-2 border rounded bg-white text-slate-900 focus:ring-2 focus:ring-blue-500 outline-none transition-all ${editingSubItemId ? 'border-blue-400 ring-2 ring-blue-200 bg-blue-50' : 'border-slate-200'}`}
-                                        />
+                            <Card ref={subItemEditRef} className="bg-muted/50 border-dashed">
+                                <CardContent className="p-4 space-y-4">
+                                    <div className="flex justify-between items-center">
+                                        <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                                            {editingSubItemId ? 'Edit Sub-Item' : 'Add New Sub-Item'}
+                                        </h4>
+                                        {editingSubItemId && (
+                                            <Button variant="ghost" size="sm" onClick={cancelEditSubItem} className="h-6 text-xs gap-1">
+                                                <X size={12} /> Cancel Edit
+                                            </Button>
+                                        )}
                                     </div>
-                                    <div>
-                                        <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Unit</label>
-                                        <select
-                                            value={subUnit}
-                                            onChange={e => setSubUnit(e.target.value)}
-                                            className={`w-full text-sm p-2 border rounded bg-white text-slate-900 outline-none transition-all ${editingSubItemId ? 'border-blue-400 ring-2 ring-blue-200 bg-blue-50' : 'border-slate-200'}`}
-                                        >
-                                            {subItemUnits.map(u => <option key={u} value={u}>{u}</option>)}
-                                        </select>
-                                    </div>
-                                </div>
 
-                                <div className="mb-3">
-                                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Formula</label>
-                                    <FormulaInput
-                                        value={subFormula}
-                                        onChange={setSubFormula}
-                                        onBlur={() => {
-                                            const withVars = replaceLabelsWithVars(subFormula, variableSuggestions);
-                                            const fixed = sanitizeFormula(withVars);
-                                            setSubFormula(fixed);
-                                        }}
-                                        suggestions={variableSuggestions}
-                                        previewValue={getSubItemPreview()}
-                                        placeholder="Qty / 32"
-                                    />
-                                </div>
-
-                                <div className="flex items-end gap-3">
-                                    <div className="flex-1">
-                                        <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Unit Price</label>
-                                        <div className="relative">
-                                            <span className="absolute left-3 top-2 text-slate-400 text-xs">$</span>
-                                            <input
-                                                type="number"
-                                                value={subPrice}
-                                                onChange={e => setSubPrice(e.target.value)}
-                                                placeholder="0.00"
-                                                className={`w-full text-sm p-2 pl-6 border rounded bg-white text-slate-900 focus:ring-2 focus:ring-blue-500 outline-none transition-all ${editingSubItemId ? 'border-blue-400 ring-2 ring-blue-200 bg-blue-50' : 'border-slate-200'}`}
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div className="space-y-1">
+                                            <Label className="text-[10px] uppercase text-muted-foreground">Name</Label>
+                                            <Input
+                                                value={subLabel}
+                                                onChange={e => setSubLabel(e.target.value)}
+                                                placeholder="e.g. Drywall Sheets"
+                                                className="bg-background"
                                             />
                                         </div>
+                                        <div className="space-y-1">
+                                            <Label className="text-[10px] uppercase text-muted-foreground">Unit</Label>
+                                            <Select value={subUnit} onValueChange={setSubUnit}>
+                                                <SelectTrigger className="bg-background">
+                                                    <SelectValue />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    {subItemUnits.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
                                     </div>
-                                    <button
-                                        onClick={handleAddOrUpdateSubItem}
-                                        disabled={!subLabel || !subFormula}
-                                        className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded text-sm font-medium h-[38px] flex items-center gap-2"
-                                    >
-                                        {editingSubItemId ? <Save size={16} /> : <Plus size={16} />}
-                                        {editingSubItemId ? 'Update' : 'Add'}
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-                </div>
 
-                <div className="px-5 py-3 border-t border-slate-100 bg-slate-50/50 flex justify-between items-center">
-                    <button
+                                    <div className="space-y-1">
+                                        <Label className="text-[10px] uppercase text-muted-foreground">Formula</Label>
+                                        <FormulaInput
+                                            value={subFormula}
+                                            onChange={setSubFormula}
+                                            onBlur={() => {
+                                                const withVars = replaceLabelsWithVars(subFormula, variableSuggestions);
+                                                const fixed = sanitizeFormula(withVars);
+                                                setSubFormula(fixed);
+                                            }}
+                                            suggestions={variableSuggestions}
+                                            previewValue={getSubItemPreview()}
+                                            placeholder="Qty / 32"
+                                        />
+                                    </div>
+
+                                    <div className="flex items-end gap-3">
+                                        <div className="flex-1 space-y-1">
+                                            <Label className="text-[10px] uppercase text-muted-foreground">Unit Price</Label>
+                                            <div className="relative">
+                                                <span className="absolute left-3 top-2.5 text-muted-foreground text-xs">$</span>
+                                                <Input
+                                                    type="number"
+                                                    value={subPrice}
+                                                    onChange={e => setSubPrice(e.target.value)}
+                                                    placeholder="0.00"
+                                                    className="pl-6 bg-background"
+                                                />
+                                            </div>
+                                        </div>
+                                        <Button
+                                            onClick={handleAddOrUpdateSubItem}
+                                            disabled={!subLabel || !subFormula}
+                                            className="w-24"
+                                        >
+                                            {editingSubItemId ? <Save size={16} className="mr-2" /> : <Plus size={16} className="mr-2" />}
+                                            {editingSubItemId ? 'Update' : 'Add'}
+                                        </Button>
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        </TabsContent>
+                    </ScrollArea>
+                </Tabs>
+
+                <div className="px-6 py-4 border-t flex justify-between items-center bg-muted/20">
+                    <Button
+                        variant="ghost"
                         onClick={handleSaveAsTemplate}
-                        className={`text-slate-600 hover:bg-slate-100 px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1.5 transition-all ${isTemplateSaved ? 'text-green-600 bg-green-50' : ''}`}
+                        className={cn("text-muted-foreground hover:text-foreground", isTemplateSaved && "text-green-600 hover:text-green-700")}
                         title="Save as Template for future use"
                     >
-                        {isTemplateSaved ? <Check size={14} /> : <Save size={14} />}
+                        {isTemplateSaved ? <Check size={14} className="mr-2" /> : <Save size={14} className="mr-2" />}
                         {isTemplateSaved ? 'Saved!' : 'Save as Template'}
-                    </button>
+                    </Button>
                     <div className="flex gap-2">
-                        <button onClick={onClose} className="text-slate-600 hover:bg-slate-100 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors">Cancel</button>
-                        <button onClick={handleSave} className="bg-slate-900 hover:bg-slate-800 text-white px-5 py-1.5 rounded-lg text-sm font-medium shadow-sm transition-all">Save</button>
+                        <Button variant="outline" onClick={onClose}>Cancel</Button>
+                        <Button onClick={handleSave}>Save</Button>
                     </div>
                 </div>
-            </div>
-        </div >
+            </DialogContent>
+        </Dialog>
     );
 };
 

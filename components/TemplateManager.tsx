@@ -9,6 +9,11 @@ import PromptModal from './PromptModal';
 import NewTemplateModal from './NewTemplateModal';
 import PropertiesModal from './PropertiesModal';
 import TemplateCardViewer from './TemplateCardViewer';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { ScrollArea } from '@/components/ui/scroll-area';
 
 interface TemplateManagerProps {
     mode?: 'manage' | 'select';
@@ -86,13 +91,13 @@ const TemplateManager: React.FC<TemplateManagerProps> = ({ mode = 'manage', filt
     // Combine Templates & Extract Categories
     // Use a Map to deduplicate by ID, preferring local templates if they override premium ones
     const allTemplatesMap = new Map<string, ItemTemplate>();
-    
+
     // Add premium templates first
     premiumTemplates.forEach(t => allTemplatesMap.set(t.id, t));
-    
+
     // Add local templates, potentially overwriting premium ones with same ID
     localTemplates.forEach(t => allTemplatesMap.set(t.id, t));
-    
+
     const allTemplates = Array.from(allTemplatesMap.values());
 
     useEffect(() => {
@@ -192,28 +197,16 @@ const TemplateManager: React.FC<TemplateManagerProps> = ({ mode = 'manage', filt
     }, [selectedCategory, searchTerm]);
 
     const handleConfirmNewGroup = (name: string) => {
-        // This is a bit tricky since groups are derived from templates.
-        // We'll just add it to the dropdown effectively when a template is assigned to it.
-        // For now, we can perhaps just toast or handle it if we want to pre-create empty groups?
-        // But the current architecture derives groups from existing templates.
-        // So maybe we just select it?
-        // Let's just create a dummy template? No, that's messy.
-        // The previous implementation added it to state but it disappeared on reload if empty.
-        // We will just let the user know they can use it when creating a template.
         setShowNewGroupModal(false);
         addToast("To use this new group, create or edit a template and assign it.", 'info');
     };
-    
+
     // Edit Template / Properties Logic
     const handleEditTemplate = (template: ItemTemplate) => {
-        // Check if it's a local template (premium ones might be read-only or copy-on-edit)
-        // For simplicity, we allow editing local ones directly.
-        // Premium ones should probably be "copied" to local if edited?
-        // Let's assume for now we only edit local.
         const isLocal = localTemplates.some(t => t.id === template.id);
-        
+
         if (!isLocal) {
-             // Create a copy for editing
+            // Create a copy for editing
             const tempItem: TakeoffItem = {
                 ...template,
                 id: crypto.randomUUID(), // New ID for the copy
@@ -293,59 +286,57 @@ const TemplateManager: React.FC<TemplateManagerProps> = ({ mode = 'manage', filt
         const isPremium = premiumTemplates.some(pt => pt.id === t.id);
 
         return (
-            <div
+            <Card
                 key={t.id}
                 onClick={() => setViewingTemplate(t)}
-                className={`border rounded-xl overflow-hidden transition-all duration-200 bg-white hover:scale-[1.01] cursor-pointer group flex ${selectedIds.has(t.id) ? 'border-blue-500 ring-1 ring-blue-500 shadow-md' : 'border-slate-200 hover:border-slate-300 hover:shadow-md'}`}
+                className={`overflow-hidden transition-all duration-200 cursor-pointer group hover:shadow-md ${selectedIds.has(t.id) ? 'border-primary ring-1 ring-primary' : 'hover:border-primary/50'}`}
             >
-                {/* Color Strip */}
-                <div className="w-4 shrink-0" style={{ backgroundColor: t.color }}></div>
+                <div className="flex items-stretch h-full">
+                    {/* Color Strip */}
+                    <div className="w-4 shrink-0" style={{ backgroundColor: t.color }}></div>
 
-                {/* Content */}
-                <div className="flex-1 p-4 flex items-center justify-between">
-                    <div className="flex items-center gap-4 overflow-hidden">
-                        <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                                <h3 className="text-lg font-bold text-slate-900 truncate" title={t.label}>{t.label}</h3>
-                                {isPremium && <Crown size={14} className="text-yellow-500 fill-yellow-500" />}
+                    {/* Content */}
+                    <div className="flex-1 p-4 flex items-center justify-between min-w-0">
+                        <div className="flex items-center gap-4 overflow-hidden min-w-0">
+                            <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                    <h3 className="text-lg font-bold text-card-foreground truncate" title={t.label}>{t.label}</h3>
+                                    {isPremium && <Crown size={14} className="text-yellow-500 fill-yellow-500" />}
+                                </div>
+                                <p className="text-sm text-muted-foreground font-medium truncate">{t.group}</p>
                             </div>
-                            <p className="text-sm text-slate-500 font-medium truncate">{t.group}</p>
                         </div>
-                    </div>
 
-                    <div className="flex items-center gap-4 shrink-0">
-                         <div className="flex items-center gap-2 text-sm text-slate-600 bg-slate-100 px-2 py-1 rounded">
-                            <span className="font-semibold">{t.unit}</span>
-                         </div>
-                         <div className="bg-slate-100 px-2 py-1 rounded text-xs font-bold uppercase tracking-wider text-slate-500">
-                            {t.type}
-                        </div>
-                         <div className="text-slate-300 group-hover:text-blue-500 transition-colors">
-                            <ChevronRight size={20} />
+                        <div className="flex items-center gap-4 shrink-0">
+                            <Badge variant="secondary" className="font-semibold">{t.unit}</Badge>
+                            <Badge variant="outline" className="font-bold uppercase tracking-wider text-[10px] text-muted-foreground">{t.type}</Badge>
+                            <div className="text-muted-foreground group-hover:text-primary transition-colors">
+                                <ChevronRight size={20} />
+                            </div>
                         </div>
                     </div>
                 </div>
-            </div>
+            </Card>
         );
     };
 
     return (
-        <div className="flex h-full bg-slate-100 rounded-lg overflow-hidden">
+        <div className="flex h-full bg-background rounded-lg overflow-hidden border border-border">
             {/* LEFT SIDEBAR - TRADES (CATEGORIES) */}
-            <div className="w-64 bg-white border-r border-slate-200 flex flex-col shrink-0">
-                <div className="p-4 border-b border-slate-100">
-                    <h2 className="font-bold text-slate-800 flex items-center gap-2">
-                        <LayoutGrid size={18} className="text-blue-600" />
+            <div className="w-64 bg-card border-r border-border flex flex-col shrink-0">
+                <div className="p-4 border-b border-border">
+                    <h2 className="font-bold text-card-foreground flex items-center gap-2">
+                        <LayoutGrid size={18} className="text-primary" />
                         Trades
                     </h2>
                 </div>
-                
+
                 {/* Search in Sidebar */}
                 <div className="p-3">
-                     <div className="relative">
-                        <Search className="absolute left-2.5 top-2 text-slate-400" size={14} />
-                        <input
-                            className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded text-sm focus:ring-1 focus:ring-blue-500 outline-none text-slate-900 placeholder:text-slate-400"
+                    <div className="relative">
+                        <Search className="absolute left-2.5 top-2.5 text-muted-foreground" size={14} />
+                        <Input
+                            className="w-full pl-8 h-9 bg-background"
                             placeholder="Search..."
                             value={searchTerm}
                             onChange={e => setSearchTerm(e.target.value)}
@@ -353,25 +344,24 @@ const TemplateManager: React.FC<TemplateManagerProps> = ({ mode = 'manage', filt
                     </div>
                 </div>
 
-                <div className="flex-1 overflow-y-auto">
+                <div className="flex-1 overflow-y-auto p-2 space-y-1">
                     {categories.map(category => (
                         <button
                             key={category}
                             onClick={() => setSelectedCategory(category)}
-                            className={`w-full text-left px-4 py-2.5 text-sm font-medium border-l-4 transition-all hover:bg-slate-50 ${
-                                selectedCategory === category 
-                                    ? 'border-blue-600 text-blue-700 bg-blue-50/50' 
-                                    : 'border-transparent text-slate-600'
-                            }`}
+                            className={`w-full text-left px-3 py-2 text-sm font-medium rounded-md transition-colors ${selectedCategory === category
+                                ? 'bg-primary/10 text-primary'
+                                : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                                }`}
                         >
                             <div className="flex justify-between items-center">
                                 <span className="truncate">{category}</span>
-                                <span className="text-xs bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-full">
-                                    {category === 'All' 
-                                        ? allTemplates.length 
+                                <Badge variant="secondary" className="text-[10px] h-5 px-1.5 min-w-[20px] justify-center">
+                                    {category === 'All'
+                                        ? allTemplates.length
                                         : allTemplates.filter(t => (t.group || 'General') === category).length
                                     }
-                                </span>
+                                </Badge>
                             </div>
                         </button>
                     ))}
@@ -379,20 +369,20 @@ const TemplateManager: React.FC<TemplateManagerProps> = ({ mode = 'manage', filt
 
                 {/* Sidebar Actions */}
                 {mode === 'manage' && (
-                    <div className="p-3 border-t border-slate-100 bg-slate-50">
-                        <button 
+                    <div className="p-3 border-t border-border bg-muted/20">
+                        <Button
                             onClick={handleCreateTemplate}
-                            className="w-full flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white py-2 rounded text-sm font-medium transition-colors shadow-sm"
+                            className="w-full gap-2 mb-2"
                         >
                             <Plus size={16} /> New Template
-                        </button>
-                        <div className="flex gap-2 mt-2">
-                            <button onClick={() => fileInputRef.current?.click()} className="flex-1 py-1.5 text-xs font-medium text-slate-600 border border-slate-300 rounded hover:bg-white transition-colors">
+                        </Button>
+                        <div className="flex gap-2">
+                            <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} className="flex-1">
                                 Import
-                            </button>
-                            <button onClick={handleExport} className="flex-1 py-1.5 text-xs font-medium text-slate-600 border border-slate-300 rounded hover:bg-white transition-colors">
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={handleExport} className="flex-1">
                                 Export
-                            </button>
+                            </Button>
                             <input type="file" ref={fileInputRef} className="hidden" accept=".json" onChange={handleImport} />
                         </div>
                     </div>
@@ -400,27 +390,46 @@ const TemplateManager: React.FC<TemplateManagerProps> = ({ mode = 'manage', filt
             </div>
 
             {/* RIGHT CONTENT - TEMPLATES GRID */}
-            <div className="flex-1 flex flex-col min-w-0 bg-slate-50/50">
+            <div className="flex-1 flex flex-col min-w-0 bg-muted/10">
                 <div className="p-5 flex-1 overflow-y-auto" ref={templatesListRef}>
                     {/* Header Info */}
                     <div className="flex justify-between items-end mb-6">
                         <div>
-                            <h2 className="text-2xl font-bold text-slate-900">{selectedCategory === 'All' ? 'All Templates' : selectedCategory}</h2>
-                            <p className="text-slate-500 text-sm mt-1">
+                            <h2 className="text-2xl font-bold text-foreground">{selectedCategory === 'All' ? 'All Templates' : selectedCategory}</h2>
+                            <p className="text-muted-foreground text-sm mt-1">
                                 Showing {filteredTemplates.length} templates
                             </p>
                         </div>
                     </div>
 
                     {filteredTemplates.length === 0 ? (
-                        <div className="text-center py-20">
-                            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-slate-100 mb-4">
-                                <Search className="text-slate-400" size={24} />
-                            </div>
-                            <h3 className="text-lg font-semibold text-slate-900 mb-1">No templates found</h3>
-                            <p className="text-slate-500 max-w-xs mx-auto">
-                                Try adjusting your search or category filter, or create a new template.
-                            </p>
+                        <div className="flex flex-col items-center justify-center py-20 text-center h-full">
+                            {premiumError ? (
+                                <div className="max-w-md p-6 bg-red-50 rounded-lg border border-red-100 mb-6">
+                                    <AlertCircle className="w-10 h-10 text-red-500 mx-auto mb-3" />
+                                    <h3 className="text-lg font-semibold text-red-900 mb-1">Unable to Load Premium Templates</h3>
+                                    <p className="text-red-700 text-sm">{premiumError}</p>
+                                    <Button variant="outline" size="sm" onClick={loadPremium} className="mt-4 border-red-200 text-red-700 hover:bg-red-100">
+                                        Retry
+                                    </Button>
+                                </div>
+                            ) : !hasPremiumAccess ? (
+                                <div className="max-w-md p-6 bg-blue-50 rounded-lg border border-blue-100 mb-6">
+                                    <Crown className="w-10 h-10 text-blue-500 mx-auto mb-3" />
+                                    <h3 className="text-lg font-semibold text-blue-900 mb-1">Premium Templates</h3>
+                                    <p className="text-blue-700 text-sm mb-4">Upgrade to ProTakeoff Premium to access our library of 50+ professionally built templates.</p>
+                                </div>
+                            ) : (
+                                <>
+                                    <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-muted mb-4">
+                                        <Search className="text-muted-foreground" size={24} />
+                                    </div>
+                                    <h3 className="text-lg font-semibold text-foreground mb-1">No templates found</h3>
+                                    <p className="text-muted-foreground max-w-xs mx-auto">
+                                        Try adjusting your search or category filter, or create a new template.
+                                    </p>
+                                </>
+                            )}
                         </div>
                     ) : (
                         <div className="flex flex-col gap-3">

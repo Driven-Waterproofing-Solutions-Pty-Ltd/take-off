@@ -1,10 +1,19 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { TakeoffItem, ToolType, ProjectData, PlanSet } from '../types';
-import { Trash2, Upload, ChevronDown, ChevronRight, FilePlus, FolderOpen, Save, RefreshCw, Settings, Edit2, Table, Eye, EyeOff, FileDown, MoreHorizontal, Plus, HelpCircle, ShieldCheck } from 'lucide-react';
+import { Trash2, Upload, ChevronDown, ChevronRight, FilePlus, FolderOpen, Save, RefreshCw, Settings, Edit2, Table, Eye, EyeOff, FileDown, MoreHorizontal, Plus, HelpCircle, ShieldCheck, Target } from 'lucide-react';
 import { evaluateFormula } from '../utils/math';
-import Logo from './Logo';
 import ChangeItemModal from './ChangeItemModal';
+import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import {
+    Tooltip,
+    TooltipContent,
+    TooltipProvider,
+    TooltipTrigger,
+} from "@/components/ui/tooltip"
 
 interface SidebarProps {
     items: TakeoffItem[];
@@ -238,67 +247,102 @@ const Sidebar: React.FC<SidebarProps> = ({
 
     return (
         <div
-            className="bg-white border-r border-slate-200 flex flex-col h-full z-20 flex-shrink-0 relative font-sans text-sm"
+            className="bg-background border-r border-border flex flex-col h-full z-20 flex-shrink-0 relative font-sans text-sm shadow-xl shadow-black/5"
             style={{ width: `${sidebarWidth}px` }}
         >
             {/* Resize handle */}
             <div
-                className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-blue-500 z-30 transition-colors opacity-0 hover:opacity-100"
+                className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary z-30 transition-colors opacity-0 hover:opacity-100"
                 onMouseDown={startResizing}
             />
 
             {/* Header */}
-            <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between bg-white shrink-0">
-                <div className="flex items-center gap-2 overflow-hidden">
-                    <div className="w-9 h-9 shrink-0">
+            <div className="px-4 py-3 border-b border-border flex items-center justify-between bg-background shrink-0">
+                <div className="flex items-center gap-3 overflow-hidden">
+                    <div className="w-8 h-8 shrink-0">
                         <img src="/prologo.svg" alt="Logo" className="w-full h-full object-contain" />
                     </div>
-                    <span className="font-semibold text-slate-800 truncate">{projectName}</span>
+                    <span className="font-semibold text-foreground truncate text-sm">{projectName}</span>
                 </div>
-                <div className="flex items-center gap-1">
-                    <button onClick={onNewProject} className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md transition-colors" title="New Project">
-                        <FilePlus size={16} />
-                    </button>
-                    <button onClick={onLoadProject} className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md transition-colors" title="Open Project">
-                        <FolderOpen size={16} />
-                    </button>
-                    <button onClick={onSaveProject} className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md transition-colors" title="Save Project (Cmd+S)">
-                        <Save size={16} />
-                    </button>
-                    <div className="w-px h-4 bg-slate-200 mx-1"></div>
-                    <button onClick={onOpenLicense} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors" title="License Manager">
-                        <ShieldCheck size={16} />
-                    </button>
-                    <button onClick={onOpenHelp} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors" title="Help & Shortcuts">
-                        <HelpCircle size={16} />
-                    </button>
+                <div className="flex items-center gap-0.5">
+                    <TooltipProvider>
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" onClick={onNewProject}>
+                                    <FilePlus size={16} />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>New Project</TooltipContent>
+                        </Tooltip>
+
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" onClick={onLoadProject}>
+                                    <FolderOpen size={16} />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Open Project</TooltipContent>
+                        </Tooltip>
+
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" onClick={onSaveProject}>
+                                    <Save size={16} />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Save Project (Cmd+S)</TooltipContent>
+                        </Tooltip>
+
+                        <Separator orientation="vertical" className="h-4 mx-1" />
+
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-primary" onClick={onOpenLicense}>
+                                    <ShieldCheck size={16} />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>License Manager</TooltipContent>
+                        </Tooltip>
+
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-primary" onClick={onOpenHelp}>
+                                    <HelpCircle size={16} />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Help & Shortcuts</TooltipContent>
+                        </Tooltip>
+                    </TooltipProvider>
                 </div>
             </div>
 
-            {/* Estimates & Export Buttons (Moved to Top) */}
-            <div className="p-2 border-b border-slate-100 bg-white flex gap-2 shrink-0">
-                <button onClick={onShowEstimates} className="flex-1 py-1.5 bg-white border border-slate-200 rounded-md text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 hover:border-slate-300 transition-all flex items-center justify-center gap-2">
-                    <Table size={14} /> Estimates
-                </button>
-                <button onClick={onOpenExportModal} className="flex-1 py-1.5 bg-white border border-slate-200 rounded-md text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 hover:border-slate-300 transition-all flex items-center justify-center gap-2">
-                    <FileDown size={14} /> Export
-                </button>
+            {/* Estimates & Export Buttons */}
+            <div className="p-3 border-b border-border bg-background flex gap-2 shrink-0">
+                <Button onClick={onShowEstimates} variant="outline" className="flex-1 h-8 text-xs font-medium border-dashed border-border hover:border-primary/50 hover:bg-primary/5 text-muted-foreground hover:text-primary">
+                    <Table size={14} className="mr-2" /> Estimates
+                </Button>
+                <Button onClick={onOpenExportModal} variant="outline" className="flex-1 h-8 text-xs font-medium border-dashed border-border hover:border-primary/50 hover:bg-primary/5 text-muted-foreground hover:text-primary">
+                    <FileDown size={14} className="mr-2" /> Export
+                </Button>
             </div>
 
-            <div className="px-3 py-2 shrink-0">
-                <div className="flex items-center justify-between px-2 mb-1">
-                    <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Plans & Takeoffs</div>
-                    <button onClick={onOpenUploadModal} className="text-slate-400 hover:text-blue-600 transition-colors">
+            <div className="px-4 py-2 shrink-0">
+                <div className="flex items-center justify-between mb-1">
+                    <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Plans & Takeoffs</div>
+                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground hover:text-primary" onClick={onOpenUploadModal}>
                         <Plus size={14} />
-                    </button>
+                    </Button>
                 </div>
             </div>
 
             {/* Main Content List */}
-            <div className="flex-1 overflow-y-auto px-1 pb-4 space-y-4">
+            <ScrollArea className="flex-1 px-2 pb-4 min-h-0">
                 {planSets.length === 0 && (
-                    <div className="text-center text-slate-400 text-sm mt-8 px-4">
-                        No plans loaded. Click + to add plans.
+                    <div className="flex flex-col items-center justify-center h-32 text-center text-muted-foreground text-sm px-4">
+                        <p className="mb-2">No plans loaded</p>
+                        <Button variant="outline" size="sm" onClick={onOpenUploadModal} className="h-7 text-xs">
+                            <Upload size={12} className="mr-2" /> Upload Plans
+                        </Button>
                     </div>
                 )}
 
@@ -306,53 +350,54 @@ const Sidebar: React.FC<SidebarProps> = ({
                 {planSets.map(plan => {
                     const isCollapsed = collapsedGroups.has(plan.id);
                     return (
-                        <div key={plan.id} className="space-y-0.5">
+                        <div key={plan.id} className="space-y-0.5 mb-2">
                             {/* Plan Header */}
                             <div
-                                className="flex items-center gap-1.5 px-1 py-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-50 rounded-md cursor-pointer transition-colors group"
+                                className="flex items-center gap-1.5 px-2 py-1.5 text-foreground hover:bg-muted/50 rounded-md cursor-pointer transition-colors group"
                                 onClick={(e) => toggleGroup(plan.id, e)}
                             >
-                                <span className="text-slate-400 group-hover:text-slate-600 transition-colors">
+                                <span className="text-muted-foreground group-hover:text-foreground transition-colors">
                                     {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
                                 </span>
                                 <span className="font-medium text-sm truncate flex-1">{plan.name}</span>
-                                <span className="text-[10px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full">{plan.pageCount}</span>
+                                <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4 min-w-[1.25rem] justify-center">{plan.pageCount}</Badge>
                             </div>
 
                             {/* Pages Loop */}
                             {!isCollapsed && (
-                                <div className="pl-2 space-y-0.5 border-l border-slate-100 ml-2">
+                                <div className="pl-2 space-y-0.5 border-l border-border/50 ml-2.5">
                                     {Array.from({ length: plan.pageCount }).map((_, localIdx) => {
                                         const globalIdx = plan.startPageIndex + localIdx;
                                         const isPageActive = globalIdx === pageIndex;
                                         const pageName = projectData[globalIdx]?.name || `Page ${localIdx + 1}`;
                                         const pScale = projectData[globalIdx]?.scale;
                                         const isPageExpanded = expandedPages.has(globalIdx);
-
-                                        // Filter items that have shapes on this specific page
                                         const pageItems = items.filter(item => item.shapes.some(s => s.pageIndex === globalIdx));
 
                                         return (
-                                            <div key={globalIdx}>
+                                            <div key={globalIdx} className="relative">
                                                 {/* Page Row */}
                                                 <div
                                                     onClick={() => handlePageClick(globalIdx)}
-                                                    className={`group flex items-center justify-between px-1 py-1.5 rounded-md cursor-pointer transition-all ${isPageActive ? 'bg-blue-50 text-blue-700' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}
+                                                    className={`group flex items-center justify-between px-2 py-1.5 rounded-md cursor-pointer transition-all ${isPageActive
+                                                        ? 'bg-primary/10 text-primary font-medium'
+                                                        : 'text-muted-foreground hover:bg-muted/30 hover:text-foreground'
+                                                        }`}
                                                 >
                                                     <div className="flex items-center gap-2 min-w-0 flex-1">
                                                         {editingPageIndex === globalIdx ? (
-                                                            <input
+                                                            <Input
                                                                 autoFocus
                                                                 value={tempPageName}
                                                                 onChange={e => setTempPageName(e.target.value)}
                                                                 onBlur={savePageName}
                                                                 onKeyDown={handlePageKeyDown}
                                                                 onClick={e => e.stopPropagation()}
-                                                                className="flex-1 min-w-0 text-sm px-1 py-0.5 border border-blue-300 rounded bg-white text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                                                className="h-6 text-xs py-0 px-1.5"
                                                             />
                                                         ) : (
                                                             <span
-                                                                className="truncate text-sm font-medium"
+                                                                className="truncate text-sm"
                                                                 onDoubleClick={(e) => { e.stopPropagation(); startEditingPage(globalIdx, pageName); }}
                                                                 title={pageName}
                                                             >
@@ -363,31 +408,32 @@ const Sidebar: React.FC<SidebarProps> = ({
 
                                                     <div className="flex items-center gap-1">
                                                         {pageItems.length > 0 && (
-                                                            <span className="text-slate-400" title="Has items">
-                                                                <Table size={12} />
-                                                            </span>
+                                                            <TooltipProvider>
+                                                                <Tooltip>
+                                                                    <TooltipTrigger asChild>
+                                                                        <Target size={12} className="text-primary" />
+                                                                    </TooltipTrigger>
+                                                                    <TooltipContent side="right">Has Items</TooltipContent>
+                                                                </Tooltip>
+                                                            </TooltipProvider>
                                                         )}
-                                                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                            {!pScale?.isSet && (
-                                                                <span className="w-1.5 h-1.5 rounded-full bg-red-400" title="Unscaled"></span>
-                                                            )}
-                                                            <button
-                                                                className="p-1 hover:bg-slate-200 rounded text-slate-400 hover:text-slate-600"
-                                                                onClick={(e) => { e.stopPropagation(); startEditingPage(globalIdx, pageName); }}
-                                                            >
-                                                                <Edit2 size={12} />
-                                                            </button>
-                                                        </div>
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="icon"
+                                                            className={`h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity ${isPageActive ? 'text-primary' : 'text-muted-foreground'}`}
+                                                            onClick={(e) => { e.stopPropagation(); startEditingPage(globalIdx, pageName); }}
+                                                        >
+                                                            <Edit2 size={10} />
+                                                        </Button>
                                                     </div>
                                                 </div>
 
                                                 {/* Nested Items List */}
+                                                {/* Connecting line for tree */}
                                                 {isPageExpanded && pageItems.length > 0 && (
-                                                    <div className="pl-2 mt-0.5 space-y-0.5">
+                                                    <div className="pl-1 mt-0.5 space-y-0.5 border-l-2 border-border/30 ml-2">
                                                         {pageItems.slice().reverse().map(item => {
-                                                            // Check if this item is active AND has shapes on the CURRENT active page only
                                                             const hasActiveShapesOnThisPage = activeTakeoffId === item.id && pageIndex === globalIdx && item.shapes.some(s => s.pageIndex === globalIdx);
-                                                            // Only highlight if selected shapes are on THIS specific page AND it's the current page
                                                             const hasSelectedShapesOnThisPage = pageIndex === globalIdx && selectedShapes.some(s => {
                                                                 if (s.itemId !== item.id) return false;
                                                                 const shape = item.shapes.find(sh => sh.id === s.shapeId);
@@ -407,46 +453,55 @@ const Sidebar: React.FC<SidebarProps> = ({
                                                                     key={item.id}
                                                                     onClick={() => onSelect(item.id)}
                                                                     onContextMenu={(e) => handleItemContextMenu(e, item)}
-                                                                    className={`group flex items-center gap-1.5 px-1 py-1 rounded-md cursor-pointer transition-all border border-transparent ${isHighlighted ? 'bg-white border-blue-200 shadow-sm' : 'hover:bg-slate-50'}`}
+                                                                    className={`group flex items-center gap-1 px-1 py-1 rounded-md cursor-pointer transition-all border border-transparent ${isHighlighted
+                                                                        ? 'bg-background border-primary/20 shadow-sm ring-1 ring-primary/10'
+                                                                        : 'hover:bg-muted/40 text-muted-foreground hover:text-foreground'
+                                                                        }`}
                                                                 >
                                                                     <div
-                                                                        className="w-2 h-2 rounded-full shrink-0"
+                                                                        className="w-2.5 h-2.5 rounded-full shrink-0 shadow-sm border border-black/5"
                                                                         style={{ backgroundColor: item.color }}
-                                                                    ></div>
+                                                                    />
 
                                                                     {isEditingThisItem ? (
-                                                                        <input
+                                                                        <Input
                                                                             autoFocus
                                                                             value={tempItemName}
                                                                             onChange={e => setTempItemName(e.target.value)}
                                                                             onBlur={saveItemName}
                                                                             onKeyDown={handleItemKeyDown}
                                                                             onClick={e => e.stopPropagation()}
-                                                                            className="flex-1 min-w-0 text-xs px-1 py-0.5 border border-blue-300 rounded bg-white text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                                                            className="h-5 text-xs py-0 px-1"
                                                                         />
                                                                     ) : (
-                                                                        <span className={`text-xs truncate flex-1 ${isHighlighted ? 'text-slate-900 font-medium' : 'text-slate-600'}`}>
+                                                                        <span className={`text-xs truncate flex-1 ${isHighlighted ? 'text-foreground font-medium' : ''}`}>
                                                                             {item.label}
                                                                         </span>
                                                                     )}
 
                                                                     <div className="flex items-center gap-2">
-                                                                        {displayQty.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })} <span className="text-[10px] text-slate-400 ml-0.5">{item.unit}</span>
+                                                                        <span className={`text-xs ${isHighlighted ? 'text-primary font-semibold' : ''}`}>
+                                                                            {displayQty.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}
+                                                                            <span className="text-[9px] ml-0.5 opacity-70">{item.unit}</span>
+                                                                        </span>
 
                                                                         {/* Visibility Toggle */}
-                                                                        <button
+                                                                        <Button
+                                                                            variant="ghost"
+                                                                            size="icon"
                                                                             onClick={(e) => {
                                                                                 e.stopPropagation();
                                                                                 onToggleVisibility(item.id, globalIdx);
                                                                             }}
-                                                                            className={`p-1 rounded hover:bg-slate-100 transition-all ${item.visible === false || item.hiddenPages?.includes(globalIdx) ? 'text-slate-300' : 'text-slate-400 hover:text-slate-600 opacity-0 group-hover:opacity-100'}`}
-                                                                            title={item.visible === false || item.hiddenPages?.includes(globalIdx) ? "Show Item" : "Hide Item"}
+                                                                            className={`h-5 w-5 ${item.visible === false || item.hiddenPages?.includes(globalIdx) ? 'text-muted-foreground/50' : 'text-muted-foreground opacity-0 group-hover:opacity-100'}`}
                                                                         >
-                                                                            {item.visible === false || item.hiddenPages?.includes(globalIdx) ? <EyeOff size={12} /> : <Eye size={12} />}
-                                                                        </button>
+                                                                            {item.visible === false || item.hiddenPages?.includes(globalIdx) ? <EyeOff size={10} /> : <Eye size={10} />}
+                                                                        </Button>
 
                                                                         {/* Record Button */}
-                                                                        <button
+                                                                        <Button
+                                                                            variant="ghost"
+                                                                            size="icon"
                                                                             onClick={(e) => {
                                                                                 e.stopPropagation();
                                                                                 if (hasActiveShapesOnThisPage && activeTool !== ToolType.SELECT) {
@@ -455,10 +510,10 @@ const Sidebar: React.FC<SidebarProps> = ({
                                                                                     onResume(item.id);
                                                                                 }
                                                                             }}
-                                                                            className={`p-1 rounded-full transition-all ${hasActiveShapesOnThisPage && activeTool !== ToolType.SELECT ? 'text-red-500 bg-red-50' : 'text-slate-300 hover:text-green-600 hover:bg-green-50 opacity-0 group-hover:opacity-100'}`}
+                                                                            className={`h-5 w-5 p-0 rounded-full ${hasActiveShapesOnThisPage && activeTool !== ToolType.SELECT ? 'text-red-500 bg-red-50 hover:bg-red-100 hover:text-red-600' : 'text-muted-foreground/50 hover:text-green-600 hover:bg-green-50 opacity-0 group-hover:opacity-100'}`}
                                                                         >
-                                                                            <div className={`w-2 h-2 rounded-full ${hasActiveShapesOnThisPage && activeTool !== ToolType.SELECT ? 'bg-red-500 animate-pulse' : 'bg-current'}`} />
-                                                                        </button>
+                                                                            <div className={`w-2 h-2 rounded-full ${hasActiveShapesOnThisPage && activeTool !== ToolType.SELECT ? 'bg-red-500 animate-pulse ring-2 ring-red-200' : 'bg-current'}`} />
+                                                                        </Button>
                                                                     </div>
                                                                 </div>
                                                             );
@@ -473,56 +528,56 @@ const Sidebar: React.FC<SidebarProps> = ({
                         </div>
                     );
                 })}
-            </div>
+            </ScrollArea>
 
             {/* Footer */}
-            <div className="p-3 border-t border-slate-100 bg-slate-50/50">
-                <div className="flex items-center justify-between text-xs text-slate-500">
+            <div className="p-3 border-t border-border bg-muted/20">
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
                     <span>{items.length} Items</span>
-                    <span>{isSaving ? 'Saving...' : 'Saved'}</span>
+                    <span className="flex items-center gap-1">
+                        {isSaving ? <RefreshCw size={10} className="animate-spin" /> : null}
+                        {isSaving ? 'Saving...' : 'Saved'}
+                    </span>
                 </div>
             </div>
 
-            {/* Context Menu */}
+            {/* Context Menu (Custom Styled Popover) */}
             {contextMenu && (
                 <>
                     <div className="fixed inset-0 z-40" onClick={() => setContextMenu(null)}></div>
                     <div
-                        className="fixed z-50 bg-white shadow-xl border border-slate-100 rounded-lg py-1 w-40 flex flex-col text-xs animate-in fade-in zoom-in-95 duration-100"
+                        className="fixed z-50 min-w-[8rem] overflow-hidden rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md animate-in fade-in zoom-in-95 duration-100 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2"
                         style={{ top: contextMenu.y, left: contextMenu.x }}
                     >
-                        <button
+                        <div
                             onClick={() => { onEditItem(contextMenu.item); setContextMenu(null); }}
-                            className="px-3 py-2 text-left hover:bg-slate-50 flex items-center gap-2 text-slate-700"
+                            className="relative flex cursor-pointer select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50"
                         >
-                            <Settings size={14} className="text-slate-400" /> Properties
-                        </button>
-                        <button
+                            <Settings size={14} className="mr-2 h-4 w-4" /> Properties
+                        </div>
+                        <div
                             onClick={() => { onToggleVisibility(contextMenu.item.id, pageIndex); setContextMenu(null); }}
-                            className="px-3 py-2 text-left hover:bg-slate-50 flex items-center gap-2 text-slate-700"
+                            className="relative flex cursor-pointer select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50"
                         >
-                            {contextMenu.item.visible !== false && !contextMenu.item.hiddenPages?.includes(pageIndex) ? <Eye size={14} className="text-slate-400" /> : <EyeOff size={14} className="text-slate-400" />}
+                            {contextMenu.item.visible !== false && !contextMenu.item.hiddenPages?.includes(pageIndex) ? <Eye size={14} className="mr-2 h-4 w-4" /> : <EyeOff size={14} className="mr-2 h-4 w-4" />}
                             {contextMenu.item.visible !== false && !contextMenu.item.hiddenPages?.includes(pageIndex) ? "Hide Item" : "Show Item"}
-                        </button>
-                        <div className="border-t border-slate-100 my-1"></div>
-                        <button
+                        </div>
+                        <Separator className="my-1" />
+                        <div
                             onClick={() => {
-                                // Get all shape IDs for this item on the current page
                                 const currentPageShapes = contextMenu.item.shapes
                                     .filter(s => s.pageIndex === pageIndex)
                                     .map(s => s.id);
-
                                 setSourceItemIdForChange(contextMenu.item.id);
                                 setSelectedShapeIdsForChange(currentPageShapes);
-                                // The state contextMenu will be cleared, so we need to rely on sourceItemIdForChange
                                 setShowChangeItemModal(true);
                                 setContextMenu(null);
                             }}
-                            className="px-3 py-2 text-left hover:bg-slate-50 flex items-center gap-2 text-slate-700"
+                            className="relative flex cursor-pointer select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50"
                         >
-                            <Edit2 size={14} /> Change Item
-                        </button>
-                        <button
+                            <Edit2 size={14} className="mr-2 h-4 w-4" /> Change Item
+                        </div>
+                        <div
                             onClick={() => {
                                 const shapesOnPage = contextMenu.item.shapes
                                     .filter(s => s.pageIndex === pageIndex)
@@ -533,11 +588,10 @@ const Sidebar: React.FC<SidebarProps> = ({
                                 }
                                 setContextMenu(null);
                             }}
-                            className={`px-3 py-2 text-left flex items-center gap-2 ${contextMenu.item.shapes.some(s => s.pageIndex === pageIndex) ? 'hover:bg-red-50 text-red-600' : 'text-slate-300 cursor-not-allowed'}`}
-                            disabled={!contextMenu.item.shapes.some(s => s.pageIndex === pageIndex)}
+                            className={`relative flex cursor-pointer select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-destructive/10 hover:text-destructive data-[disabled]:pointer-events-none data-[disabled]:opacity-50 ${!contextMenu.item.shapes.some(s => s.pageIndex === pageIndex) ? 'opacity-50 cursor-not-allowed' : ''}`}
                         >
-                            <Trash2 size={14} /> Delete Item
-                        </button>
+                            <Trash2 size={14} className="mr-2 h-4 w-4" /> Delete Item
+                        </div>
                     </div>
                 </>
             )}

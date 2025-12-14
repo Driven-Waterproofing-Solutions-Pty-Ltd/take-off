@@ -1,6 +1,22 @@
 import React, { useState } from 'react';
 import { PlanSet, ProjectData } from '../types';
-import { FileDown, Loader2 } from 'lucide-react';
+import { FileDown, Loader2, Check } from 'lucide-react';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+    DialogFooter,
+} from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Label } from "@/components/ui/label"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Separator } from "@/components/ui/separator"
+import { Progress } from "@/components/ui/progress"
+import { cn } from "@/lib/utils"
 
 interface ExportModalProps {
     planSets: PlanSet[];
@@ -28,8 +44,6 @@ const ExportModal: React.FC<ExportModalProps> = ({
     const [includeNotes, setIncludeNotes] = useState(true);
     const [selectedPages, setSelectedPages] = useState<Set<number>>(new Set([currentPageIndex]));
 
-    if (!isOpen) return null;
-
     const getAllPageIndices = () => {
         const indices: number[] = [];
         planSets.forEach(plan => {
@@ -53,136 +67,163 @@ const ExportModal: React.FC<ExportModalProps> = ({
         onExport(indices, includeLegend, includeNotes);
     };
 
-    return (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/50 z-[100]" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="bg-white rounded-2xl shadow-2xl w-[500px] flex flex-col max-h-[80vh] animate-in zoom-in-95 duration-200">
-                <div className="px-6 py-4 border-b border-slate-100">
-                    <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
-                        <FileDown className="text-slate-700" size={20} /> Export Markup PDF
-                    </h2>
-                </div>
+    const togglePage = (idx: number) => {
+        const newSet = new Set(selectedPages);
+        if (newSet.has(idx)) {
+            newSet.delete(idx);
+        } else {
+            newSet.add(idx);
+        }
+        setSelectedPages(newSet);
+    };
 
-                <div className="p-6 flex-1 overflow-y-auto">
+    const calculateProgressValue = () => {
+        if (!progress || progress.total === 0) return 0;
+        return (progress.current / progress.total) * 100;
+    };
+
+    return (
+        <Dialog open={isOpen} onOpenChange={(open) => !isExporting && !open && onClose()}>
+            <DialogContent className="sm:max-w-[500px]">
+                <DialogHeader>
+                    <DialogTitle className="flex items-center gap-2">
+                        <FileDown className="w-5 h-5" /> Export Markup PDF
+                    </DialogTitle>
+                    <DialogDescription>
+                        Generate a PDF with your measurements burned in.
+                    </DialogDescription>
+                </DialogHeader>
+
+                <div className="py-4">
                     {isExporting ? (
-                        <div className="flex flex-col items-center justify-center py-10 space-y-4">
-                            <Loader2 size={48} className="text-slate-900 animate-spin" />
-                            <div className="text-center">
-                                <h3 className="font-semibold text-slate-900">Generating PDF...</h3>
+                        <div className="flex flex-col items-center justify-center py-8 space-y-6">
+                            <div className="relative">
+                                <Loader2 size={48} className="text-primary animate-spin" />
+                                <div className="absolute inset-0 flex items-center justify-center">
+                                    <span className="text-xs font-bold">{progress ? Math.round(calculateProgressValue()) : 0}%</span>
+                                </div>
+                            </div>
+                            <div className="text-center w-full space-y-2">
+                                <h3 className="font-semibold text-lg">Generating PDF...</h3>
                                 {progress && (
-                                    <p className="text-sm text-slate-500 mt-2">
-                                        Processing page {progress.current} of {progress.total}
-                                    </p>
+                                    <>
+                                        <Progress value={calculateProgressValue()} className="w-full h-2" />
+                                        <p className="text-sm text-muted-foreground">
+                                            Processing page {progress.current} of {progress.total}
+                                        </p>
+                                    </>
                                 )}
                             </div>
                         </div>
                     ) : (
                         <div className="space-y-6">
                             {/* Scope Selection */}
-                            <div className="space-y-2">
-                                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Export Scope</label>
-                                <div className="grid grid-cols-3 gap-2">
-                                    <button
-                                        className={`px-3 py-2.5 rounded-lg border text-sm font-medium transition-all ${mode === 'current' ? 'bg-slate-900 border-slate-900 text-white shadow-sm' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300'}`}
-                                        onClick={() => setMode('current')}
-                                    >
-                                        Current Page
-                                    </button>
-                                    <button
-                                        className={`px-3 py-2.5 rounded-lg border text-sm font-medium transition-all ${mode === 'all' ? 'bg-slate-900 border-slate-900 text-white shadow-sm' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300'}`}
-                                        onClick={() => setMode('all')}
-                                    >
-                                        All Pages
-                                    </button>
-                                    <button
-                                        className={`px-3 py-2.5 rounded-lg border text-sm font-medium transition-all ${mode === 'custom' ? 'bg-slate-900 border-slate-900 text-white shadow-sm' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300'}`}
-                                        onClick={() => setMode('custom')}
-                                    >
-                                        Select Pages
-                                    </button>
-                                </div>
+                            <div className="space-y-3">
+                                <Label className="text-xs font-semibold uppercase text-muted-foreground tracking-wider">Export Scope</Label>
+                                <ToggleGroup type="single" value={mode} onValueChange={(val) => val && setMode(val as any)} className="justify-start w-full">
+                                    <ToggleGroupItem value="current" className="flex-1">Current Page</ToggleGroupItem>
+                                    <ToggleGroupItem value="all" className="flex-1">All Pages</ToggleGroupItem>
+                                    <ToggleGroupItem value="custom" className="flex-1">Select Pages</ToggleGroupItem>
+                                </ToggleGroup>
                             </div>
 
                             {/* Custom Selection List */}
                             {mode === 'custom' && (
-                                <div className="border border-slate-200 rounded-lg p-2 max-h-48 overflow-y-auto bg-slate-50">
+                                <ScrollArea className="h-48 border rounded-md p-2 bg-muted/20">
                                     {planSets.map(plan => (
-                                        <div key={plan.id} className="mb-2">
-                                            <div className="text-xs font-bold text-slate-500 mb-1 uppercase px-2">{plan.name}</div>
-                                            {Array.from({ length: plan.pageCount }).map((_, i) => {
-                                                const globalIdx = plan.startPageIndex + i;
-                                                const pageName = projectData[globalIdx]?.name || `Page ${i + 1}`;
-                                                return (
-                                                    <label key={globalIdx} className="flex items-center gap-2 px-2 py-1.5 hover:bg-white rounded cursor-pointer">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={selectedPages.has(globalIdx)}
-                                                            onChange={(e) => {
-                                                                const newSet = new Set(selectedPages);
-                                                                if (e.target.checked) newSet.add(globalIdx);
-                                                                else newSet.delete(globalIdx);
-                                                                setSelectedPages(newSet);
-                                                            }}
-                                                            className="rounded border-slate-300 text-slate-900 focus:ring-slate-900"
-                                                        />
-                                                        <span className="text-sm text-slate-700">{pageName}</span>
-                                                    </label>
-                                                )
-                                            })}
+                                        <div key={plan.id} className="mb-4 last:mb-0">
+                                            <div className="text-xs font-bold text-muted-foreground mb-2 px-2 uppercase">{plan.name}</div>
+                                            <div className="space-y-1">
+                                                {Array.from({ length: plan.pageCount }).map((_, i) => {
+                                                    const globalIdx = plan.startPageIndex + i;
+                                                    const pageName = projectData[globalIdx]?.name || `Page ${i + 1}`;
+                                                    const isSelected = selectedPages.has(globalIdx);
+                                                    return (
+                                                        <div
+                                                            key={globalIdx}
+                                                            className={cn(
+                                                                "flex items-center space-x-2 px-2 py-1.5 rounded-sm cursor-pointer transition-colors",
+                                                                isSelected ? "bg-primary/10" : "hover:bg-muted"
+                                                            )}
+                                                            onClick={() => togglePage(globalIdx)}
+                                                        >
+                                                            <Checkbox
+                                                                id={`page-${globalIdx}`}
+                                                                checked={isSelected}
+                                                                onCheckedChange={() => togglePage(globalIdx)}
+                                                            />
+                                                            <label
+                                                                htmlFor={`page-${globalIdx}`}
+                                                                className="text-sm cursor-pointer flex-1 user-select-none"
+                                                                onClick={(e) => e.preventDefault()} // Prevent double toggle due to label
+                                                            >
+                                                                {pageName}
+                                                            </label>
+                                                        </div>
+                                                    )
+                                                })}
+                                            </div>
                                         </div>
                                     ))}
-                                </div>
+                                </ScrollArea>
                             )}
 
+                            <Separator />
+
                             {/* Options */}
-                            <div className="space-y-2">
-                                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Options</label>
-                                <label className="flex items-center gap-3 p-3 border border-slate-200 rounded-lg bg-white cursor-pointer hover:bg-slate-50">
-                                    <input
-                                        type="checkbox"
-                                        checked={includeLegend}
-                                        onChange={(e) => setIncludeLegend(e.target.checked)}
-                                        className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-900"
-                                    />
-                                    <div>
-                                        <span className="block text-sm font-medium text-slate-900">Include Item Legend</span>
-                                        <span className="block text-xs text-slate-500">Adds a table with quantities to each page</span>
+                            <div className="space-y-3">
+                                <Label className="text-xs font-semibold uppercase text-muted-foreground tracking-wider">Options</Label>
+                                <div className="grid gap-3">
+                                    <div className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4 shadow-sm hover:bg-muted/50 transition-colors">
+                                        <Checkbox
+                                            id="includeLegend"
+                                            checked={includeLegend}
+                                            onCheckedChange={(checked) => setIncludeLegend(checked as boolean)}
+                                        />
+                                        <div className="space-y-1 leading-none">
+                                            <Label htmlFor="includeLegend" className="cursor-pointer">
+                                                Include Item Legend
+                                            </Label>
+                                            <p className="text-xs text-muted-foreground">
+                                                Adds a table with quantities to each page
+                                            </p>
+                                        </div>
                                     </div>
-                                </label>
-                                <label className="flex items-center gap-3 p-3 border border-slate-200 rounded-lg bg-white cursor-pointer hover:bg-slate-50">
-                                    <input
-                                        type="checkbox"
-                                        checked={includeNotes}
-                                        onChange={(e) => setIncludeNotes(e.target.checked)}
-                                        className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-900"
-                                    />
-                                    <div>
-                                        <span className="block text-sm font-medium text-slate-900">Include Notes</span>
-                                        <span className="block text-xs text-slate-500">Adds text annotations to the PDF</span>
+                                    <div className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4 shadow-sm hover:bg-muted/50 transition-colors">
+                                        <Checkbox
+                                            id="includeNotes"
+                                            checked={includeNotes}
+                                            onCheckedChange={(checked) => setIncludeNotes(checked as boolean)}
+                                        />
+                                        <div className="space-y-1 leading-none">
+                                            <Label htmlFor="includeNotes" className="cursor-pointer">
+                                                Include Notes
+                                            </Label>
+                                            <p className="text-xs text-muted-foreground">
+                                                Adds text annotations to the PDF
+                                            </p>
+                                        </div>
                                     </div>
-                                </label>
+                                </div>
                             </div>
                         </div>
                     )}
                 </div>
 
-                <div className="px-6 py-4 border-t border-slate-100 bg-slate-50/50 flex justify-end gap-3">
-                    <button
-                        onClick={onClose}
-                        disabled={isExporting}
-                        className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors disabled:opacity-50"
-                    >
+                <DialogFooter>
+                    <Button variant="outline" onClick={onClose} disabled={isExporting}>
                         Cancel
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                         onClick={handleExport}
                         disabled={isExporting || (mode === 'custom' && selectedPages.size === 0)}
-                        className="px-6 py-2 text-sm font-medium text-white bg-slate-900 hover:bg-slate-800 rounded-lg shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                        className="min-w-[120px]"
                     >
                         {isExporting ? 'Generating...' : 'Export PDF'}
-                    </button>
-                </div>
-            </div>
-        </div>
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
     );
 };
 
