@@ -1,16 +1,30 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { TakeoffItem, ToolType } from '../types';
+import { TakeoffItem } from '../types';
 import {
     Dialog,
     DialogContent,
     DialogHeader,
     DialogTitle,
     DialogFooter,
+    DialogDescription,
 } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
+import {
+    Command,
+    CommandEmpty,
+    CommandGroup,
+    CommandInput,
+    CommandItem,
+    CommandList,
+} from "@/components/ui/command"
+import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from "@/components/ui/popover"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
+import { Check, ChevronsUpDown } from "lucide-react"
 
 interface ChangeItemModalProps {
     isOpen: boolean;
@@ -29,8 +43,8 @@ const ChangeItemModal: React.FC<ChangeItemModalProps> = ({
     sourceItemId,
     shapeIds
 }) => {
-    const [searchTerm, setSearchTerm] = useState('');
     const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+    const [open, setOpen] = useState(false);
 
     const sourceItems = useMemo(() => {
         const sourceItemIds = new Set<string>();
@@ -43,20 +57,14 @@ const ChangeItemModal: React.FC<ChangeItemModalProps> = ({
         return Array.from(sourceItemIds).map(id => items.find(i => i.id === id)).filter(Boolean) as TakeoffItem[];
     }, [items, shapeIds]);
 
-    const sourceItem = items.find(item => item.id === sourceItemId);
-
     // Filter items to only show compatible items (same tool type, different from source)
+    const sourceItem = items.find(item => item.id === sourceItemId);
     const compatibleItems = items.filter(item =>
         item.id !== sourceItemId &&
         item.type === sourceItem?.type
     );
 
-    // Filter and sort items based on search term
-    const filteredItems = compatibleItems
-        .filter(item =>
-            item.label.toLowerCase().includes(searchTerm.toLowerCase())
-        )
-        .sort((a, b) => a.label.localeCompare(b.label));
+    const filteredItems = compatibleItems.sort((a, b) => a.label.localeCompare(b.label));
 
     const handleChangeItem = () => {
         if (selectedItemId) {
@@ -65,22 +73,26 @@ const ChangeItemModal: React.FC<ChangeItemModalProps> = ({
         }
     };
 
+    // Reset selected item when modal opens
     useEffect(() => {
-        if (isOpen && filteredItems.length > 0) {
-            setSelectedItemId(filteredItems[0].id);
+        if (isOpen) {
+            setSelectedItemId(null);
         }
-    }, [isOpen, filteredItems]);
+    }, [isOpen]);
 
-    // if (!isOpen || !sourceItem) return null; // Dialog handles visibility
+    const selectedItem = items.find(i => i.id === selectedItemId);
 
     return (
         <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-            <DialogContent className="sm:max-w-[400px] flex flex-col max-h-[80vh]">
+            <DialogContent className="sm:max-w-[400px] flex flex-col overflow-visible">
                 <DialogHeader>
                     <DialogTitle>Change Item</DialogTitle>
+                    <DialogDescription className="sr-only">
+                        Select a new item to move the selected shapes to.
+                    </DialogDescription>
                 </DialogHeader>
 
-                <div className="space-y-4 flex-1 flex flex-col min-h-0">
+                <div className="space-y-4 pt-2">
                     <div>
                         <p className="text-sm text-muted-foreground mb-2">
                             Moving {shapeIds.length} shape(s) from:
@@ -95,49 +107,64 @@ const ChangeItemModal: React.FC<ChangeItemModalProps> = ({
                         </ScrollArea>
                     </div>
 
-                    <div>
-                        <Input
-                            type="text"
-                            placeholder="Search items..."
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                        />
-                    </div>
-
-                    <ScrollArea className="flex-1 border rounded-md">
-                        {filteredItems.length === 0 ? (
-                            <div className="p-4 text-center text-muted-foreground text-sm">
-                                No compatible items found
-                            </div>
-                        ) : (
-                            <div className="p-1 space-y-1">
-                                {filteredItems.map(item => (
-                                    <div
-                                        key={item.id}
-                                        className={cn(
-                                            "p-3 cursor-pointer rounded-md flex items-center justify-between transition-colors",
-                                            selectedItemId === item.id
-                                                ? "bg-accent text-accent-foreground"
-                                                : "hover:bg-muted"
-                                        )}
-                                        onClick={() => setSelectedItemId(item.id)}
-                                    >
+                    <div className="flex flex-col gap-2">
+                        <span className="text-sm font-medium">To item:</span>
+                        <Popover open={open} onOpenChange={setOpen}>
+                            <PopoverTrigger asChild>
+                                <Button
+                                    variant="outline"
+                                    role="combobox"
+                                    aria-expanded={open}
+                                    className="w-full justify-between"
+                                >
+                                    {selectedItem ? (
                                         <div className="flex items-center gap-2 overflow-hidden">
-                                            <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: item.color }}></div>
-                                            <span className="text-sm font-medium truncate">{item.label}</span>
-                                            <span className="text-xs text-muted-foreground ml-2 capitalize">{item.type}</span>
+                                            <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: selectedItem.color }}></div>
+                                            <span className="truncate">{selectedItem.label}</span>
                                         </div>
-                                        {selectedItemId === item.id && (
-                                            <div className="w-1.5 h-1.5 rounded-full bg-primary" />
-                                        )}
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </ScrollArea>
+                                    ) : (
+                                        "Select item..."
+                                    )}
+                                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-[350px] p-0" align="start">
+                                <Command>
+                                    <CommandInput placeholder="Search item..." />
+                                    <CommandList>
+                                        <CommandEmpty>No item found.</CommandEmpty>
+                                        <CommandGroup>
+                                            {filteredItems.map(item => (
+                                                <CommandItem
+                                                    key={item.id}
+                                                    value={item.label}
+                                                    onSelect={() => {
+                                                        setSelectedItemId(item.id);
+                                                        setOpen(false);
+                                                    }}
+                                                >
+                                                    <Check
+                                                        className={cn(
+                                                            "mr-2 h-4 w-4",
+                                                            selectedItemId === item.id ? "opacity-100" : "opacity-0"
+                                                        )}
+                                                    />
+                                                    <div className="flex items-center gap-2 flex-1 overflow-hidden">
+                                                        <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: item.color }}></div>
+                                                        <span className="truncate">{item.label}</span>
+                                                        <span className="text-xs text-muted-foreground ml-auto capitalize">{item.type}</span>
+                                                    </div>
+                                                </CommandItem>
+                                            ))}
+                                        </CommandGroup>
+                                    </CommandList>
+                                </Command>
+                            </PopoverContent>
+                        </Popover>
+                    </div>
                 </div>
 
-                <DialogFooter>
+                <DialogFooter className="mt-4">
                     <Button variant="outline" onClick={onClose}>
                         Cancel
                     </Button>

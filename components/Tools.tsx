@@ -70,7 +70,7 @@ const Tools: React.FC<ToolsProps> = ({
 
         <TooltipProvider delayDuration={300}>
           {/* Undo/Redo Group */}
-          <div className="flex items-center gap-0.5 pr-2 mr-1 relative">
+          <div className="flex items-center gap-0.5">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -101,8 +101,9 @@ const Tools: React.FC<ToolsProps> = ({
               <TooltipContent>Redo (Ctrl+Y)</TooltipContent>
             </Tooltip>
 
-            <Separator orientation="vertical" className="h-6 absolute right-0 top-1.5" />
           </div>
+
+          <Separator orientation="vertical" className="h-6 mx-1 mt-1" />
 
           <div className="flex items-center gap-1">
             <Tooltip>
@@ -119,7 +120,7 @@ const Tools: React.FC<ToolsProps> = ({
               <TooltipContent>Select (V)</TooltipContent>
             </Tooltip>
 
-            <Separator orientation="vertical" className="h-6 mx-1" />
+            <Separator orientation="vertical" className="h-6 mx-1 mt-1" />
 
             <DropdownMenu>
               <Tooltip>
@@ -242,14 +243,14 @@ const Tools: React.FC<ToolsProps> = ({
             </Tooltip>
           </div>
 
-          <Separator orientation="vertical" className="h-6 mx-1" />
+          <Separator orientation="vertical" className="h-6 mx-1 mt-1" />
 
           <div className="flex items-center gap-0.5 pl-1">
             {onToggleLegend && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
-                    variant={isLegendVisible ? "secondary" : "ghost"}
+                    variant={isLegendVisible ? "default" : "ghost"}
                     size="icon"
                     onClick={onToggleLegend}
                     className="h-9 w-9"

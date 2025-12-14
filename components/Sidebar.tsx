@@ -104,11 +104,12 @@ const Sidebar: React.FC<SidebarProps> = ({
     const [sourceItemIdForChange, setSourceItemIdForChange] = useState<string | null>(null);
 
     // Sidebar Resizing State
-    const [sidebarWidth, setSidebarWidth] = useState<number>(300);
+    const [sidebarWidth, setSidebarWidth] = useState<number>(310);
     const [isResizing, setIsResizing] = useState(false);
     const dragStartX = useRef(0);
     const dragStartWidth = useRef(280);
 
+    // Load saved width from localStorage on mount
     // Load saved width from localStorage on mount
     // Load saved width from localStorage on mount
     useEffect(() => {
@@ -118,14 +119,14 @@ const Sidebar: React.FC<SidebarProps> = ({
             if (!isNaN(width) && width >= 310 && width <= 600) {
                 setSidebarWidth(width);
                 dragStartWidth.current = width;
-            } else if (!isNaN(width) && width < 300) {
+            } else if (!isNaN(width) && width < 310) {
                 // Enforce min width if saved value is too small
-                setSidebarWidth(300);
-                dragStartWidth.current = 300;
+                setSidebarWidth(310);
+                dragStartWidth.current = 310;
             }
         } else {
             // Default if nothing saved, ensure we start > min
-            setSidebarWidth(300);
+            setSidebarWidth(310);
         }
     }, []);
 
@@ -150,7 +151,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             const delta = e.clientX - dragStartX.current;
             const newWidth = dragStartWidth.current + delta;
             // Clamp width between min and max
-            const clamped = Math.max(300, Math.min(500, newWidth));
+            const clamped = Math.max(310, Math.min(500, newWidth));
             setSidebarWidth(clamped);
         };
 
@@ -255,15 +256,15 @@ const Sidebar: React.FC<SidebarProps> = ({
 
     // Safety check to strictly enforce min width
     useEffect(() => {
-        if (sidebarWidth < 300) {
-            setSidebarWidth(300);
+        if (sidebarWidth < 310) {
+            setSidebarWidth(310);
         }
     }, [sidebarWidth]);
 
     return (
         <div
-            className="bg-background border-r border-border flex flex-col h-full z-20 flex-shrink-0 relative font-sans text-sm shadow-xl shadow-black/5 min-w-[300px]"
-            style={{ width: `${sidebarWidth}px`, minWidth: '300px' }}
+            className="bg-background border-r border-border flex flex-col h-full z-20 flex-shrink-0 relative font-sans text-sm shadow-xl shadow-black/5 min-w-[310px]"
+            style={{ width: `${sidebarWidth}px`, minWidth: '310px' }}
         >
             {/* Resize handle */}
             <div
