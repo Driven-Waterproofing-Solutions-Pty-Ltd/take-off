@@ -428,6 +428,29 @@ const App: React.FC = () => {
     addToast("Item deleted", 'info');
   };
 
+  const handleToggleItemVisibility = (itemId: string, pageIndex: number) => {
+    setHistory(draft => {
+      const item = draft.items.find(i => i.id === itemId);
+      if (item) {
+        // Migration: If globally hidden, unhide globally so we can manage per-page
+        if (item.visible === false) {
+          item.visible = true;
+        }
+
+        if (!item.hiddenPages) {
+          item.hiddenPages = [];
+        }
+
+        const idx = item.hiddenPages.indexOf(pageIndex);
+        if (idx >= 0) {
+          item.hiddenPages.splice(idx, 1);
+        } else {
+          item.hiddenPages.push(pageIndex);
+        }
+      }
+    });
+  };
+
   const handleDeleteShape = (itemId: string, shapeId: string) => {
     setHistory(draft => {
       const item = draft.items.find(i => i.id === itemId);
@@ -690,7 +713,7 @@ const App: React.FC = () => {
         onSelect={setActiveTakeoffId} onOpenUploadModal={() => setShowUploadModal(true)} planSets={planSets} pageIndex={pageIndex}
         setPageIndex={setPageIndex} totalPages={totalPages} projectData={projectData}
         scaleInfo={{ isSet: currentScale.isSet, unit: currentScale.unit, ppu: currentScale.pixelsPerUnit }}
-        onToggleVisibility={(id) => handleUpdateItem(id, { visible: !items.find(i => i.id === id)?.visible })}
+        onToggleVisibility={handleToggleItemVisibility}
         onShowEstimates={() => { handleStopTakeoff(); setViewMode('estimates'); }}
         onRenamePage={(i, n) => setHistory(draft => {
           if (!draft.projectData[i]) {

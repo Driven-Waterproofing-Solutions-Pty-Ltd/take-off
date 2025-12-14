@@ -947,7 +947,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         }
 
         items.forEach(item => {
-            if (item.visible === false) return;
+            if (item.visible === false || item.hiddenPages?.includes(globalPageIndex)) return;
             item.shapes.filter(s => s.pageIndex === globalPageIndex).forEach(shape => {
                 shape.points.forEach(pt => {
                     if (excludePoint && pt.x === excludePoint.x && pt.y === excludePoint.y) return;
@@ -1063,7 +1063,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 
             // Find all shapes that intersect with the selection rectangle
             items.forEach(item => {
-                if (item.visible === false) return;
+                if (item.visible === false || item.hiddenPages?.includes(globalPageIndex)) return;
 
                 const scaledStart = { x: start.x / shapeRenderScale, y: start.y / shapeRenderScale };
                 const scaledEnd = { x: end.x / shapeRenderScale, y: end.y / shapeRenderScale };
@@ -1652,7 +1652,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                     >
                         <Layer ref={konvaLayerRef}>
                             {sortedItems.map(item => {
-                                if (item.visible === false) return null;
+                                if (item.visible === false || item.hiddenPages?.includes(globalPageIndex)) return null;
                                 const shapesOnPage = item.shapes.filter(s => s.pageIndex === globalPageIndex);
 
                                 return shapesOnPage.map(shape => {

@@ -111,7 +111,8 @@ export interface TakeoffItem {
   price?: number; // Unit Price
   formula?: string; // e.g. "Qty * 1.1"
   subItems?: SubItem[]; // Material breakdowns
-  visible?: boolean; // Controls visibility on canvas
+  visible?: boolean; // Controls global visibility (legacy support)
+  hiddenPages?: number[]; // List of page indices where this item is hidden
 }
 
 export interface ItemTemplate {

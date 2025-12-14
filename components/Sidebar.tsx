@@ -21,7 +21,7 @@ interface SidebarProps {
     totalPages: number;
     projectData: ProjectData;
     scaleInfo: { isSet: boolean, unit: string, ppu: number };
-    onToggleVisibility: (id: string) => void;
+    onToggleVisibility: (id: string, pageIndex: number) => void;
     onShowEstimates: () => void;
     onRenamePage: (index: number, name: string) => void;
     onDeletePage: (index: number) => void;
@@ -92,6 +92,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     // Change Item Modal State
     const [showChangeItemModal, setShowChangeItemModal] = useState(false);
     const [selectedShapeIdsForChange, setSelectedShapeIdsForChange] = useState<string[]>([]);
+    const [sourceItemIdForChange, setSourceItemIdForChange] = useState<string | null>(null);
 
     // Sidebar Resizing State
     const [sidebarWidth, setSidebarWidth] = useState<number>(280);
@@ -436,12 +437,12 @@ const Sidebar: React.FC<SidebarProps> = ({
                                                                         <button
                                                                             onClick={(e) => {
                                                                                 e.stopPropagation();
-                                                                                onToggleVisibility(item.id);
+                                                                                onToggleVisibility(item.id, globalIdx);
                                                                             }}
-                                                                            className={`p-1 rounded hover:bg-slate-100 transition-all ${item.visible === false ? 'text-slate-300' : 'text-slate-400 hover:text-slate-600 opacity-0 group-hover:opacity-100'}`}
-                                                                            title={item.visible === false ? "Show Item" : "Hide Item"}
+                                                                            className={`p-1 rounded hover:bg-slate-100 transition-all ${item.visible === false || item.hiddenPages?.includes(globalIdx) ? 'text-slate-300' : 'text-slate-400 hover:text-slate-600 opacity-0 group-hover:opacity-100'}`}
+                                                                            title={item.visible === false || item.hiddenPages?.includes(globalIdx) ? "Show Item" : "Hide Item"}
                                                                         >
-                                                                            {item.visible === false ? <EyeOff size={12} /> : <Eye size={12} />}
+                                                                            {item.visible === false || item.hiddenPages?.includes(globalIdx) ? <EyeOff size={12} /> : <Eye size={12} />}
                                                                         </button>
 
                                                                         {/* Record Button */}
@@ -497,11 +498,11 @@ const Sidebar: React.FC<SidebarProps> = ({
                             <Settings size={14} className="text-slate-400" /> Properties
                         </button>
                         <button
-                            onClick={() => { onToggleVisibility(contextMenu.item.id); setContextMenu(null); }}
+                            onClick={() => { onToggleVisibility(contextMenu.item.id, pageIndex); setContextMenu(null); }}
                             className="px-3 py-2 text-left hover:bg-slate-50 flex items-center gap-2 text-slate-700"
                         >
-                            {contextMenu.item.visible !== false ? <EyeOff size={14} className="text-slate-400" /> : <Eye size={14} className="text-slate-400" />}
-                            {contextMenu.item.visible !== false ? "Hide Item" : "Show Item"}
+                            {contextMenu.item.visible !== false && !contextMenu.item.hiddenPages?.includes(pageIndex) ? <Eye size={14} className="text-slate-400" /> : <EyeOff size={14} className="text-slate-400" />}
+                            {contextMenu.item.visible !== false && !contextMenu.item.hiddenPages?.includes(pageIndex) ? "Hide Item" : "Show Item"}
                         </button>
                         <div className="border-t border-slate-100 my-1"></div>
                         <button
@@ -510,7 +511,10 @@ const Sidebar: React.FC<SidebarProps> = ({
                                 const currentPageShapes = contextMenu.item.shapes
                                     .filter(s => s.pageIndex === pageIndex)
                                     .map(s => s.id);
+
+                                setSourceItemIdForChange(contextMenu.item.id);
                                 setSelectedShapeIdsForChange(currentPageShapes);
+                                // The state contextMenu will be cleared, so we need to rely on sourceItemIdForChange
                                 setShowChangeItemModal(true);
                                 setContextMenu(null);
                             }}
@@ -518,15 +522,6 @@ const Sidebar: React.FC<SidebarProps> = ({
                         >
                             <Edit2 size={14} /> Change Item
                         </button>
-                        <button
-                            onClick={() => { onDelete(contextMenu.item.id); setContextMenu(null); }}
-                            className="px-3 py-2 text-left hover:bg-red-50 flex items-center gap-2 text-red-600"
-                        >
-                            <Trash2 size={14} /> Delete Item
-                        </button>
-
-                        {/* New "Clear from Page" option */}
-                        <div className="border-t border-slate-100 my-1"></div>
                         <button
                             onClick={() => {
                                 const shapesOnPage = contextMenu.item.shapes
@@ -541,7 +536,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                             className={`px-3 py-2 text-left flex items-center gap-2 ${contextMenu.item.shapes.some(s => s.pageIndex === pageIndex) ? 'hover:bg-red-50 text-red-600' : 'text-slate-300 cursor-not-allowed'}`}
                             disabled={!contextMenu.item.shapes.some(s => s.pageIndex === pageIndex)}
                         >
-                            <Trash2 size={14} /> Clear from Page
+                            <Trash2 size={14} /> Delete Item
                         </button>
                     </div>
                 </>
@@ -550,18 +545,25 @@ const Sidebar: React.FC<SidebarProps> = ({
             {/* Change Item Modal */}
             <ChangeItemModal
                 isOpen={showChangeItemModal}
-                onClose={() => setShowChangeItemModal(false)}
+                onClose={() => {
+                    setShowChangeItemModal(false);
+                    setSourceItemIdForChange(null);
+                }}
                 onChangeItem={(targetItemId) => {
-                    if (onMoveShapesToItem && contextMenu) {
-                        const shapesToMove = contextMenu.item.shapes
-                            .filter(s => s.pageIndex === pageIndex)
-                            .map(s => ({ itemId: contextMenu.item.id, shapeId: s.id }));
-                        onMoveShapesToItem(shapesToMove, targetItemId);
+                    if (onMoveShapesToItem && sourceItemIdForChange) {
+                        const sourceItem = items.find(i => i.id === sourceItemIdForChange);
+                        if (sourceItem) {
+                            const shapesToMove = sourceItem.shapes
+                                .filter(s => s.pageIndex === pageIndex)
+                                .map(s => ({ itemId: sourceItemIdForChange, shapeId: s.id }));
+                            onMoveShapesToItem(shapesToMove, targetItemId);
+                        }
                     }
                     setShowChangeItemModal(false);
+                    setSourceItemIdForChange(null);
                 }}
                 items={items}
-                sourceItemId={contextMenu?.item.id || ''}
+                sourceItemId={sourceItemIdForChange || ''}
                 shapeIds={selectedShapeIdsForChange}
             />
         </div>
