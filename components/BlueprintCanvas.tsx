@@ -4,7 +4,7 @@ import Konva from 'konva';
 // import { Document, Page, pdfjs } from 'react-pdf'; // Removed for MuPDF
 import { Point, ToolType, TakeoffItem, Shape, Unit, LegendSettings } from '../types';
 import { calculateDistance, calculatePolylineLength, calculatePolygonArea, getScaledValue, getScaledArea, parseDimensionInput, PresetScale, isPointInPolygon, PRESET_SCALES } from '../utils/geometry';
-import { AlertCircle, Trash2, Scissors, Plus, Eraser, MessageSquare, Ruler, Edit2 } from 'lucide-react';
+import { AlertCircle, Trash2, Scissors, Plus, Eraser, MessageSquare, Ruler, Edit2, Loader2 } from 'lucide-react';
 // import '../utils/pdfWorker'; // Removed for MuPDF
 import { useToast } from '../contexts/ToastContext';
 import DraggableLegend from './DraggableLegend';
@@ -13,6 +13,7 @@ import PasteOptionsModal from './PasteOptionsModal';
 import ChangeItemModal from './ChangeItemModal';
 import { getPageImage, savePageImage } from '../utils/pdfCache';
 import { mupdfController } from '../utils/mupdfController';
+import { useRamCache } from '../contexts/RamCacheContext';
 
 // Removed html2canvas import as we now use pdf-lib for vector export
 
@@ -534,8 +535,19 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         return () => URL.revokeObjectURL(url);
     }, [file]);
 
+    const { getCachedPage } = useRamCache();
+
     // Handle Image Caching (Sophisticated Memory)
     useEffect(() => {
+        // Check RAM cache first for specific file/page match
+        if (fileId) {
+            const ramUrl = getCachedPage(fileId, localPageIndex);
+            if (ramUrl) {
+                setBackgroundImage(ramUrl);
+                return;
+            }
+        }
+
         setBackgroundImage(null);
         if (!fileId) return;
 
@@ -552,7 +564,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         loadCachedImage();
 
         return () => { active = false; };
-    }, [fileId, localPageIndex]);
+    }, [fileId, localPageIndex, getCachedPage]);
 
     // Render page to cache if missing (Background)
     useEffect(() => {
@@ -627,6 +639,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             try {
                 // Render at our fixed internal high-res scale
                 await mupdfController.renderPageToCanvas(localPageIndex, vectorCanvasRef.current, RENDER_SCALE);
+                setIsCurrentPageLoaded(true);
             } catch (e) {
                 console.error("MuPDF Render Error", e);
             }
@@ -1642,6 +1655,16 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                     )}
                 </div>
 
+                {/* Loading Indicator Overlay */}
+                {(!isCurrentPageLoaded && !backgroundImage && file) && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-white z-50">
+                        <div className="flex flex-col items-center gap-2">
+                            <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+                            <span className="text-sm font-medium text-slate-600">Loading Blueprint...</span>
+                        </div>
+                    </div>
+                )}
+
                 {/* Konva Canvas Overlay */}
                 {file && contentWidth > 0 && (
                     <Stage
@@ -1698,10 +1721,35 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                                         itemsToDrag = [...selectedItems, { itemId: item.id, shapeId: shape.id }];
                                                     }
 
-                                                    const shapesToDrag = itemsToDrag.map(sel => {
+                                                    // Prepare drag - INCLUDE CHILD CUTOUTS
+                                                    const shapesToDrag: { itemId: string, shapeId: string, initialPoints: Point[] }[] = [];
+                                                    const processedIds = new Set<string>();
+
+                                                    itemsToDrag.forEach(sel => {
+                                                        if (processedIds.has(sel.shapeId)) return;
+
                                                         const i = items.find(x => x.id === sel.itemId);
                                                         const s = i?.shapes.find(x => x.id === sel.shapeId);
-                                                        return { itemId: sel.itemId, shapeId: sel.shapeId, initialPoints: s ? [...s.points] : [] };
+                                                        if (!i || !s) return;
+
+                                                        // Add parent
+                                                        shapesToDrag.push({ itemId: sel.itemId, shapeId: sel.shapeId, initialPoints: [...s.points] });
+                                                        processedIds.add(sel.shapeId);
+
+                                                        // Check for child cutouts (Deductions inside Area)
+                                                        if (i.type === ToolType.AREA && !s.deduction) {
+                                                            const childCutouts = i.shapes.filter(other =>
+                                                                other.deduction &&
+                                                                !processedIds.has(other.id) &&
+                                                                other.points.length > 0 &&
+                                                                isPointInPolygon(other.points[0], s.points)
+                                                            );
+
+                                                            childCutouts.forEach(child => {
+                                                                shapesToDrag.push({ itemId: i.id, shapeId: child.id, initialPoints: [...child.points] });
+                                                                processedIds.add(child.id);
+                                                            });
+                                                        }
                                                     });
 
                                                     setDraggedShapes(shapesToDrag);
@@ -1957,13 +2005,36 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                     ? selectedItems
                                     : [{ itemId: contextMenu.itemId, shapeId: contextMenu.shapeId! }];
 
-                                const shapeIdsToChange: string[] = [];
+                                const shapeIdsToChange = new Set<string>();
                                 let incompatibleCount = 0;
+                                const processedIds = new Set<string>(); // avoid double processing if selected
 
                                 selectionPool.forEach(sel => {
+                                    if (processedIds.has(sel.shapeId)) return;
+
                                     const item = items.find(i => i.id === sel.itemId);
                                     if (item && item.type === rightClickedItemType) {
-                                        shapeIdsToChange.push(sel.shapeId);
+                                        shapeIdsToChange.add(sel.shapeId);
+                                        processedIds.add(sel.shapeId);
+
+                                        // Child Cutout Logic
+                                        if (item.type === ToolType.AREA) {
+                                            const parentShape = item.shapes.find(s => s.id === sel.shapeId);
+                                            if (parentShape && !parentShape.deduction) {
+                                                const childCutouts = item.shapes.filter(other =>
+                                                    other.deduction &&
+                                                    !processedIds.has(other.id) &&
+                                                    other.points.length > 0 &&
+                                                    isPointInPolygon(other.points[0], parentShape.points)
+                                                );
+
+                                                childCutouts.forEach(child => {
+                                                    shapeIdsToChange.add(child.id);
+                                                    processedIds.add(child.id);
+                                                });
+                                            }
+                                        }
+
                                     } else {
                                         incompatibleCount++;
                                     }
@@ -1973,8 +2044,8 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                     addToast(`${incompatibleCount} selected item(s) will not be changed due to incompatible types.`, 'info');
                                 }
 
-                                if (shapeIdsToChange.length > 0) {
-                                    setSelectedShapeIdsForChange(shapeIdsToChange);
+                                if (shapeIdsToChange.size > 0) {
+                                    setSelectedShapeIdsForChange(Array.from(shapeIdsToChange));
                                     setShowChangeItemModal(true);
                                 } else {
                                     // If no compatible shapes, still close the menu

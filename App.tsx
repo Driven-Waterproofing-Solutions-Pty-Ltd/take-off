@@ -16,18 +16,19 @@ import ExportModal from './components/ExportModal';
 import ConfirmModal from './components/ConfirmModal';
 import EstimatesView from './components/EstimatesView';
 import { ToolType, ProjectData, TakeoffItem, Shape, Unit, PlanSet, LegendSettings } from './types';
-import { PresetScale, getAreaUnitFromLinear } from './utils/geometry';
+import { PresetScale, getAreaUnitFromLinear, isPointInPolygon } from './utils/geometry';
 import { useToast } from './contexts/ToastContext';
 import { generateMarkupPDF } from './utils/pdfExport';
 import { Loader2 } from 'lucide-react';
 import { useProjectManager } from './hooks/useProjectManager';
 import { useLicense } from './contexts/LicenseContext';
+import { RamCacheProvider, useRamCache } from './contexts/RamCacheContext';
 import { useViewRouter } from './components/Router';
 import { savePlanFile } from './utils/storage';
 import { flattenOCG } from './utils/flattenOCG';
 import { mupdfController } from './utils/mupdfController';
 
-const App: React.FC = () => {
+const AppContent: React.FC = () => {
   const { addToast } = useToast();
   const { isLicensed } = useLicense();
   const { viewMode, setViewMode } = useViewRouter();
@@ -115,6 +116,43 @@ const App: React.FC = () => {
       }
     }
   }, [pageIndex, selectedShapes, items]);
+
+  const { preloadPage } = useRamCache();
+
+  // RAM Cache Preload Effect
+  useEffect(() => {
+    const uniquePages = new Set<string>();
+    const pagesToLoad: { fileId: string, index: number }[] = [];
+
+    items.forEach(item => {
+      item.shapes.forEach(shape => {
+        // Find plan set for this global page index
+        const globalIndex = shape.pageIndex;
+        const planSet = planSets.find(ps => globalIndex >= ps.startPageIndex && globalIndex < ps.startPageIndex + ps.pageCount);
+
+        if (planSet) {
+          const localIdx = globalIndex - planSet.startPageIndex;
+          // Accounting for remapped pages
+          let finalLocalIdx = localIdx;
+          if (planSet.pages && planSet.pages[localIdx] !== undefined) {
+            finalLocalIdx = planSet.pages[localIdx];
+          } else if (planSet.pages && planSet.pages.length <= localIdx) {
+            // Fallback for safety, though activePlanDetails logic suggests this:
+            finalLocalIdx = localIdx;
+          }
+
+          const key = `${planSet.id}_${finalLocalIdx}`;
+          if (!uniquePages.has(key)) {
+            uniquePages.add(key);
+            pagesToLoad.push({ fileId: planSet.id, index: finalLocalIdx });
+          }
+        }
+      });
+    });
+
+    // Execute preloads
+    pagesToLoad.forEach(p => preloadPage(p.fileId, p.index));
+  }, [items, planSets, preloadPage]);
 
   const handleExportPDF = async (pageIndices: number[], includeLegend: boolean, includeNotes: boolean) => {
     setIsExporting(true);
@@ -462,7 +500,31 @@ const App: React.FC = () => {
   };
 
   const handleDeleteShapes = (shapesToDelete: { itemId: string, shapeId: string }[]) => {
-    const shapeIdSet = new Set(shapesToDelete.map(s => s.shapeId));
+    // Expand deletion to include contained cutouts
+    const allShapesToDelete = [...shapesToDelete];
+    const processedIds = new Set(shapesToDelete.map(s => s.shapeId));
+
+    shapesToDelete.forEach(({ itemId, shapeId }) => {
+      const item = items.find(i => i.id === itemId);
+      if (!item) return;
+      const shape = item.shapes.find(s => s.id === shapeId);
+
+      if (item.type === ToolType.AREA && shape && !shape.deduction) {
+        const childCutouts = item.shapes.filter(other =>
+          other.deduction &&
+          !processedIds.has(other.id) &&
+          other.points.length > 0 &&
+          isPointInPolygon(other.points[0], shape.points)
+        );
+
+        childCutouts.forEach(child => {
+          allShapesToDelete.push({ itemId: item.id, shapeId: child.id });
+          processedIds.add(child.id);
+        });
+      }
+    });
+
+    const shapeIdSet = new Set(allShapesToDelete.map(s => s.shapeId));
     setHistory(draft => {
       draft.items.forEach(item => {
         const originalLength = item.shapes.length;
@@ -775,5 +837,11 @@ const App: React.FC = () => {
     </div>
   );
 };
+
+const App: React.FC = () => (
+  <RamCacheProvider>
+    <AppContent />
+  </RamCacheProvider>
+);
 
 export default App;
