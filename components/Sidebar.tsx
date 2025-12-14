@@ -104,20 +104,28 @@ const Sidebar: React.FC<SidebarProps> = ({
     const [sourceItemIdForChange, setSourceItemIdForChange] = useState<string | null>(null);
 
     // Sidebar Resizing State
-    const [sidebarWidth, setSidebarWidth] = useState<number>(280);
+    const [sidebarWidth, setSidebarWidth] = useState<number>(300);
     const [isResizing, setIsResizing] = useState(false);
     const dragStartX = useRef(0);
     const dragStartWidth = useRef(280);
 
     // Load saved width from localStorage on mount
+    // Load saved width from localStorage on mount
     useEffect(() => {
         const savedWidth = localStorage.getItem('sidebarWidth');
         if (savedWidth) {
             const width = parseInt(savedWidth, 10);
-            if (!isNaN(width) && width >= 200 && width <= 600) {
+            if (!isNaN(width) && width >= 310 && width <= 600) {
                 setSidebarWidth(width);
                 dragStartWidth.current = width;
+            } else if (!isNaN(width) && width < 300) {
+                // Enforce min width if saved value is too small
+                setSidebarWidth(300);
+                dragStartWidth.current = 300;
             }
+        } else {
+            // Default if nothing saved, ensure we start > min
+            setSidebarWidth(300);
         }
     }, []);
 
@@ -142,7 +150,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             const delta = e.clientX - dragStartX.current;
             const newWidth = dragStartWidth.current + delta;
             // Clamp width between min and max
-            const clamped = Math.max(240, Math.min(500, newWidth));
+            const clamped = Math.max(300, Math.min(500, newWidth));
             setSidebarWidth(clamped);
         };
 
@@ -245,10 +253,17 @@ const Sidebar: React.FC<SidebarProps> = ({
         setContextMenu({ x: e.clientX, y: e.clientY, item });
     };
 
+    // Safety check to strictly enforce min width
+    useEffect(() => {
+        if (sidebarWidth < 300) {
+            setSidebarWidth(300);
+        }
+    }, [sidebarWidth]);
+
     return (
         <div
-            className="bg-background border-r border-border flex flex-col h-full z-20 flex-shrink-0 relative font-sans text-sm shadow-xl shadow-black/5"
-            style={{ width: `${sidebarWidth}px` }}
+            className="bg-background border-r border-border flex flex-col h-full z-20 flex-shrink-0 relative font-sans text-sm shadow-xl shadow-black/5 min-w-[300px]"
+            style={{ width: `${sidebarWidth}px`, minWidth: '300px' }}
         >
             {/* Resize handle */}
             <div
@@ -329,9 +344,16 @@ const Sidebar: React.FC<SidebarProps> = ({
             <div className="px-4 py-2 shrink-0">
                 <div className="flex items-center justify-between mb-1">
                     <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Plans & Takeoffs</div>
-                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground hover:text-primary" onClick={onOpenUploadModal}>
-                        <Plus size={14} />
-                    </Button>
+                    <TooltipProvider>
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground hover:text-primary" onClick={onOpenUploadModal}>
+                                    <Plus size={14} />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Add Drawing</TooltipContent>
+                        </Tooltip>
+                    </TooltipProvider>
                 </div>
             </div>
 
