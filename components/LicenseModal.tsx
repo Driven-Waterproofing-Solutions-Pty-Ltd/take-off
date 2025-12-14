@@ -193,9 +193,15 @@ const LicenseModal: React.FC<LicenseModalProps> = ({
                                 </p>
                             </div>
                         </div>
-                        <Badge variant={isPaid ? "default" : "outline"} className={cn("px-2 py-0 text-[10px] h-5 font-semibold", isPaid ? "bg-green-600 hover:bg-green-700" : "text-orange-600 border-orange-200 bg-orange-50")}>
-                            {isPaid ? "PRO" : "TRIAL"}
-                        </Badge>
+                        <div className="flex items-start gap-4">
+
+                            <div className="flex flex-col items-end gap-0.5">
+                                <img src="/protakeoff.png" alt="ProTakeoff" className="h-8 object-contain" />
+                                <a href="mailto:info@protakeoff.org" className="text-[10px] text-muted-foreground hover:text-primary transition-colors">
+                                    info@protakeoff.org
+                                </a>
+                            </div>
+                        </div>
                     </div>
 
                     <div className="p-4 overflow-y-auto flex-1">

@@ -42,6 +42,12 @@ const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose, initialTab }) =>
                             <DialogDescription>Documentation, Properties & Shortcuts</DialogDescription>
                         </div>
                     </div>
+                    <div className="flex flex-col items-end gap-0.5 mr-4">
+                        <img src="/protakeoff.png" alt="ProTakeoff" className="h-8 object-contain" />
+                        <a href="mailto:info@protakeoff.org" className="text-[10px] text-muted-foreground hover:text-primary transition-colors">
+                            info@protakeoff.org
+                        </a>
+                    </div>
                     {/* Close button is automatically added by DialogContent, but we can have extra header content here if needed */}
                 </DialogHeader>
 
