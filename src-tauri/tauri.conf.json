@@ -25,7 +25,11 @@
     "targets": [
       "msi",
       "nsis",
-      "msix"
+      "msix",
+      "dmg",
+      "app",
+      "deb",
+      "appimage"
     ],
     "icon": [
       "icons/icon.png",
