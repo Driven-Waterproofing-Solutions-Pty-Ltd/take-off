@@ -22,7 +22,11 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "msi",
+      "nsis",
+      "msix"
+    ],
     "icon": [
       "icons/icon.png",
       "icons/icon.ico"
