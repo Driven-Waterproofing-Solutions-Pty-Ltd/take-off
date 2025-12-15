@@ -1703,7 +1703,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 
                                     const opacity = item.type === ToolType.AREA ? 0.4 : 1;
                                     const strokeColor = isSelected ? '#3b82f6' : item.color;
-                                    const strokeWidth = (isSelected ? 4.5 : 3) * visualScaleFactor;
+                                    const strokeWidth = (isSelected ? 9 : 6) * visualScaleFactor;
 
                                     return (
                                         <Group

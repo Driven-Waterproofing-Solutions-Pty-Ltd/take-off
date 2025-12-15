@@ -120,10 +120,31 @@ const ExportModal: React.FC<ExportModalProps> = ({
                             {/* Scope Selection */}
                             <div className="space-y-3">
                                 <Label className="text-xs font-semibold uppercase text-muted-foreground tracking-wider">Export Scope</Label>
-                                <ToggleGroup type="single" value={mode} onValueChange={(val) => val && setMode(val as any)} className="justify-start w-full">
-                                    <ToggleGroupItem value="current" className="flex-1">Current Page</ToggleGroupItem>
-                                    <ToggleGroupItem value="all" className="flex-1">All Pages</ToggleGroupItem>
-                                    <ToggleGroupItem value="custom" className="flex-1">Select Pages</ToggleGroupItem>
+                                <ToggleGroup
+                                    type="single"
+                                    value={mode}
+                                    onValueChange={(val) => val && setMode(val as any)}
+                                    variant="outline"
+                                    className="justify-start w-full"
+                                >
+                                    <ToggleGroupItem
+                                        value="current"
+                                        className="flex-1 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+                                    >
+                                        Current Page
+                                    </ToggleGroupItem>
+                                    <ToggleGroupItem
+                                        value="all"
+                                        className="flex-1 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+                                    >
+                                        All Pages
+                                    </ToggleGroupItem>
+                                    <ToggleGroupItem
+                                        value="custom"
+                                        className="flex-1 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+                                    >
+                                        Select Pages
+                                    </ToggleGroupItem>
                                 </ToggleGroup>
                             </div>
 
@@ -154,7 +175,7 @@ const ExportModal: React.FC<ExportModalProps> = ({
                                                             />
                                                             <label
                                                                 htmlFor={`page-${globalIdx}`}
-                                                                className="text-sm cursor-pointer flex-1 user-select-none"
+                                                                className="text-sm cursor-pointer flex-1 select-none"
                                                                 onClick={(e) => e.preventDefault()} // Prevent double toggle due to label
                                                             >
                                                                 {pageName}

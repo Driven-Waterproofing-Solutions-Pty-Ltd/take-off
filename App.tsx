@@ -28,6 +28,9 @@ import { useViewRouter } from './components/Router';
 import { savePlanFile } from './utils/storage';
 import { flattenOCG } from './utils/flattenOCG';
 import { mupdfController, SearchHit } from './utils/mupdfController';
+import { save } from '@tauri-apps/plugin-dialog';
+import { writeFile } from '@tauri-apps/plugin-fs';
+import { LazyStore } from '@tauri-apps/plugin-store';
 
 const AppContent: React.FC = () => {
   const { addToast } = useToast();
@@ -167,15 +170,44 @@ const AppContent: React.FC = () => {
       const { pdfBytes } = await generateMarkupPDF(planSets, projectData, items, pageIndices, includeLegend, includeNotes);
       const sanitizedProjectName = projectName.replace(/[^a-z0-9]/gi, '_');
       const dateStr = new Date().toISOString().slice(0, 10);
-      const blob = new Blob([pdfBytes as BlobPart], { type: 'application/pdf' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${sanitizedProjectName}-Markup-${dateStr}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      const defaultFileName = `${sanitizedProjectName}-Markup-${dateStr}.pdf`;
+
+      // Use LazyStore to check if we have a saved export directory
+      const store = new LazyStore('settings.json');
+      const savedExportDir = await store.get<string>('pdfExportDirectory');
+
+      // Determine the default path for the save dialog
+      let defaultPath = defaultFileName;
+      if (savedExportDir) {
+        // Use saved directory + new filename
+        defaultPath = `${savedExportDir}/${defaultFileName}`;
+      }
+
+      // Show save dialog to let user pick location
+      const savePath = await save({
+        filters: [{
+          name: 'PDF Document',
+          extensions: ['pdf']
+        }],
+        defaultPath: defaultPath
+      });
+
+      // If user cancelled the dialog
+      if (!savePath) {
+        addToast("Export cancelled", 'info');
+        return;
+      }
+
+      // Save the directory for future exports (first time or when user picks new location)
+      const lastSlashIndex = Math.max(savePath.lastIndexOf('/'), savePath.lastIndexOf('\\'));
+      if (lastSlashIndex > -1) {
+        const newExportDir = savePath.substring(0, lastSlashIndex);
+        await store.set('pdfExportDirectory', newExportDir);
+        await store.save();
+      }
+
+      // Write the PDF to the chosen location
+      await writeFile(savePath, pdfBytes);
       addToast("PDF Export successful!", 'success');
     } catch (e) {
       console.error("Export Error:", e);
