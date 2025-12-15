@@ -27,7 +27,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          args: --target x86_64-pc-windows-msvc --bundles msi,nsis,msix
+          args: --target x86_64-pc-windows-msvc --bundles msi,nsis --config src-tauri/tauri.microsoftstore.conf.json
           tagName: manual-build-v__VERSION__
           releaseName: 'Manual Build v__VERSION__'
           releaseBody: 'Manual build artifacts.'
