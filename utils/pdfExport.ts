@@ -49,7 +49,7 @@ class ExportLogger {
 // Helper: Convert Hex Color to PDF RGB (0-1)
 const hexToRgb = (hex: string) => {
     if (!hex || typeof hex !== 'string') return { r: 0, g: 0, b: 0 };
-    
+
     const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
     return result ? {
         r: parseInt(result[1], 16) / 255,
@@ -61,7 +61,7 @@ const hexToRgb = (hex: string) => {
 // Helper: Convert points to SVG Path string (Using SPACES for maximum compatibility)
 const pointsToSvgPath = (points: { x: number, y: number }[], logger?: ExportLogger) => {
     if (points.length === 0) return '';
-    
+
     if (isNaN(points[0].x) || isNaN(points[0].y)) {
         logger?.log("Error: NaN points detected in SVG generation", points[0]);
         return '';
@@ -70,7 +70,7 @@ const pointsToSvgPath = (points: { x: number, y: number }[], logger?: ExportLogg
     let cleanPoints = points;
     const first = points[0];
     const last = points[points.length - 1];
-    
+
     // Check for duplicate end point
     if (points.length > 1 && Math.abs(first.x - last.x) < 0.001 && Math.abs(first.y - last.y) < 0.001) {
         cleanPoints = points.slice(0, points.length - 1);
@@ -118,7 +118,7 @@ const drawPolygonWithHoles = (
         ca: fillOpacity,      // Fill opacity
         CA: strokeOpacity,    // Stroke opacity
     });
-    
+
     const graphicsStateKey = page.node.newExtGState('AreaFillGS', graphicsState);
 
     // Save graphics state and set opacity
@@ -177,13 +177,20 @@ class CoordinateMapper {
         this.logger?.log(`CoordinateMapper Init: Size=[${width}, ${height}], Rotation=${this.rotation}`);
     }
 
+    /**
+     * Maps coordinates from PDF coordinate space (where shapes are stored).
+     * Shapes are stored at original PDF dimensions (1x scale).
+     */
     map(vx: number, vy: number) {
-        const x = vx * CANVAS_TO_PDF_SCALE;
-        const y = vy * CANVAS_TO_PDF_SCALE;
+        // Shape coordinates are already stored in PDF coordinate space (original PDF dimensions).
+        // No scaling is needed - just handle Y-axis flip and rotation.
+        const x = vx;
+        const y = vy;
 
-        // Visual (Canvas) X/Y to PDF X/Y based on Rotation
-        // Canvas (0,0) is Top-Left.
-        
+        // PDF coordinate system: (0,0) is Bottom-Left, Y increases upward.
+        // Shape coordinate system: (0,0) is Top-Left, Y increases downward.
+        // We need to flip Y and handle page rotation.
+
         if (this.rotation === 0) {
             // PDF (0,0) is Bottom-Left.
             return { x: x, y: this.pageHeight - y };
@@ -195,6 +202,28 @@ class CoordinateMapper {
             return { x: this.pageWidth - x, y: y };
         } else if (this.rotation === 270) {
             // PDF (0,0) is Bottom-Right visually.
+            return { x: this.pageWidth - y, y: this.pageHeight - x };
+        }
+        return { x, y: this.pageHeight - y };
+    }
+
+    /**
+     * Maps coordinates from canvas coordinate space (where legend position is stored).
+     * Canvas renders at RENDER_SCALE (2x), so we need to scale down by CANVAS_TO_PDF_SCALE (0.5).
+     */
+    mapFromCanvasSpace(vx: number, vy: number) {
+        // Legend coordinates are stored in canvas space (2x PDF dimensions).
+        // We need to scale them down first before applying the PDF coordinate transform.
+        const x = vx * CANVAS_TO_PDF_SCALE;
+        const y = vy * CANVAS_TO_PDF_SCALE;
+
+        if (this.rotation === 0) {
+            return { x: x, y: this.pageHeight - y };
+        } else if (this.rotation === 90) {
+            return { x: y, y: x };
+        } else if (this.rotation === 180) {
+            return { x: this.pageWidth - x, y: y };
+        } else if (this.rotation === 270) {
             return { x: this.pageWidth - y, y: this.pageHeight - x };
         }
         return { x, y: this.pageHeight - y };
@@ -242,7 +271,7 @@ export const generateMarkupPDF = async (
     logger.section("Starting PDF Export");
     logger.log("Items Count", items.length);
     logger.log("Pages to Export", pageIndices);
-    
+
     // Create new PDF
     const outPdf = await PDFDocument.create();
     const font = await outPdf.embedFont(StandardFonts.Helvetica);
@@ -264,7 +293,7 @@ export const generateMarkupPDF = async (
     for (const [planId, globalIndices] of Object.entries(pagesByPlan)) {
         const plan = planSetMap[planId];
         logger.section(`Processing Plan: ${plan.name}`);
-        
+
         let sourcePdf;
         try {
             const existingPdfBytes = await plan.file.arrayBuffer();
@@ -321,7 +350,7 @@ export const generateMarkupPDF = async (
                         });
 
                         const posPointsPDF = posShape.points.map(p => mapper.map(p.x, p.y));
-                        
+
                         // Debug log for the first point
                         if (pIdx === 0) {
                             logger.log(`  Shape ${item.label} P0: (${posPointsPDF[0].x.toFixed(1)}, ${posPointsPDF[0].y.toFixed(1)}) Color: ${item.color}`);
@@ -329,7 +358,7 @@ export const generateMarkupPDF = async (
 
                         // Use drawSvgPath for EVERYTHING to ensure consistency.
                         // Manually manage winding order for SVG Path standard (CCW for outer, CW for inner usually works best with Non-Zero rules).
-                        
+
                         // 1. Outer Shape: Must be CCW
                         const outerArea = getSignedArea(posPointsPDF);
                         logger.log(`  Outer signed area: ${outerArea}`);
@@ -352,7 +381,7 @@ export const generateMarkupPDF = async (
                                 logger.log(`  Reversed hole to CW`);
                             }
                             holePointsArray.push(holePointsPDF);
-                            
+
                             const holePath = pointsToSvgPath(holePointsPDF, logger);
                             logger.log(`  Hole SVG path: ${holePath}`);
                             svgPath += ' ' + holePath;
@@ -375,7 +404,7 @@ export const generateMarkupPDF = async (
                                 pdfColor,
                                 FILL_OPACITY,
                                 pdfColor,
-                                1, // stroke width
+                                2, // stroke width (2x for print)
                                 0.8, // stroke opacity
                                 logger
                             );
@@ -386,13 +415,13 @@ export const generateMarkupPDF = async (
                     }
 
                     // Draw Outlines (Separate Pass for better style)
-                    const LINE_THICKNESS = 1.33;
+                    const LINE_THICKNESS = 2.66; // 2x for print
                     const LINE_OPACITY = 0.8;
 
                     for (const shape of shapes) {
                         if (shape.points.length === 0) continue;
                         const points = shape.points.map(p => mapper.map(p.x, p.y));
-                        
+
                         for (let k = 0; k < points.length; k++) {
                             const p1 = points[k];
                             const p2 = points[(k + 1) % points.length];
@@ -414,17 +443,17 @@ export const generateMarkupPDF = async (
                         if (item.type === ToolType.COUNT) {
                             points.forEach(p => {
                                 page.drawCircle({
-                                    x: p.x, y: p.y, size: 5,
-                                    color: pdfColor, borderColor: rgb(1, 1, 1), borderWidth: 2, opacity: 0.8
+                                    x: p.x, y: p.y, size: 10, // 2x for print
+                                    color: pdfColor, borderColor: rgb(1, 1, 1), borderWidth: 4, opacity: 0.8 // 2x for print
                                 });
                             });
                         }
                         else if (item.type === ToolType.NOTE && includeNotes) {
                             const p1 = points[0];
                             const p2 = points.length > 1 ? points[1] : p1;
-                            
+
                             if (points.length > 1) {
-                                page.drawLine({ start: p2, end: p1, color: pdfColor, thickness: 2 });
+                                page.drawLine({ start: p2, end: p1, color: pdfColor, thickness: 4 }); // 2x for print
                                 const headLen = 10;
                                 const dx = p1.x - p2.x;
                                 const dy = p1.y - p2.y;
@@ -432,12 +461,12 @@ export const generateMarkupPDF = async (
                                 page.drawLine({
                                     start: p1,
                                     end: { x: p1.x - headLen * Math.cos(angle - Math.PI / 6), y: p1.y - headLen * Math.sin(angle - Math.PI / 6) },
-                                    color: pdfColor, thickness: 2
+                                    color: pdfColor, thickness: 4 // 2x for print
                                 });
                                 page.drawLine({
                                     start: p1,
                                     end: { x: p1.x - headLen * Math.cos(angle + Math.PI / 6), y: p1.y - headLen * Math.sin(angle + Math.PI / 6) },
-                                    color: pdfColor, thickness: 2
+                                    color: pdfColor, thickness: 4 // 2x for print
                                 });
                             }
 
@@ -447,11 +476,11 @@ export const generateMarkupPDF = async (
                                 const lineHeight = fontSize + 4;
                                 const boxHeight = (lines.length * lineHeight) + 4;
                                 let boxWidth = 0;
-                                lines.forEach(l => { const w = font.widthOfTextAtSize(l, fontSize); if(w>boxWidth) boxWidth=w; });
+                                lines.forEach(l => { const w = font.widthOfTextAtSize(l, fontSize); if (w > boxWidth) boxWidth = w; });
                                 boxWidth += 8;
 
                                 const textRot = mapper.getRotationAngle();
-                                
+
                                 page.drawRectangle({
                                     x: p2.x, y: p2.y - boxHeight,
                                     width: boxWidth, height: boxHeight,
@@ -462,8 +491,8 @@ export const generateMarkupPDF = async (
 
                                 lines.forEach((line, i) => {
                                     page.drawText(line, {
-                                        x: p2.x + 4, 
-                                        y: p2.y - (i + 1) * lineHeight, 
+                                        x: p2.x + 4,
+                                        y: p2.y - (i + 1) * lineHeight,
                                         size: fontSize, font, color: pdfColor,
                                         rotate: degrees(textRot)
                                     });
@@ -474,7 +503,7 @@ export const generateMarkupPDF = async (
                             for (let k = 0; k < points.length - 1; k++) {
                                 page.drawLine({
                                     start: points[k], end: points[k + 1],
-                                    color: pdfColor, thickness: 1.33, opacity: 0.8
+                                    color: pdfColor, thickness: 2.66, opacity: 0.8 // 2x for print
                                 });
                             }
                             if (item.type === ToolType.DIMENSION && points.length >= 2) {
@@ -518,7 +547,7 @@ const drawDimension = (
     const nx = -dy / len;
     const ny = dx / len;
     const tickLen = 8;
-    const LINE_THICKNESS = 1.0;
+    const LINE_THICKNESS = 2.0; // 2x for print
 
     page.drawLine({
         start: { x: p1.x + nx * tickLen, y: p1.y + ny * tickLen },
@@ -557,7 +586,7 @@ const drawNativeLegend = (
     fontBold: PDFFont,
     mapper: CoordinateMapper
 ) => {
-    const anchor = mapper.map(settings.x, settings.y);
+    const anchor = mapper.mapFromCanvasSpace(settings.x, settings.y);
     const rotation = mapper.getRotationAngle();
 
     const pdfScale = settings.scale * CANVAS_TO_PDF_SCALE;
