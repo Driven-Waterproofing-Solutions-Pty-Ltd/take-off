@@ -14,6 +14,7 @@ import ChangeItemModal from './ChangeItemModal';
 import { getPageImage, savePageImage } from '../utils/pdfCache';
 import { mupdfController } from '../utils/mupdfController';
 import { useRamCache } from '../contexts/RamCacheContext';
+import { SearchHit } from '../utils/mupdfController';
 
 // Removed html2canvas import as we now use pdf-lib for vector export
 
@@ -55,6 +56,8 @@ interface BlueprintCanvasProps {
     clearPendingPreset?: () => void;
     onInteractionEnd?: () => void;
     onPageLoaded?: () => void;
+    searchHighlights?: SearchHit[];
+    currentSearchHitIndex?: number | null;
 }
 
 // Fixed scale ensures coordinate system is consistent across devices.
@@ -331,7 +334,9 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     pendingPreset,
     clearPendingPreset,
     onInteractionEnd,
-    onPageLoaded
+    onPageLoaded,
+    searchHighlights,
+    currentSearchHitIndex
 }, ref) => {
     const { addToast } = useToast();
     const viewportRef = useRef<HTMLDivElement>(null);
@@ -1934,6 +1939,36 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                             )}
 
                             {getLiveLabel()}
+
+                            {/* Search Highlights Layer */}
+                            {searchHighlights && searchHighlights.length > 0 && (
+                                <Group>
+                                    {searchHighlights.map((hit) => {
+                                        const isCurrentHit = currentSearchHitIndex === hit.index;
+                                        // Convert quads to screen coordinates using shapeRenderScale
+                                        return hit.quads.map((quad, qIdx) => {
+                                            const minX = Math.min(quad.ul.x, quad.ll.x) * shapeRenderScale;
+                                            const maxX = Math.max(quad.ur.x, quad.lr.x) * shapeRenderScale;
+                                            const minY = Math.min(quad.ul.y, quad.ur.y) * shapeRenderScale;
+                                            const maxY = Math.max(quad.ll.y, quad.lr.y) * shapeRenderScale;
+
+                                            return (
+                                                <Rect
+                                                    key={`search-${hit.index}-${qIdx}`}
+                                                    x={minX}
+                                                    y={minY}
+                                                    width={maxX - minX}
+                                                    height={maxY - minY}
+                                                    fill={isCurrentHit ? 'rgba(255, 165, 0, 0.5)' : 'rgba(255, 255, 0, 0.35)'}
+                                                    stroke={isCurrentHit ? '#ff8c00' : '#ffd700'}
+                                                    strokeWidth={isCurrentHit ? 2 * visualScaleFactor : 1 * visualScaleFactor}
+                                                    listening={false}
+                                                />
+                                            );
+                                        });
+                                    })}
+                                </Group>
+                            )}
 
                             {selectionRect && selectionRect.active && (
                                 <Rect

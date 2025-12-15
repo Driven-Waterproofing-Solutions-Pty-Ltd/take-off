@@ -27,7 +27,7 @@ import { RamCacheProvider, useRamCache } from './contexts/RamCacheContext';
 import { useViewRouter } from './components/Router';
 import { savePlanFile } from './utils/storage';
 import { flattenOCG } from './utils/flattenOCG';
-import { mupdfController } from './utils/mupdfController';
+import { mupdfController, SearchHit } from './utils/mupdfController';
 
 const AppContent: React.FC = () => {
   const { addToast } = useToast();
@@ -93,6 +93,8 @@ const AppContent: React.FC = () => {
 
   // PDF Search state
   const [showPDFSearch, setShowPDFSearch] = useState(false);
+  const [searchHighlights, setSearchHighlights] = useState<SearchHit[]>([]);
+  const [currentSearchHitIndex, setCurrentSearchHitIndex] = useState<number | null>(null);
 
   const [isUploadingPdf, setIsUploadingPdf] = useState(false);
   const [uploadLoadingMessage, setUploadLoadingMessage] = useState("Uploading PDF Plans...");
@@ -829,12 +831,16 @@ const AppContent: React.FC = () => {
               onMoveShapesToItem={handleMoveShapesToItem}
               onStopRecording={handleStopTakeoff} onInteractionEnd={commitHistory}
               scaleInfo={{ isSet: currentScale.isSet, ppu: currentScale.pixelsPerUnit, unit: currentScale.unit }}
-              zoomLevel={zoomLevel} setZoomLevel={setZoomLevel} pendingPreset={pendingPreset} clearPendingPreset={() => setPendingPreset(null)} />
+              zoomLevel={zoomLevel} setZoomLevel={setZoomLevel} pendingPreset={pendingPreset} clearPendingPreset={() => setPendingPreset(null)}
+              searchHighlights={searchHighlights}
+              currentSearchHitIndex={currentSearchHitIndex} />
             <PDFSearch
               isOpen={showPDFSearch}
               onClose={() => setShowPDFSearch(false)}
               onNavigateToPage={setPageIndex}
               currentPageIndex={pageIndex}
+              onHighlightsChange={setSearchHighlights}
+              onCurrentHitChange={setCurrentSearchHitIndex}
             />
           </>
         )}

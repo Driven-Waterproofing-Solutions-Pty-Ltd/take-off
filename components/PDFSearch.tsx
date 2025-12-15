@@ -4,13 +4,15 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { mupdfController, DocumentSearchResult, PageSearchResult } from '@/utils/mupdfController';
+import { mupdfController, DocumentSearchResult, PageSearchResult, SearchHit } from '@/utils/mupdfController';
 
 interface PDFSearchProps {
     isOpen: boolean;
     onClose: () => void;
     onNavigateToPage: (pageIndex: number) => void;
     currentPageIndex: number;
+    onHighlightsChange?: (hits: SearchHit[]) => void;
+    onCurrentHitChange?: (index: number | null) => void;
 }
 
 const PDFSearch: React.FC<PDFSearchProps> = ({
@@ -18,6 +20,8 @@ const PDFSearch: React.FC<PDFSearchProps> = ({
     onClose,
     onNavigateToPage,
     currentPageIndex,
+    onHighlightsChange,
+    onCurrentHitChange,
 }) => {
     const [query, setQuery] = useState('');
     const [results, setResults] = useState<DocumentSearchResult | null>(null);
@@ -39,8 +43,11 @@ const PDFSearch: React.FC<PDFSearchProps> = ({
             setQuery('');
             setResults(null);
             setSelectedResultIndex(0);
+            // Clear highlights when search is closed
+            onHighlightsChange?.([]);
+            onCurrentHitChange?.(null);
         }
-    }, [isOpen]);
+    }, [isOpen, onHighlightsChange, onCurrentHitChange]);
 
     // Debounced search
     const performSearch = useCallback((searchQuery: string) => {
@@ -61,6 +68,10 @@ const PDFSearch: React.FC<PDFSearchProps> = ({
             setResults(searchResults);
             setIsSearching(false);
             setSelectedResultIndex(0);
+            // Emit highlights for current page
+            const currentPageHits = searchResults.pages.find(p => p.pageIndex === currentPageIndex)?.hits || [];
+            onHighlightsChange?.(currentPageHits);
+            onCurrentHitChange?.(0);
         }, 300);
     }, []);
 
@@ -101,13 +112,32 @@ const PDFSearch: React.FC<PDFSearchProps> = ({
         return null;
     };
 
-    // Navigate to selected result
+    // Navigate to selected result and update highlights
     useEffect(() => {
         const selected = getSelectedResult();
-        if (selected && selected.pageIndex !== currentPageIndex) {
-            onNavigateToPage(selected.pageIndex);
+        if (selected) {
+            if (selected.pageIndex !== currentPageIndex) {
+                onNavigateToPage(selected.pageIndex);
+            }
+            // Update current hit index for highlighting
+            onCurrentHitChange?.(selected.hitIndex);
         }
     }, [selectedResultIndex]);
+
+    // Update highlights when page changes (e.g., manual navigation)
+    useEffect(() => {
+        if (results) {
+            const currentPageHits = results.pages.find(p => p.pageIndex === currentPageIndex)?.hits || [];
+            onHighlightsChange?.(currentPageHits);
+            // Reset current hit when page changes manually
+            const selected = getSelectedResult();
+            if (selected?.pageIndex === currentPageIndex) {
+                onCurrentHitChange?.(selected.hitIndex);
+            } else {
+                onCurrentHitChange?.(null);
+            }
+        }
+    }, [currentPageIndex, results, onHighlightsChange, onCurrentHitChange]);
 
     // Keyboard shortcuts
     const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -200,8 +230,8 @@ const PDFSearch: React.FC<PDFSearchProps> = ({
                                 <div
                                     key={page.pageIndex}
                                     className={`flex items-center justify-between px-2 py-1.5 rounded-md cursor-pointer transition-colors ${isCurrentPage
-                                            ? 'bg-primary/10 text-primary'
-                                            : 'hover:bg-muted/50 text-muted-foreground hover:text-foreground'
+                                        ? 'bg-primary/10 text-primary'
+                                        : 'hover:bg-muted/50 text-muted-foreground hover:text-foreground'
                                         }`}
                                     onClick={() => onNavigateToPage(page.pageIndex)}
                                 >
