@@ -296,11 +296,11 @@ const TemplateManager: React.FC<TemplateManagerProps> = ({ mode = 'manage', filt
                     <div className="w-4 shrink-0" style={{ backgroundColor: t.color }}></div>
 
                     {/* Content */}
-                    <div className="flex-1 p-4 flex items-center justify-between min-w-0">
+                    <div className="flex-1 px-4 py-2 flex items-center justify-between min-w-0">
                         <div className="flex items-center gap-4 overflow-hidden min-w-0">
                             <div className="min-w-0">
                                 <div className="flex items-center gap-2">
-                                    <h3 className="text-lg font-bold text-card-foreground truncate" title={t.label}>{t.label}</h3>
+                                    <h3 className="text-base font-bold text-card-foreground truncate" title={t.label}>{t.label}</h3>
                                     {isPremium && <Crown size={14} className="text-yellow-500 fill-yellow-500" />}
                                 </div>
                                 <p className="text-sm text-muted-foreground font-medium truncate">{t.group}</p>
