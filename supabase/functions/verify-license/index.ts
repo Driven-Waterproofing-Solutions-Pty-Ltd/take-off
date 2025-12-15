@@ -12,10 +12,10 @@ Deno.serve(async (req) => {
     }
 
     try {
-        const { licenseKey, machineId } = await req.json()
+        let { licenseKey, machineId } = await req.json()
 
-        if (!licenseKey || !machineId) {
-            throw new Error("Missing licenseKey or machineId")
+        if (!machineId) {
+            throw new Error("Missing machineId")
         }
 
         // Initialize Supabase
@@ -24,19 +24,43 @@ Deno.serve(async (req) => {
             Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
         )
 
-        // 1. Verify License in DB
-        // We use the existing RPC or direct DB query. Direct query is fine here since we are admin.
-        // Actually, let's use the DB directly to be sure.
-        const { data: license, error } = await supabase
-            .from('licenses')
-            .select('*')
-            .eq('license_key', licenseKey)
-            .maybeSingle()
+        let license = null;
 
-        if (error || !license) {
+        // 1. Verify License in DB
+        if (licenseKey) {
+            // Standard verification by Key
+            const { data, error } = await supabase
+                .from('licenses')
+                .select('*')
+                .eq('license_key', licenseKey)
+                .maybeSingle()
+
+            if (!error) license = data;
+        } else {
+            // 2. Recovery Lookup by Machine ID (if no key provided)
+            // Look for ANY license bound to this machine.
+            // Priority: Paid > Trial (if we store trials here? assumed yes or separate)
+            // Ideally we want the most recent 'paid' license.
+            const { data, error } = await supabase
+                .from('licenses')
+                .select('*')
+                .eq('machine_id', machineId)
+                .eq('license_type', 'paid') // Prioritize paid recovery
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+            if (!error && data) {
+                license = data;
+                licenseKey = data.license_key; // Recover the key
+                console.log(`Recovered license ${licenseKey} for machine ${machineId}`);
+            }
+        }
+
+        if (!license) {
             return new Response(JSON.stringify({ valid: false, message: 'Invalid License' }), {
                 headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-                status: 200 // Return 200 so client can handle "invalid" gracefully
+                status: 200
             })
         }
 

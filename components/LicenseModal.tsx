@@ -242,19 +242,19 @@ const LicenseModal: React.FC<LicenseModalProps> = ({
                                 </div>
 
                                 {/* Upgrade Banner - Horizontal & Thin */}
-                                {!isPaid && (
+                                {(!isPaid || isExpired) && (
                                     <div className="rounded-lg border border-indigo-100 bg-gradient-to-r from-indigo-50 to-white p-3 flex items-center justify-between gap-3 shadow-sm">
                                         <div className="flex items-center gap-2.5">
                                             <div className="bg-white p-1.5 rounded-md shadow-sm text-indigo-600">
                                                 <Zap size={14} className="fill-indigo-600" />
                                             </div>
                                             <div className="leading-3">
-                                                <div className="font-bold text-xs text-indigo-950">Upgrade to Pro</div>
-                                                <div className="text-[10px] text-indigo-600/80 font-medium mt-0.5">Unlimited features</div>
+                                                <div className="font-bold text-xs text-indigo-950">{isExpired ? "Renew Subscription" : "Upgrade to Pro"}</div>
+                                                <div className="text-[10px] text-indigo-600/80 font-medium mt-0.5">{isExpired ? "Restore Pro access" : "Unlimited features"}</div>
                                             </div>
                                         </div>
                                         <Button size="sm" className="h-7 px-3 text-xs bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm shrink-0" onClick={handleSubscribe} disabled={isSubscribing}>
-                                            {isSubscribing ? <Loader2 className="h-3 w-3 animate-spin" /> : "Subscribe $23.49"}
+                                            {isSubscribing ? <Loader2 className="h-3 w-3 animate-spin" /> : (isExpired ? "Renew Now" : "Subscribe $23.49")}
                                         </Button>
                                     </div>
                                 )}

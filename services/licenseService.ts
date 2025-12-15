@@ -155,7 +155,22 @@ export const licenseService = {
                 }
             }
 
-            // 3. Fallback: No key, no token (or just cleared). Check if we can start/resume a trial?
+            // 3. Fallback: No key, no token.
+            // ATTEMPT RECOVERY: Check if the server knows this machine ID (e.g. reinstallation)
+            console.log("Attempting license recovery by Machine ID...");
+            // Pass empty string as key to trigger "Machine ID Lookup" mode on server
+            const recoveryResult = await this.activateKey("");
+
+            if (recoveryResult.valid) {
+                console.log("License recovered successfully.");
+                return recoveryResult;
+            } else if (recoveryResult.message === 'License Expired') {
+                // EXPLICITLY handle expired recovery -> Do not fall back to trial
+                console.log("Recovered license is expired.");
+                return recoveryResult;
+            }
+
+            // 4. Failing recovery, Check if we can start/resume a trial?
             return await this.startTrial(machineId);
 
         } catch (err) {
@@ -231,7 +246,14 @@ export const licenseService = {
 
             // Save the valid token and key
             await this.setStoredToken(data.token);
-            await store.set('license_key', key);
+            // Only save the key if we actually possess it (or if server returned it implicitly in data?)
+            // The server returns the key in the token payload usually, but for local store:
+            if (key) {
+                await store.set('license_key', key);
+            } else if (data.licenseKey) {
+                // If we recovered it, save the recovered key
+                await store.set('license_key', data.licenseKey);
+            }
             await store.save();
 
             return {
