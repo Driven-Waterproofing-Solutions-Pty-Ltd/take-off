@@ -56,7 +56,7 @@ export const LicenseProvider: React.FC<{ children: ReactNode }> = ({ children })
   }
 
   if (!isLicensed) {
-    return <LicenseModal onSuccess={() => checkLicense()} initialMessage={licenseError} />;
+    return <LicenseModal isOpen={true} onSuccess={() => checkLicense()} initialMessage={licenseError} />;
   }
 
   return (

@@ -17,11 +17,7 @@ fn read_file_binary(path: String) -> Result<Vec<u8>, String> {
 pub fn run() {
     tauri::Builder::default()
 // ... (existing setup code) ...
-        .invoke_handler(tauri::generate_handler![
-            license::verify_license,
-            license::get_machine_id,
-            get_startup_args
-        ])
+
         .setup(|app| {
             let handle = app.handle();
             

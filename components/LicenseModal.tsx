@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Dialog, DialogContent } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 
 export interface LicenseModalProps {
@@ -177,6 +177,10 @@ const LicenseModal: React.FC<LicenseModalProps> = ({
                 }}
                 showCloseButton={allowClose}
             >
+                <DialogTitle className="sr-only">License Manager</DialogTitle>
+                <DialogDescription className="sr-only">
+                    Manage your ProTakeoff license status, activate a new key, or start a trial.
+                </DialogDescription>
                 <div className="w-full flex flex-col h-full max-h-[85vh] overflow-hidden">
                     <div className="px-5 py-3 flex items-center justify-between border-b bg-muted/20 shrink-0">
                         <div className="flex items-center gap-2.5">
