@@ -99,9 +99,9 @@ const ChangeItemModal: React.FC<ChangeItemModalProps> = ({
                         </p>
                         <ScrollArea className="h-24 rounded-md border p-2 bg-muted/30">
                             {sourceItems.map(item => (
-                                <div key={item.id} className="flex items-center gap-2 py-1">
+                                <div key={item.id} className="flex items-center gap-2 py-1 min-w-0">
                                     <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: item.color }}></div>
-                                    <span className="text-sm font-medium">{item.label}</span>
+                                    <span className="text-sm font-medium truncate" title={item.label}>{item.label}</span>
                                 </div>
                             ))}
                         </ScrollArea>

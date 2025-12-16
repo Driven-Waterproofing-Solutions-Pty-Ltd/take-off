@@ -163,7 +163,7 @@ const ExportModal: React.FC<ExportModalProps> = ({
                                                         <div
                                                             key={globalIdx}
                                                             className={cn(
-                                                                "flex items-center space-x-2 px-2 py-1.5 rounded-sm cursor-pointer transition-colors",
+                                                                "flex items-center space-x-2 px-2 py-1.5 rounded-sm cursor-pointer transition-colors min-w-0",
                                                                 isSelected ? "bg-primary/10" : "hover:bg-muted"
                                                             )}
                                                             onClick={() => togglePage(globalIdx)}
@@ -175,8 +175,9 @@ const ExportModal: React.FC<ExportModalProps> = ({
                                                             />
                                                             <label
                                                                 htmlFor={`page-${globalIdx}`}
-                                                                className="text-sm cursor-pointer flex-1 select-none"
+                                                                className="text-sm cursor-pointer flex-1 select-none truncate"
                                                                 onClick={(e) => e.preventDefault()} // Prevent double toggle due to label
+                                                                title={pageName}
                                                             >
                                                                 {pageName}
                                                             </label>

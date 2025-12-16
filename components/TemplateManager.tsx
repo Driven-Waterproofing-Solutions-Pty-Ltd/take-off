@@ -349,13 +349,13 @@ const TemplateManager: React.FC<TemplateManagerProps> = ({ mode = 'manage', filt
                         <button
                             key={category}
                             onClick={() => setSelectedCategory(category)}
-                            className={`w-full text-left px-3 py-2 text-sm font-medium rounded-md transition-colors ${selectedCategory === category
+                            className={`w-full text-left px-3 py-2 text-sm font-medium rounded-md transition-colors min-w-0 ${selectedCategory === category
                                 ? 'bg-primary/10 text-primary'
                                 : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                                 }`}
                         >
-                            <div className="flex justify-between items-center">
-                                <span className="truncate">{category}</span>
+                            <div className="flex justify-between items-center overflow-hidden">
+                                <span className="truncate" title={category}>{category}</span>
                                 <Badge variant="secondary" className="text-[10px] h-5 px-1.5 min-w-[20px] justify-center">
                                     {category === 'All'
                                         ? allTemplates.length

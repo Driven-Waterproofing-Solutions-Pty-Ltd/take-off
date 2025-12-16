@@ -661,7 +661,7 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
                                     <span>Variables:</span>
                                     <Badge variant="outline" className="font-mono text-[10px] px-1.5 h-5">Qty</Badge>
                                     {properties.map(p => (
-                                        <Badge key={p.name} variant="outline" className="font-mono text-[10px] px-1.5 h-5">{toVariableName(p.name)}</Badge>
+                                        <Badge key={p.name} variant="outline" className="font-mono text-[10px] px-1.5 h-5 max-w-[150px] truncate" title={toVariableName(p.name)}>{toVariableName(p.name)}</Badge>
                                     ))}
                                 </div>
                             </div>
@@ -779,7 +779,7 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
                                                             <Layers size={16} />
                                                         </div>
                                                         <div>
-                                                            <h4 className="font-bold text-sm">{sub.label}</h4>
+                                                            <h4 className="font-bold text-sm truncate" title={sub.label}>{sub.label}</h4>
                                                             <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1">
                                                                 <code className="bg-muted px-1.5 border rounded">{sub.formula}</code>
                                                                 <span>= {subPreview.toFixed(2)} {sub.unit}</span>

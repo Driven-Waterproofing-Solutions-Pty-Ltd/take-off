@@ -76,9 +76,9 @@ const UploadModal: React.FC<UploadModalProps> = ({ onUpload, onCancel, isFirstUp
               <div className="p-2 space-y-2">
                 {files.map((file, i) => (
                   <div key={i} className="flex justify-between items-center text-sm bg-card px-3 py-2 rounded-lg border shadow-sm">
-                    <div className="flex items-center gap-2 truncate flex-1">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
                       <FileText className="h-4 w-4 text-primary shrink-0" />
-                      <span className="truncate pr-3">{file.name}</span>
+                      <span className="truncate pr-3" title={file.name}>{file.name}</span>
                     </div>
                     <Button
                       variant="ghost"
