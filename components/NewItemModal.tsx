@@ -26,11 +26,14 @@ const NewItemModal: React.FC<NewItemModalProps> = ({ toolType, existingCount, on
     // Basic Form State
     const [name, setName] = useState(`${toolType.charAt(0) + toolType.slice(1).toLowerCase()} ${existingCount + 1}`);
     const [color, setColor] = useState(generateColor(existingCount));
+    const [depthFeet, setDepthFeet] = useState(0);
+    const [depthInches, setDepthInches] = useState(0);
 
     const handleBasicSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (name.trim()) {
-            onCreate({ label: name, color });
+            const depth = toolType === ToolType.VOLUME ? (depthFeet + depthInches / 12) : undefined;
+            onCreate({ label: name, color, depth });
         }
     };
 
@@ -83,10 +86,38 @@ const NewItemModal: React.FC<NewItemModalProps> = ({ toolType, existingCount, on
                                             onClick={() => setColor(c)}
                                             className={`w-8 h-8 rounded-md border-2 transition-all ${color === c ? 'border-primary ring-2 ring-primary ring-offset-2' : 'border-transparent hover:border-border'}`}
                                             style={{ backgroundColor: c }}
+                                            aria-label={`Select color ${c}`}
                                         />
                                     ))}
                                 </div>
                             </div>
+
+                            {toolType === ToolType.VOLUME && (
+                                <div className="space-y-2">
+                                    <Label>Depth</Label>
+                                    <div className="flex gap-2">
+                                        <div className="flex-1">
+                                            <Input
+                                                type="number"
+                                                placeholder="Feet"
+                                                value={depthFeet}
+                                                onChange={e => setDepthFeet(Number(e.target.value) || 0)}
+                                                min={0}
+                                            />
+                                        </div>
+                                        <div className="flex-1">
+                                            <Input
+                                                type="number"
+                                                placeholder="Inches"
+                                                value={depthInches}
+                                                onChange={e => setDepthInches(Number(e.target.value) || 0)}
+                                                min={0}
+                                                max={11}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
 
                             <div className="flex justify-end gap-2 pt-4">
                                 <Button variant="outline" type="button" onClick={onCancel}>Cancel</Button>

@@ -5,7 +5,10 @@ export enum ToolType {
   DIMENSION = 'DIMENSION', // 2 points with annotations
   SEGMENT = 'SEGMENT', // 2 points
   LINEAR = 'LINEAR', // Polyline
+  ARC = 'ARC', // Arc segments
   AREA = 'AREA', // Polygon
+  VOLUME = 'VOLUME', // Polygon with depth
+  FILL = 'FILL', // Auto-detect enclosed areas
   COUNT = 'COUNT', // Points
   NOTE = 'NOTE', // Text annotation
 }
@@ -78,6 +81,7 @@ export interface Shape {
   value: number; // Length, Area, or Count (1 or N)
   deduction?: boolean; // If true, this shape is subtracted from the total
   text?: string; // For NOTE items
+  bulges?: number[]; // For ARC items: bulge values between points (same length as points - 1)
 }
 
 export interface ItemProperty {
@@ -113,6 +117,7 @@ export interface TakeoffItem {
   subItems?: SubItem[]; // Material breakdowns
   visible?: boolean; // Controls global visibility (legacy support)
   hiddenPages?: number[]; // List of page indices where this item is hidden
+  depth?: number; // Depth in feet for volume calculations (VOLUME type only)
 }
 
 export interface ItemTemplate {
@@ -181,12 +186,4 @@ export interface FileSystemWritableFileStream extends WritableStream {
   write(data: any): Promise<void>;
   seek(position: number): Promise<void>;
   truncate(size: number): Promise<void>;
-}
-
-export interface LicenseResponse {
-  valid: boolean;
-  message: string;
-  token?: string;
-  expires_at?: string;
-  license_type?: 'trial' | 'paid';
 }

@@ -1,5 +1,4 @@
 import { supabase } from './supabaseClient';
-import { licenseService } from './licenseService';
 
 export const stripeService = {
     async createCheckoutSession(licenseKey: string) {
@@ -18,9 +17,9 @@ export const stripeService = {
         console.log("Return URL:", returnUrl);
 
         try {
-            // Using static import to avoid bundling issues
-            const machineId = await licenseService.getMachineId();
-            console.log("Machine ID obtained:", machineId);
+            // Generate a random machine ID since no license service
+            const machineId = crypto.randomUUID();
+            console.log("Machine ID generated:", machineId);
 
             console.log("Invoking create-checkout-session function...");
             const { data, error } = await supabase.functions.invoke('create-checkout-session', {

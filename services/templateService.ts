@@ -1,6 +1,5 @@
 import { supabase } from './supabaseClient';
 import { ItemTemplate } from '../types';
-import { licenseService } from './licenseService';
 
 export interface TemplateResponse {
     success: boolean;
@@ -12,22 +11,11 @@ export interface TemplateResponse {
 export const templateService = {
     /**
      * Fetch premium templates from Supabase
-     * Only available to paid license holders
+     * Now available to all users
      */
     async fetchPremiumTemplates(): Promise<TemplateResponse> {
         try {
-            // First, verify the user has a paid license
-            const licenseStatus = await licenseService.checkLicense();
-
-            console.log('License Status:', licenseStatus);
-
-            if (!licenseStatus.valid) {
-                return {
-                    success: false,
-                    message: 'No valid license found. Please activate a license to access premium templates.',
-                    requiresUpgrade: true,
-                };
-            }
+            // No license check needed
 
             if (licenseStatus.licenseType === 'trial') {
                 return {
@@ -89,15 +77,7 @@ export const templateService = {
      */
     async fetchPremiumTemplatesByCategory(category: string): Promise<TemplateResponse> {
         try {
-            const licenseStatus = await licenseService.checkLicense();
-
-            if (!licenseStatus.valid || licenseStatus.licenseType === 'trial') {
-                return {
-                    success: false,
-                    message: 'Premium templates require a paid license.',
-                    requiresUpgrade: true,
-                };
-            }
+            // No license check needed
 
             const { data, error } = await supabase
                 .from('templates')
@@ -142,7 +122,6 @@ export const templateService = {
      * Check if user has access to premium templates
      */
     async hasPremiumAccess(): Promise<boolean> {
-        const licenseStatus = await licenseService.checkLicense();
-        return licenseStatus.valid && licenseStatus.licenseType === 'paid';
+        return true; // Always has access
     }
 };

@@ -71,7 +71,7 @@ const Tools: React.FC<ToolsProps> = ({
         </div>
       )}
 
-      <div className="bg-background/80 backdrop-blur-md shadow-xl shadow-black/5 border border-border rounded-xl p-1.5 flex items-center gap-1.5">
+      <div className="bg-background/80 backdrop-blur-md shadow-xl shadow-black/5 border border-border rounded-xl p-2 flex items-center gap-2 flex-nowrap">
 
         <TooltipProvider delayDuration={300}>
           {/* Undo/Redo Group */}
@@ -208,15 +208,50 @@ const Tools: React.FC<ToolsProps> = ({
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
-                  variant={activeTool === ToolType.AREA ? "default" : "ghost"}
+                  variant={activeTool === ToolType.ARC ? "default" : "ghost"}
                   size="icon"
-                  onClick={() => onInitiateTool(ToolType.AREA)}
+                  onClick={() => onInitiateTool(ToolType.ARC)}
+                  className="h-9 w-9"
+                >
+                  <Activity size={20} strokeWidth={2} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Arc (5)</TooltipContent>
+            </Tooltip>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant={activeTool === ToolType.AREA || activeTool === ToolType.VOLUME ? "default" : "ghost"}
+                  size="icon"
                   className="h-9 w-9"
                 >
                   <VectorSquare size={20} strokeWidth={2} />
+                  <ChevronDown size={12} className="ml-1" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                <DropdownMenuItem onClick={() => onInitiateTool(ToolType.AREA)}>
+                  Area
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onInitiateTool(ToolType.VOLUME)}>
+                  Volume
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={activeTool === ToolType.FILL ? "default" : "ghost"}
+                  size="icon"
+                  onClick={() => onInitiateTool(ToolType.FILL)}
+                  className="h-9 w-9"
+                >
+                  <Scan size={20} strokeWidth={2} />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Area (1)</TooltipContent>
+              <TooltipContent>Fill Area (6)</TooltipContent>
             </Tooltip>
 
             <Tooltip>

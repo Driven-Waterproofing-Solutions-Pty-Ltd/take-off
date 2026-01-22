@@ -1,6 +1,6 @@
 import React, { useState, createContext, useContext, ReactNode } from 'react';
 
-type ViewMode = 'canvas' | 'estimates';
+type ViewMode = 'canvas' | 'estimates' | '3d';
 
 interface RouterContextType {
   viewMode: ViewMode;

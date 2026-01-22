@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { TakeoffItem, ToolType, ProjectData, PlanSet } from '../types';
-import { Trash2, Upload, ChevronDown, ChevronRight, FilePlus, FolderOpen, Save, RefreshCw, Settings, Edit2, Table, Eye, EyeOff, FileDown, MoreHorizontal, Plus, HelpCircle, ShieldCheck, Target } from 'lucide-react';
+import { Trash2, Upload, ChevronDown, ChevronRight, FilePlus, FolderOpen, Save, RefreshCw, Settings, Edit2, Table, Eye, EyeOff, FileDown, MoreHorizontal, Plus, HelpCircle, ShieldCheck, Target, Box } from 'lucide-react';
 import { evaluateFormula } from '../utils/math';
 import ChangeItemModal from './ChangeItemModal';
 import { Button } from "@/components/ui/button";
@@ -32,6 +32,7 @@ interface SidebarProps {
     scaleInfo: { isSet: boolean, unit: string, ppu: number };
     onToggleVisibility: (id: string, pageIndex: number) => void;
     onShowEstimates: () => void;
+    onShow3D: () => void;
     onRenamePage: (index: number, name: string) => void;
     onDeletePage: (index: number) => void;
     onEditItem: (item: TakeoffItem) => void;
@@ -49,7 +50,6 @@ interface SidebarProps {
     activeTool: ToolType;
     onOpenExportModal: () => void;
     onOpenHelp: () => void;
-    onOpenLicense: () => void;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({
@@ -67,6 +67,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     projectData,
     onToggleVisibility,
     onShowEstimates,
+    onShow3D,
     onRenamePage,
     onDeletePage,
     onEditItem,
@@ -82,7 +83,6 @@ const Sidebar: React.FC<SidebarProps> = ({
     activeTool,
     onOpenExportModal,
     onOpenHelp,
-    onOpenLicense,
 }) => {
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
     const [expandedPages, setExpandedPages] = useState<Set<number>>(new Set());
@@ -313,15 +313,6 @@ const Sidebar: React.FC<SidebarProps> = ({
 
                         <Tooltip>
                             <TooltipTrigger asChild>
-                                <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-primary" onClick={onOpenLicense}>
-                                    <ShieldCheck size={16} />
-                                </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>License Manager</TooltipContent>
-                        </Tooltip>
-
-                        <Tooltip>
-                            <TooltipTrigger asChild>
                                 <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-primary" onClick={onOpenHelp}>
                                     <HelpCircle size={16} />
                                 </Button>
@@ -336,6 +327,9 @@ const Sidebar: React.FC<SidebarProps> = ({
             <div className="p-3 border-b border-border bg-background flex gap-2 shrink-0">
                 <Button onClick={onShowEstimates} variant="outline" className="flex-1 h-8 text-xs font-medium border-dashed border-border hover:border-primary/50 hover:bg-primary/5 text-muted-foreground hover:text-primary">
                     <Table size={14} className="mr-2" /> Estimates
+                </Button>
+                <Button onClick={onShow3D} variant="outline" className="flex-1 h-8 text-xs font-medium border-dashed border-border hover:border-primary/50 hover:bg-primary/5 text-muted-foreground hover:text-primary">
+                    <Box size={14} className="mr-2" /> 3D View
                 </Button>
                 <Button onClick={onOpenExportModal} variant="outline" className="flex-1 h-8 text-xs font-medium border-dashed border-border hover:border-primary/50 hover:bg-primary/5 text-muted-foreground hover:text-primary">
                     <FileDown size={14} className="mr-2" /> Export

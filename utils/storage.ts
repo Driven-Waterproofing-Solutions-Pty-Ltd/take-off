@@ -254,18 +254,6 @@ export const loadProjectFromStorage = async (): Promise<ProjectState | null> => 
   }
 };
 
-// --- License Persistence ---
-export const saveLicenseKey = async (key: string) => {
-  const db = await getDB();
-  await db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ($1, $2)", ['license_key', key]);
-}
-
-export const getLicenseKey = async (): Promise<string | null> => {
-  const db = await getDB();
-  const result = await db.select("SELECT value FROM meta WHERE key = 'license_key'") as MetaRow[];
-  return result.length > 0 ? result[0].value : null;
-}
-
 // --- File Handle Persistence (Stubbed for SQLite version) ---
 export const saveFileHandle = async (_handle: unknown): Promise<void> => {
   // Not implemented for SQLite persistence model

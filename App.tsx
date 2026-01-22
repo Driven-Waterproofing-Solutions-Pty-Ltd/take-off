@@ -10,11 +10,11 @@ import HelpModal from './components/HelpModal';
 import NewItemModal from './components/NewItemModal';
 import UploadModal from './components/UploadModal';
 import PropertiesModal from './components/PropertiesModal';
-import LicenseModal from './components/LicenseModal';
 import PromptModal from './components/PromptModal';
 import ExportModal from './components/ExportModal';
 import ConfirmModal from './components/ConfirmModal';
 import EstimatesView from './components/EstimatesView';
+import ThreeDView from './components/ThreeDView';
 import PDFSearch from './components/PDFSearch';
 import { ToolType, ProjectData, TakeoffItem, Shape, Unit, PlanSet, LegendSettings } from './types';
 import { PresetScale, getAreaUnitFromLinear, isPointInPolygon } from './utils/geometry';
@@ -82,7 +82,6 @@ const AppContent: React.FC = () => {
   const [showNewItemModal, setShowNewItemModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
-  const [showLicenseModal, setShowLicenseModal] = useState(false);
   const [helpModalTab, setHelpModalTab] = useState<'guide' | 'shortcuts' | 'properties'>('guide');
   const [editingItem, setEditingItem] = useState<TakeoffItem | null>(null);
   const [pendingTool, setPendingTool] = useState<ToolType | null>(null);
@@ -305,7 +304,7 @@ const AppContent: React.FC = () => {
   };
 
   const handleInitiateTool = (tool: ToolType) => {
-    if ([ToolType.LINEAR, ToolType.AREA, ToolType.SEGMENT, ToolType.DIMENSION].includes(tool)) {
+    if ([ToolType.LINEAR, ToolType.ARC, ToolType.AREA, ToolType.FILL, ToolType.SEGMENT, ToolType.DIMENSION].includes(tool)) {
       const scale = getCurrentPageScale();
       if (!scale.isSet) {
         addToast("Please set the scale for this page first", 'error');
@@ -330,9 +329,12 @@ const AppContent: React.FC = () => {
     const scale = getCurrentPageScale();
     let unit = data.unit;
     if (!unit) {
-      if (pendingTool === ToolType.COUNT) { unit = Unit.EACH; } else { unit = scale.unit; }
+      if (pendingTool === ToolType.COUNT) { unit = Unit.EACH; } 
+      else if (pendingTool === ToolType.VOLUME) { unit = Unit.CUBIC_FEET; }
+      else if (pendingTool === ToolType.AREA || pendingTool === ToolType.FILL) { unit = getAreaUnitFromLinear(scale.unit); }
+      else { unit = scale.unit; }
     }
-    if (pendingTool === ToolType.AREA) { unit = getAreaUnitFromLinear(unit); }
+    if (pendingTool === ToolType.AREA || pendingTool === ToolType.FILL) { unit = getAreaUnitFromLinear(unit); }
     const newItem: TakeoffItem = {
       id: crypto.randomUUID(),
       label: data.label || 'New Item',
@@ -346,7 +348,8 @@ const AppContent: React.FC = () => {
       formula: data.formula || 'Qty',
       price: data.price,
       group: data.group || 'General',
-      subItems: data.subItems || []
+      subItems: data.subItems || [],
+      depth: data.depth
     };
     setHistory(draft => {
       draft.items.push(newItem);
@@ -359,7 +362,10 @@ const AppContent: React.FC = () => {
     addToast(`Created item: ${newItem.label}`, 'success');
   };
 
-  const calculateTotalValue = (shapes: Shape[]) => shapes.reduce((sum, s) => s.deduction ? sum - s.value : sum + s.value, 0);
+  const calculateTotalValue = (shapes: Shape[], item: TakeoffItem) => {
+    const baseValue = shapes.reduce((sum, s) => s.deduction ? sum - s.value : sum + s.value, 0);
+    return item.type === ToolType.VOLUME && item.depth ? baseValue * item.depth : baseValue;
+  };
 
   const handleBatchCreateItems = (itemsToCreate: { newItemId?: string, sourceItemId: string, shapes: Shape[] }[]) => {
     const newItemsList: TakeoffItem[] = [];
@@ -374,7 +380,7 @@ const AppContent: React.FC = () => {
         id: newItemId || crypto.randomUUID(),
         label: `${sourceItem.label} (Copy)`,
         shapes: shapes,
-        totalValue: calculateTotalValue(shapes)
+        totalValue: calculateTotalValue(shapes, item)
       };
       newItemsList.push(newItem);
       lastItemId = newItem.id;
@@ -400,7 +406,7 @@ const AppContent: React.FC = () => {
       draft.items.forEach(item => {
         if (shapesByItem[item.id]) {
           item.shapes.push(...shapesByItem[item.id]);
-          item.totalValue = calculateTotalValue(item.shapes);
+          item.totalValue = calculateTotalValue(item.shapes, item);
         }
       });
     });
@@ -414,7 +420,7 @@ const AppContent: React.FC = () => {
       const item = draft.items.find(i => i.id === activeTakeoffId);
       if (item) {
         item.shapes.push(shape);
-        item.totalValue = calculateTotalValue(item.shapes);
+        item.totalValue = calculateTotalValue(item.shapes, item);
       }
     });
     if (isDeductionMode) {
@@ -430,7 +436,7 @@ const AppContent: React.FC = () => {
         const shape = item.shapes.find(s => s.id === shapeId);
         if (shape) {
           Object.assign(shape, updates);
-          item.totalValue = calculateTotalValue(item.shapes);
+          item.totalValue = calculateTotalValue(item.shapes, item);
         }
       }
     });
@@ -443,7 +449,7 @@ const AppContent: React.FC = () => {
         const index = item.shapes.findIndex(s => s.id === updatedShape.id);
         if (index !== -1) {
           item.shapes[index] = updatedShape;
-          item.totalValue = calculateTotalValue(item.shapes);
+          item.totalValue = calculateTotalValue(item.shapes, item);
         }
       }
     });
@@ -481,7 +487,7 @@ const AppContent: React.FC = () => {
         if (index !== -1) {
           item.shapes[index] = updatedShape;
           item.shapes.push(newShape);
-          item.totalValue = calculateTotalValue(item.shapes);
+          item.totalValue = calculateTotalValue(item.shapes, item);
         }
       }
     });
@@ -532,7 +538,7 @@ const AppContent: React.FC = () => {
       const item = draft.items.find(i => i.id === itemId);
       if (item) {
         item.shapes = item.shapes.filter(s => s.id !== shapeId);
-        item.totalValue = calculateTotalValue(item.shapes);
+        item.totalValue = calculateTotalValue(item.shapes, item);
       }
     });
   };
@@ -568,7 +574,7 @@ const AppContent: React.FC = () => {
         const originalLength = item.shapes.length;
         item.shapes = item.shapes.filter(shape => !shapeIdSet.has(shape.id));
         if (item.shapes.length !== originalLength) {
-          item.totalValue = calculateTotalValue(item.shapes);
+          item.totalValue = calculateTotalValue(item.shapes, item);
         }
       });
     });
@@ -602,7 +608,7 @@ const AppContent: React.FC = () => {
         return {
           ...item,
           shapes: remainingShapes,
-          totalValue: calculateTotalValue(remainingShapes)
+          totalValue: calculateTotalValue(remainingShapes, item)
         };
       }
       return item;
@@ -614,7 +620,7 @@ const AppContent: React.FC = () => {
         return {
           ...item,
           shapes: updatedShapes,
-          totalValue: calculateTotalValue(updatedShapes)
+          totalValue: calculateTotalValue(updatedShapes, item)
         };
       }
       return item;
@@ -646,7 +652,7 @@ const AppContent: React.FC = () => {
         if (sourceItem) {
           const shapeIdsToRemove = new Set(shapesBySource[sourceId]);
           sourceItem.shapes = sourceItem.shapes.filter(s => !shapeIdsToRemove.has(s.id));
-          sourceItem.totalValue = calculateTotalValue(sourceItem.shapes);
+          sourceItem.totalValue = calculateTotalValue(sourceItem.shapes, sourceItem);
         }
       });
 
@@ -654,7 +660,7 @@ const AppContent: React.FC = () => {
       const targetDraftItem = draft.items.find(i => i.id === targetItemId);
       if (targetDraftItem) {
         targetDraftItem.shapes.push(...movedShapes);
-        targetDraftItem.totalValue = calculateTotalValue(targetDraftItem.shapes);
+        targetDraftItem.totalValue = calculateTotalValue(targetDraftItem.shapes, targetDraftItem);
       }
 
       // Remove empty source items
@@ -708,11 +714,6 @@ const AppContent: React.FC = () => {
       setShowHelpModal(true);
     }));
 
-    unlisteners.push(listen('open_activation', () => {
-      // Changed to open standalone license modal
-      setShowLicenseModal(true);
-    }));
-
     unlisteners.push(listen('new_project', handleNewProjectRequest));
     unlisteners.push(listen('open_project', handleLoadProjectClick));
     unlisteners.push(listen('save_project', handleSaveProject));
@@ -732,32 +733,7 @@ const AppContent: React.FC = () => {
         // Clear the param immediately so we don't re-trigger on reload
         window.history.replaceState({}, document.title, window.location.pathname);
 
-        addToast("Verifying subscription...", 'info');
-
-        // Poll a few times for the webhook to update the DB
-        let attempts = 0;
-        const maxAttempts = 5;
-
-        const pollLicense = async () => {
-          const { licenseService } = await import('./services/licenseService');
-          const status = await licenseService.checkLicense();
-
-          if (status.valid && status.licenseType === 'paid') {
-            const dateStr = status.expiresAt ? new Date(status.expiresAt).toLocaleDateString() : 'Lifetime';
-            addToast(`Purchase Successful! Valid until: ${dateStr}`, 'success');
-            setShowLicenseModal(true);
-            // Force a reload of the license context or just let the updated state flow? 
-            // Since useLicense calls checkLicense on mount, we might need to trigger a re-check if we want the context to update globally immediately.
-            // However, for now, the toast is the feedback requested.
-          } else if (attempts < maxAttempts) {
-            attempts++;
-            setTimeout(pollLicense, 2000); // Retry every 2 seconds
-          } else {
-            addToast("Purchase processing... your license will update shortly.", 'info');
-          }
-        };
-
-        pollLicense();
+        addToast("Purchase completed!", 'success');
       }
     };
 
@@ -788,7 +764,7 @@ const AppContent: React.FC = () => {
     zoomIn: () => setZoomLevel(z => Math.min(10, z + 0.25)), zoomOut: () => setZoomLevel(z => Math.max(0.1, z - 0.25)),
     saveProject: handleSaveProject, nextPage: () => pageIndex < totalPages - 1 && setPageIndex(p => p + 1),
     prevPage: () => pageIndex > 0 && setPageIndex(p => p - 1), zoomToFit: () => setZoomLevel(1.0),
-    toggleRecord: () => activeTakeoffId && handleStopTakeoff(), toggleViewMode: () => setViewMode(viewMode === 'canvas' ? 'estimates' : 'canvas'),
+    toggleRecord: () => activeTakeoffId && handleStopTakeoff(), toggleViewMode: () => setViewMode(viewMode === 'canvas' ? 'estimates' : viewMode === 'estimates' ? '3d' : 'canvas'),
     finishShape: () => activeTakeoffId && handleStopTakeoff(), copyItem: () => { }, pasteItem: () => { },
     openSearch: () => setShowPDFSearch(prev => !prev)
   });
@@ -817,6 +793,7 @@ const AppContent: React.FC = () => {
         scaleInfo={{ isSet: currentScale.isSet, unit: currentScale.unit, ppu: currentScale.pixelsPerUnit }}
         onToggleVisibility={handleToggleItemVisibility}
         onShowEstimates={() => { handleStopTakeoff(); setViewMode('estimates'); }}
+        onShow3D={() => { handleStopTakeoff(); setViewMode('3d'); }}
         onRenamePage={(i, n) => setHistory(draft => {
           if (!draft.projectData[i]) {
             draft.projectData[i] = { scale: { isSet: false, pixelsPerUnit: 1, unit: Unit.FEET } };
@@ -829,13 +806,14 @@ const AppContent: React.FC = () => {
         projectName={projectName} onNewProject={handleNewProjectRequest} onSaveProject={handleSaveProject} onLoadProject={handleLoadProjectClick}
         isSaving={isSaving} lastSavedAt={lastSavedAt} activeTool={activeTool} onOpenExportModal={() => setShowExportModal(true)}
         onOpenHelp={() => setShowHelpModal(true)}
-        onOpenLicense={() => setShowLicenseModal(true)}
         onDeleteShapes={handleDeleteShapes}
       />
       <main className="flex-1 relative flex flex-col h-full overflow-hidden">
         {viewMode === 'estimates' ? (
           <EstimatesView items={items} onBack={() => setViewMode('canvas')} onDeleteItem={handleDeleteItem} onUpdateItem={handleUpdateItem}
             onReorderItems={(newItems) => setHistory(draft => { draft.items = newItems; })} onEditItem={setEditingItem} />
+        ) : viewMode === '3d' ? (
+          <ThreeDView items={items} onBack={() => setViewMode('canvas')} />
         ) : (
           <>
             {planSets.length > 0 && (
@@ -881,7 +859,6 @@ const AppContent: React.FC = () => {
       {showNewItemModal && pendingTool && <NewItemModal toolType={pendingTool} existingCount={items.length} onCreate={handleCreateTakeoffItem} onCancel={() => { setShowNewItemModal(false); setPendingTool(null); }} />}
       {editingItem && <PropertiesModal item={editingItem} items={items} onSave={handleUpdateItem} onClose={() => setEditingItem(null)} />}
       <HelpModal isOpen={showHelpModal} onClose={() => setShowHelpModal(false)} initialTab={helpModalTab} />
-      <LicenseModal isOpen={showLicenseModal} onClose={() => setShowLicenseModal(false)} allowClose={true} />
       <ExportModal isOpen={showExportModal} planSets={planSets} projectData={projectData} currentPageIndex={pageIndex} isExporting={isExporting} progress={exportProgress} onClose={() => setShowExportModal(false)} onExport={handleExportPDF} />
       <PromptModal isOpen={showNewProjectPrompt} title="Create New Project" message="Enter a name for the new project." placeholder="My Project" onConfirm={(name) => handleNewProjectConfirmed(name).then(() => setViewMode('canvas'))} onCancel={() => setShowNewProjectPrompt(false)} confirmText="Create Project" />
       <ConfirmModal isOpen={showImportConfirm} title="Import Project?" message="Loading a project will replace the current workspace." onConfirm={() => handleImportConfirmed().then(() => setViewMode('canvas'))} onCancel={() => { setShowImportConfirm(false); setPendingImportPath(null); }} confirmText="Import Project" isDestructive />

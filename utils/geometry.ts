@@ -229,3 +229,69 @@ export const getVolumeUnitFromLinear = (unit: Unit): Unit => {
     default: return unit;
   }
 };
+
+// Arc calculation functions
+export const calculateArcPoints = (start: Point, end: Point, bulge: number, segments: number = 20): Point[] => {
+  // bulge = 0: straight line
+  // bulge > 0: counterclockwise arc
+  // bulge < 0: clockwise arc
+  
+  if (Math.abs(bulge) < 0.001) {
+    return [start, end];
+  }
+
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const chordLength = Math.sqrt(dx * dx + dy * dy);
+  
+  // Calculate arc radius and center
+  const radius = chordLength / (2 * Math.sin(Math.abs(bulge)));
+  const angle = 2 * Math.abs(bulge);
+  
+  // Calculate center point
+  const midX = (start.x + end.x) / 2;
+  const midY = (start.y + end.y) / 2;
+  
+  // Perpendicular vector
+  const perpX = -dy / chordLength;
+  const perpY = dx / chordLength;
+  
+  // Distance from midpoint to center
+  const distToCenter = radius - (chordLength / 2) / Math.tan(angle / 2);
+  
+  const centerX = midX + perpX * distToCenter * Math.sign(bulge);
+  const centerY = midY + perpY * distToCenter * Math.sign(bulge);
+  
+  // Calculate start and end angles
+  const startAngle = Math.atan2(start.y - centerY, start.x - centerX);
+  const endAngle = Math.atan2(end.y - centerY, end.x - centerX);
+  
+  // Generate arc points
+  const points: Point[] = [];
+  const totalAngle = endAngle - startAngle;
+  const normalizedAngle = ((totalAngle % (2 * Math.PI)) + (2 * Math.PI)) % (2 * Math.PI);
+  const arcAngle = bulge > 0 ? normalizedAngle : -((2 * Math.PI) - normalizedAngle);
+  
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const currentAngle = startAngle + arcAngle * t;
+    points.push({
+      x: centerX + radius * Math.cos(currentAngle),
+      y: centerY + radius * Math.sin(currentAngle)
+    });
+  }
+  
+  return points;
+};
+
+export const calculateArcLength = (start: Point, end: Point, bulge: number): number => {
+  if (Math.abs(bulge) < 0.001) {
+    return calculateDistance(start, end);
+  }
+  
+  const chordLength = calculateDistance(start, end);
+  const radius = chordLength / (2 * Math.sin(Math.abs(bulge)));
+  const angle = 2 * Math.abs(bulge);
+  
+  return radius * angle;
+};
