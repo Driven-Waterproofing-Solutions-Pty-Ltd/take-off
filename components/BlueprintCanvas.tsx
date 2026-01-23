@@ -15,6 +15,7 @@ import { getPageImage, savePageImage } from '../utils/pdfCache';
 import { mupdfController } from '../utils/mupdfController';
 import { useRamCache } from '../contexts/RamCacheContext';
 import { SearchHit } from '../utils/mupdfController';
+import { PDFDocument } from 'pdf-lib';
 
 // Removed html2canvas import as we now use pdf-lib for vector export
 
@@ -73,6 +74,18 @@ interface ContextMenuState {
     pointIndex?: number; // Optional if we clicked the body, not a vertex
     insertIndex?: number; // Index to insert a new point (for Add Point)
     insertPoint?: Point; // Coordinates of new point (for Add Point)
+}
+
+interface VectorPath {
+    type: 'line' | 'curve' | 'rect';
+    points: Point[];
+    closed?: boolean;
+}
+
+interface CachedVectorData {
+    pageIndex: number;
+    paths: VectorPath[];
+    bounds: { x: number; y: number; width: number; height: number };
 }
 
 const getClosestPointOnSegment = (p: Point, a: Point, b: Point): Point => {
@@ -157,6 +170,41 @@ const isShapeIntersectingRect = (shape: Shape, rectStart: Point, rectEnd: Point)
     }
 
     return false;
+};
+
+// Vector extraction functions
+const extractVectorPaths = async (file: File): Promise<CachedVectorData[]> => {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdfDoc = await PDFDocument.load(arrayBuffer);
+    const vectorData: CachedVectorData[] = [];
+    
+    for (let i = 0; i < pdfDoc.getPageCount(); i++) {
+        const page = pdfDoc.getPage(i);
+        const paths: VectorPath[] = [];
+        
+        // For now, we'll use a simplified approach
+        // In a full implementation, you'd parse the PDF content stream
+        // This is a placeholder that would need proper PDF parsing
+        
+        vectorData.push({
+            pageIndex: i,
+            paths,
+            bounds: {
+                x: 0,
+                y: 0,
+                width: page.getWidth(),
+                height: page.getHeight()
+            }
+        });
+    }
+    
+    return vectorData;
+};
+
+const renderPdfAsImage = async (file: File): Promise<string> => {
+    // For now, we'll use the existing MuPDF rendering
+    // In a full implementation, this would render the PDF page to an image
+    return '';
 };
 
 // Helper function to copy selected items to clipboard
@@ -354,6 +402,10 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     const [backgroundImage, setBackgroundImage] = useState<string | null>(null);
     const [muPdfLoaded, setMuPdfLoaded] = useState(false);
     const vectorCanvasRef = useRef<HTMLCanvasElement>(null);
+
+    // Vector data caching
+    const [cachedVectors, setCachedVectors] = useState<CachedVectorData[]>([]);
+    const [pdfImage, setPdfImage] = useState<string | null>(null);
 
     // Reset loaded state when page changes so we prioritize the new page
     useEffect(() => {
@@ -622,6 +674,13 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 setOriginalPdfWidth(dims.width);
                 setPdfAspectRatio(dims.height / dims.width);
                 onPageWidthChange(dims.width);
+
+                // Extract vector data and render image
+                const vectorData = await extractVectorPaths(file);
+                setCachedVectors(vectorData);
+                
+                const imageData = await renderPdfAsImage(file);
+                setPdfImage(imageData);
 
                 if (onPageLoaded) onPageLoaded();
                 setIsCurrentPageLoaded(true); // Mark as ready
@@ -1521,7 +1580,21 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     }, [activeTool, globalPageIndex]);
 
     const handleFillClick = (point: Point) => {
-        // Get all line segments from existing shapes on this page
+        // Use cached vector data for more accurate fill detection
+        const currentVectors = cachedVectors.find(v => v.pageIndex === globalPageIndex);
+        
+        if (currentVectors && currentVectors.paths.length > 0) {
+            // Use vector paths for fill detection
+            const enclosedAreas = findEnclosedAreasFromVectors(currentVectors.paths, point);
+            
+            if (enclosedAreas.length > 0) {
+                const area = calculatePolygonArea(enclosedAreas[0]);
+                finalizeMeasurement(enclosedAreas[0]);
+                return;
+            }
+        }
+        
+        // Fallback to existing shape-based detection
         const allSegments: Array<{ start: Point, end: Point }> = [];
         
         items.forEach(item => {
@@ -1553,7 +1626,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             }
         }
         
-        addToast("No enclosed area found at clicked location", 'warning');
+        addToast("No enclosed area found at clicked location", 'info');
     };
 
     const findClosedLoops = (segments: Array<{ start: Point, end: Point }>): Point[][] => {
@@ -1573,6 +1646,19 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         }
         
         return loops;
+    };
+
+    const findEnclosedAreasFromVectors = (paths: VectorPath[], clickPoint: Point): Point[][] => {
+        // Find closed vector paths that contain the click point
+        const areas: Point[][] = [];
+        
+        paths.forEach(path => {
+            if (path.closed && path.points.length >= 3 && isPointInPolygon(clickPoint, path.points)) {
+                areas.push(path.points);
+            }
+        });
+        
+        return areas;
     };
 
     const traceLoop = (segments: Array<{ start: Point, end: Point }>, startIndex: number, used: Set<number>): Point[] => {
@@ -1779,6 +1865,15 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                         />
                     )}
 
+                    {/* PDF Image Layer (Vector-based) */}
+                    {pdfImage && (
+                        <img
+                            src={pdfImage}
+                            style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, objectFit: 'contain' }}
+                            alt="PDF Image"
+                        />
+                    )}
+
                     {/* MuPDF Vector Render Layer (High Performance) */}
                     {muPdfLoaded ? (
                         <canvas
@@ -1815,6 +1910,21 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                         onClick={handleStageClick}
                     >
                         <Layer ref={konvaLayerRef}>
+                            {/* Render cached vector paths for snapping reference */}
+                            {cachedVectors
+                                .filter(vectorData => vectorData.pageIndex === globalPageIndex)
+                                .map(vectorData => 
+                                    vectorData.paths.map((path, pathIndex) => (
+                                        <KonvaLine
+                                            key={`vector-${pathIndex}`}
+                                            points={path.points.flatMap(p => [p.x, p.y])}
+                                            stroke="rgba(0,0,0,0.1)"
+                                            strokeWidth={1}
+                                            closed={path.closed}
+                                        />
+                                    ))
+                                )}
+
                             {sortedItems.map(item => {
                                 if (item.visible === false || item.hiddenPages?.includes(globalPageIndex)) return null;
                                 const shapesOnPage = item.shapes.filter(s => s.pageIndex === globalPageIndex);
@@ -2281,7 +2391,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                         </div>
                         <div className="flex gap-2 mb-4">
                             <input autoFocus className="border p-2 flex-1 rounded bg-white text-slate-900" placeholder="Length (e.g. 50')" value={scaleInputStr} onChange={e => setScaleInputStr(e.target.value)} />
-                            <select className="border p-2 rounded bg-white text-slate-900" value={scaleUnit} onChange={e => setScaleUnit(e.target.value as Unit)}>{Object.values(Unit).map(u => <option key={u} value={u}>{u}</option>)}</select>
+                            <select className="border p-2 rounded bg-white text-slate-900" title="Unit of measurement" aria-label="Unit of measurement" value={scaleUnit} onChange={e => setScaleUnit(e.target.value as Unit)}>{Object.values(Unit).map(u => <option key={u} value={u}>{u}</option>)}</select>
                         </div>
                         <div className="flex justify-end gap-2">
                             <button onClick={() => { setShowScaleModal(false); setDrawingPoints([]); }} className="text-slate-500 px-4">Cancel</button>
