@@ -813,7 +813,7 @@ const AppContent: React.FC = () => {
           <EstimatesView items={items} onBack={() => setViewMode('canvas')} onDeleteItem={handleDeleteItem} onUpdateItem={handleUpdateItem}
             onReorderItems={(newItems) => setHistory(draft => { draft.items = newItems; })} onEditItem={setEditingItem} />
         ) : viewMode === '3d' ? (
-          <ThreeDView items={items} onBack={() => setViewMode('canvas')} />
+          <ThreeDView items={items} onBack={() => setViewMode('canvas')} planSets={planSets} pageIndex={pageIndex} />
         ) : (
           <>
             {planSets.length > 0 && (

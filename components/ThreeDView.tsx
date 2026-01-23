@@ -1,12 +1,15 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Text } from '@react-three/drei';
-import { TakeoffItem, Shape, ToolType } from '../types';
+import { TakeoffItem, Shape, ToolType, PlanSet } from '../types';
 import * as THREE from 'three';
+import { mupdfController } from '../utils/mupdfController';
 
 interface ThreeDViewProps {
   items: TakeoffItem[];
   onBack: () => void;
+  planSets?: PlanSet[];
+  pageIndex?: number;
 }
 
 const Shape3D: React.FC<{ shape: Shape; itemType: ToolType; color: string; depth: number }> = ({ shape, itemType, color, depth }) => {
@@ -40,7 +43,66 @@ const Shape3D: React.FC<{ shape: Shape; itemType: ToolType; color: string; depth
   );
 };
 
-const ThreeDView: React.FC<ThreeDViewProps> = ({ items, onBack }) => {
+const PDFPlane: React.FC<{ planSets?: PlanSet[]; pageIndex?: number }> = ({ planSets, pageIndex }) => {
+  const meshRef = useRef<THREE.Mesh>(null);
+  const [texture, setTexture] = useState<THREE.Texture | null>(null);
+
+  useEffect(() => {
+    const loadPDFTexture = async () => {
+      if (!planSets || planSets.length === 0 || pageIndex === undefined) return;
+
+      try {
+        // Find the plan set for this page
+        let planSet = null;
+        let localPageIndex = pageIndex;
+        
+        for (const ps of planSets) {
+          if (pageIndex >= ps.startPageIndex && pageIndex < ps.startPageIndex + ps.pageCount) {
+            planSet = ps;
+            localPageIndex = pageIndex - ps.startPageIndex;
+            if (ps.pages && ps.pages[localPageIndex] !== undefined) {
+              localPageIndex = ps.pages[localPageIndex];
+            }
+            break;
+          }
+        }
+
+        if (!planSet) return;
+
+        // Render PDF page to canvas
+        const canvas = document.createElement('canvas');
+        
+        const arrayBuffer = await planSet.file.arrayBuffer();
+        const pageCount = await mupdfController.loadDocument(new Uint8Array(arrayBuffer));
+        
+        // Render with appropriate scale
+        await mupdfController.renderPageToCanvas(localPageIndex, canvas, 2.0);
+
+        // Create texture from canvas
+        const canvasTexture = new THREE.CanvasTexture(canvas);
+        canvasTexture.flipY = false;
+        setTexture(canvasTexture);
+      } catch (error) {
+        console.error('Failed to load PDF texture:', error);
+      }
+    };
+
+    loadPDFTexture();
+  }, [planSets, pageIndex]);
+
+  return (
+    <mesh ref={meshRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.05, 0]}>
+      <planeGeometry args={[4000, 4000]} />
+      {texture ? (
+        <meshStandardMaterial map={texture} />
+      ) : (
+        <meshStandardMaterial color="#ccc" />
+      )}
+    </mesh>
+  );
+};
+
+const ThreeDView: React.FC<ThreeDViewProps> = ({ items, onBack, planSets, pageIndex }) => {
   return (
     <div className="h-full w-full bg-gray-900 relative">
       <button
@@ -62,6 +124,9 @@ const ThreeDView: React.FC<ThreeDViewProps> = ({ items, onBack }) => {
             RIGHT: THREE.MOUSE.ZOOM
           }}
         />
+        
+        {/* PDF Background Plane */}
+        <PDFPlane planSets={planSets} pageIndex={pageIndex} />
         
         {items.map((item, itemIndex) => (
           item.shapes.map((shape, shapeIndex) => (
