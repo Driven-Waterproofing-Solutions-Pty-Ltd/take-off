@@ -1,0 +1,49 @@
+{
+  "$schema": "https://unpkg.com/wrangler/config-schema.json",
+  "name": "form43-app",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "vars": {
+    "ENV": "production"
+  },
+
+  "d1_databases": [
+    {
+      "binding": "FORM43_DB",
+      "database_name": "form43",
+      "database_id": "REPLACE_WITH_D1_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "vectorize": [
+    {
+      "binding": "MEMORY_INDEX",
+      "index_name": "form43-memory"
+    }
+  ],
+
+  "ai": {
+    "binding": "AI"
+  },
+
+  "r2_buckets": [
+    {
+      "binding": "FORM43_BACKUPS",
+      "bucket_name": "form43-backups"
+    }
+  ],
+
+  "kv_namespaces": [
+    {
+      "binding": "RATE_LIMIT_KV",
+      "id": "REPLACE_WITH_KV_ID"
+    }
+  ],
+
+  "observability": {
+    "enabled": true
+  }
+}

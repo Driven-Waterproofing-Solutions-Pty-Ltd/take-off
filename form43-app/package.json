@@ -1,0 +1,31 @@
+{
+  "name": "form43-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone Cloudflare Worker for QLD Form 43 (Certificate of Compliance for Waterproofing) with MCP connector, self-contained memory, and Geoscape-backed address search.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --local --port 8787",
+    "deploy": "wrangler deploy",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.workers.config.ts",
+    "db:migrate:local": "wrangler d1 migrations apply FORM43_DB --local",
+    "db:migrate:prod": "wrangler d1 migrations apply FORM43_DB --remote",
+    "vectorize:create": "wrangler vectorize create form43-memory --dimensions=1024 --metric=cosine"
+  },
+  "dependencies": {
+    "hono": "^4.6.0",
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250101.0",
+    "@cloudflare/vitest-pool-workers": "^0.5.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0",
+    "wrangler": "^3.90.0"
+  }
+}
