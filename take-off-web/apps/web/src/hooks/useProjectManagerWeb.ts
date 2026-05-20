@@ -263,7 +263,9 @@ export const useProjectManager = (_isLicensed = true) => {
     setHistoryTransient,
     commitHistory,
     setShowImportConfirm,
-    setPendingImportPath: () => {},
+    // Web: the import flow uses a File, not a path. Accept and ignore the arg
+    // so call sites copied from the desktop App.tsx still typecheck.
+    setPendingImportPath: (_path?: string | null) => {},
     setShowNewProjectPrompt,
 
     // Actions

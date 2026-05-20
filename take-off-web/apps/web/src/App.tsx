@@ -169,7 +169,8 @@ const AppContent: React.FC = () => {
       const filename = `${sanitizedProjectName}-Markup-${dateStr}.pdf`;
 
       // Web: trigger browser download. (Desktop used a Tauri save dialog + writeFile.)
-      const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+      // Cast through ArrayBuffer to satisfy TS 5.8's stricter Uint8Array<ArrayBufferLike>.
+      const blob = new Blob([pdfBytes as BlobPart], { type: 'application/pdf' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -301,7 +302,7 @@ const AppContent: React.FC = () => {
     let unit = data.unit;
     if (!unit) {
       if (pendingTool === ToolType.COUNT) { unit = Unit.EACH; } 
-      else if (pendingTool === ToolType.VOLUME) { unit = Unit.CUBIC_FEET; }
+      else if (pendingTool === ToolType.VOLUME) { unit = Unit.CU_FT; }
       else if (pendingTool === ToolType.AREA || pendingTool === ToolType.FILL) { unit = getAreaUnitFromLinear(scale.unit); }
       else { unit = scale.unit; }
     }
@@ -351,7 +352,7 @@ const AppContent: React.FC = () => {
         id: newItemId || crypto.randomUUID(),
         label: `${sourceItem.label} (Copy)`,
         shapes: shapes,
-        totalValue: calculateTotalValue(shapes, item)
+        totalValue: calculateTotalValue(shapes, sourceItem)
       };
       newItemsList.push(newItem);
       lastItemId = newItem.id;

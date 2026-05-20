@@ -131,7 +131,13 @@ class MuPDFWorkerController {
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
-        const imageData = new ImageData(pixels, width, height);
+        // Copy into a fresh ArrayBuffer-backed Uint8ClampedArray. TS 5.8
+        // parameterised typed-arrays on their underlying buffer (ArrayBuffer vs
+        // SharedArrayBuffer), and the worker pixels come back as
+        // Uint8ClampedArray<ArrayBufferLike> which ImageData no longer accepts.
+        const copy = new Uint8ClampedArray(pixels.byteLength);
+        copy.set(pixels);
+        const imageData = new ImageData(copy, width, height);
         ctx.putImageData(imageData, 0, 0);
 
         console.log(`MuPDF Worker: Rendered page ${pageIndex} at scale ${scale} in ${renderTimeMs.toFixed(1)}ms`);

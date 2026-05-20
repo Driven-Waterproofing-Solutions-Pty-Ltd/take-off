@@ -1,6 +1,13 @@
-import type { Context, MiddlewareHandler } from 'hono';
+import type { MiddlewareHandler } from 'hono';
 import type { Env } from '../env';
 import { sha256Hex } from './crypto';
+
+// Use a structural type so authenticate() can be called from any Hono context
+// (with or without extra Variables), not just one whose Variables shape matches.
+interface MinimalContext {
+  req: { header: (name: string) => string | undefined };
+  env: Env;
+}
 
 // Auth model:
 //   1. Cloudflare Access in front of takeoff.drivenwp.com handles browser auth.
@@ -17,7 +24,7 @@ export type AuthContext = {
   identity: string; // email for Access, client-id for MCP
 };
 
-export async function authenticate(c: Context<{ Bindings: Env }>): Promise<AuthContext | null> {
+export async function authenticate(c: MinimalContext): Promise<AuthContext | null> {
   const accessEmail = c.req.header('Cf-Access-Authenticated-User-Email');
   if (accessEmail) {
     return { via: 'access', identity: accessEmail };

@@ -121,7 +121,7 @@ const ThreeDView: React.FC<ThreeDViewProps> = ({ items, onBack, planSets, pageIn
           mouseButtons={{
             LEFT: THREE.MOUSE.PAN,
             MIDDLE: THREE.MOUSE.ROTATE,
-            RIGHT: THREE.MOUSE.ZOOM
+            RIGHT: THREE.MOUSE.DOLLY,
           }}
         />
         

@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { ZodError } from 'zod';
 import type { Env } from './env';
 import projects from './routes/projects';
 import measurements from './routes/measurements';
@@ -8,6 +9,23 @@ import { handleMcp, mintMcpClientToken } from './mcp/server';
 import { syncXeroContacts } from './tools/xero';
 
 const app = new Hono<{ Bindings: Env }>();
+
+app.onError((err, c) => {
+  if (err instanceof ZodError) {
+    return c.json(
+      { error: 'invalid request', issues: err.flatten() },
+      400
+    );
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  // Domain validation messages thrown by tools (e.g. "scale not calibrated")
+  // surface as 400. Unknown errors are 500.
+  const isUserFacing = /not calibrated|not found|required|invalid|missing|already|unknown|forbidden|cannot/i.test(
+    message
+  );
+  console.error('worker error:', err);
+  return c.json({ error: message }, isUserFacing ? 400 : 500);
+});
 
 app.get('/', (c) =>
   c.json({

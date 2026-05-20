@@ -126,7 +126,10 @@ app.get('/:id/pdfs/:key{.+}', async (c) => {
 
   const obj = await c.env.PDFS.get(key);
   if (!obj) return c.json({ error: 'not found' }, 404);
-  return new Response(obj.body, {
+  // Workers runtime accepts R2's ReadableStream as a Response body even though
+  // the @cloudflare/workers-types ReadableStream is structurally distinct from
+  // the global DOM ReadableStream that lib.dom.d.ts declares.
+  return new Response(obj.body as unknown as BodyInit, {
     headers: { 'Content-Type': 'application/pdf' },
   });
 });

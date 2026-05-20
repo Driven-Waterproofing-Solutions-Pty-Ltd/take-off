@@ -24,4 +24,8 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['mupdf'],
   },
+  build: {
+    // MuPDF (and modern wasm loaders) use top-level await.
+    target: 'esnext',
+  },
 });
