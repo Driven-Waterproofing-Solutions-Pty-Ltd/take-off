@@ -6,8 +6,11 @@ import { addArea, addLinear, addCount, addArc } from '../tools/measure';
 import { snapToVector } from '../tools/snap';
 import { listItems } from '../tools/memory';
 import { upsertPage } from '../db/queries';
+import { requireAuth } from '../lib/auth';
 
 const app = new Hono<{ Bindings: Env }>();
+
+app.use('*', requireAuth);
 
 app.post('/scale/preset', async (c) => {
   const body = await c.req.json();

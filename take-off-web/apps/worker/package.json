@@ -14,7 +14,8 @@
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@takeoff/shared": "workspace:*",
     "hono": "^4.6.0",
-    "zod": "^3.23.8"
+    "zod": "^3.23.8",
+    "zod-to-json-schema": "^3.23.5"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250501.0",

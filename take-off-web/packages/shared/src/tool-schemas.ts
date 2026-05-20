@@ -1,6 +1,9 @@
 import { z } from 'zod';
+import { Unit } from './types';
 
 export const PointZ = z.object({ x: z.number(), y: z.number() });
+
+export const UnitZ = z.nativeEnum(Unit);
 
 export const ScaleCalibrationZ = z.object({
   isSet: z.boolean(),
@@ -122,7 +125,7 @@ export const tools = {
       p1: PointZ,
       p2: PointZ,
       real_distance: z.number().positive(),
-      unit: z.string(),
+      unit: UnitZ,
     }),
     output: ScaleCalibrationZ,
   },
@@ -231,7 +234,6 @@ export const tools = {
       project_id: z.string(),
       item_id: z.string(),
       assembly_id: z.string(),
-      qty_override: z.number().optional(),
     }),
     output: TakeoffItemZ,
   },

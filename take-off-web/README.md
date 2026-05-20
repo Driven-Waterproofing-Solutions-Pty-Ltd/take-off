@@ -18,18 +18,24 @@ take-off-web/
                     Plus Zod tool schemas (single source of truth).
 ```
 
-## Phases
+## Phases (AI-last build order)
 
-See `/root/.claude/plans/i-need-this-as-synchronous-garden.md` for the full plan. Build order is **AI-last**:
+After Phase 2, **MCP clients can already drive the system** with their own AI subscription — Phase 5 is only needed for an in-app chat experience.
 
 | # | Phase | Status |
 |---|---|---|
-| 1 | Web canvas + R2 + D1 | scaffolded; canvas port pending |
-| 2 | Tools + MCP endpoint | **done** (tool impls, REST, MCP server, schemas) |
-| 3 | Memory layer | **done** (assemblies, customers, search) |
-| 4 | Xero Draft Quote/Invoice | **done** (OAuth + push + nightly contact sync) |
+| 1 | Web canvas + R2 + D1 | scaffolded; full `BlueprintCanvas` port pending |
+| 2 | Tools + MCP endpoint | **done** — 14 tools live on `/mcp`, plus REST mirrors |
+| 3 | Memory layer | **done** — assemblies (with labour), customers, project search |
+| 4 | Xero Draft Quote/Invoice | **done** — OAuth (CSRF-protected) + push + nightly contact sync + tokens AES-GCM at rest |
 | 5 | AI chat panel (optional) | not started |
 | 6 | Aqua iframe embed | not started |
+
+## Auth model
+
+- **Browser (web app)** — Cloudflare Access (Zero Trust) in front of `takeoff.drivenwp.com`. Access sets `Cf-Access-Authenticated-User-Email` on every request.
+- **MCP / programmatic** — `Authorization: Bearer <mcp-token>`. Tokens are minted via `POST /admin/mcp/tokens` (requires `MCP_BOOTSTRAP_TOKEN`) and stored SHA-256-hashed in D1.
+- **Xero OAuth callback** — public by necessity; CSRF-protected via HMAC-signed state cookie.
 
 ## Running locally
 
@@ -56,7 +62,8 @@ cd apps/worker
 wrangler secret put XERO_CLIENT_ID
 wrangler secret put XERO_CLIENT_SECRET
 wrangler secret put XERO_REDIRECT_URI       # e.g. https://takeoff.drivenwp.com/xero/oauth/callback
-wrangler secret put MCP_BOOTSTRAP_TOKEN     # used once to mint per-client MCP tokens
+wrangler secret put XERO_TOKEN_KEY          # 32+ random bytes — AES-GCM key for Xero tokens at rest
+wrangler secret put MCP_BOOTSTRAP_TOKEN     # used to mint per-client MCP tokens AND to HMAC OAuth state
 wrangler secret put APP_BASE_URL            # e.g. https://takeoff.drivenwp.com
 # Phase 5 only:
 wrangler secret put ANTHROPIC_API_KEY

@@ -63,6 +63,10 @@ export const sanitizeFormula = (formula: string): string => {
 export const convertValue = (value: number, _from: Unit, _to: Unit, _type: ToolType): number => value;
 
 const math = create(all);
+// Capture the real evaluate BEFORE we disable the global one,
+// so formula evaluation still works while user-controlled formulas
+// can't escape into import/createUnit/parse/simplify/derivative.
+const limitedEvaluate = math.evaluate;
 math.import(
   {
     import: function () {
@@ -70,9 +74,6 @@ math.import(
     },
     createUnit: function () {
       throw new Error('Function createUnit is disabled');
-    },
-    evaluate: function () {
-      throw new Error('Function evaluate is disabled');
     },
     parse: function () {
       throw new Error('Function parse is disabled');
@@ -86,7 +87,6 @@ math.import(
   },
   { override: true }
 );
-const limitedEvaluate = math.evaluate;
 
 export const evaluateFormula = (
   item: TakeoffItem,

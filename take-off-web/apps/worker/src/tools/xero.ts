@@ -1,5 +1,6 @@
 import type { Env } from '../env';
 import { buildQuote } from './memory';
+import { encryptString, decryptString } from '../lib/crypto';
 
 interface XeroTokenRow {
   tenant_id: string;
@@ -11,19 +12,39 @@ interface XeroTokenRow {
   updated_at: number;
 }
 
-async function getActiveXeroToken(env: Env): Promise<XeroTokenRow> {
+interface DecryptedXeroToken extends Omit<XeroTokenRow, 'access_token' | 'refresh_token'> {
+  access_token: string; // plaintext (in-memory only)
+  refresh_token: string; // plaintext (in-memory only)
+}
+
+function requireTokenKey(env: Env): string {
+  if (!env.XERO_TOKEN_KEY) throw new Error('XERO_TOKEN_KEY secret not set');
+  return env.XERO_TOKEN_KEY;
+}
+
+async function getActiveXeroToken(env: Env): Promise<DecryptedXeroToken> {
   const row = (await env.DB.prepare(
     'SELECT * FROM xero_tokens ORDER BY updated_at DESC LIMIT 1'
   ).first()) as XeroTokenRow | null;
   if (!row) throw new Error('Xero is not connected. Visit /xero/oauth/start to connect.');
 
+  const key = requireTokenKey(env);
+  const decrypted: DecryptedXeroToken = {
+    ...row,
+    access_token: await decryptString(key, row.access_token),
+    refresh_token: await decryptString(key, row.refresh_token),
+  };
+
   if (row.expires_at <= Date.now() + 60_000) {
-    return await refreshXeroToken(env, row);
+    return await refreshXeroToken(env, decrypted);
   }
-  return row;
+  return decrypted;
 }
 
-async function refreshXeroToken(env: Env, row: XeroTokenRow): Promise<XeroTokenRow> {
+async function refreshXeroToken(
+  env: Env,
+  current: DecryptedXeroToken
+): Promise<DecryptedXeroToken> {
   if (!env.XERO_CLIENT_ID || !env.XERO_CLIENT_SECRET) {
     throw new Error('XERO_CLIENT_ID / XERO_CLIENT_SECRET secrets not set');
   }
@@ -36,7 +57,7 @@ async function refreshXeroToken(env: Env, row: XeroTokenRow): Promise<XeroTokenR
     },
     body: new URLSearchParams({
       grant_type: 'refresh_token',
-      refresh_token: row.refresh_token,
+      refresh_token: current.refresh_token,
     }),
   });
   if (!res.ok) throw new Error(`Xero refresh failed: ${res.status} ${await res.text()}`);
@@ -46,13 +67,21 @@ async function refreshXeroToken(env: Env, row: XeroTokenRow): Promise<XeroTokenR
     expires_in: number;
   };
   const expires_at = Date.now() + body.expires_in * 1000;
+  const key = requireTokenKey(env);
+  const encAccess = await encryptString(key, body.access_token);
+  const encRefresh = await encryptString(key, body.refresh_token);
   await env.DB.prepare(
     `UPDATE xero_tokens SET access_token = ?, refresh_token = ?, expires_at = ?, updated_at = ?
      WHERE tenant_id = ?`
   )
-    .bind(body.access_token, body.refresh_token, expires_at, Date.now(), row.tenant_id)
+    .bind(encAccess, encRefresh, expires_at, Date.now(), current.tenant_id)
     .run();
-  return { ...row, access_token: body.access_token, refresh_token: body.refresh_token, expires_at };
+  return {
+    ...current,
+    access_token: body.access_token,
+    refresh_token: body.refresh_token,
+    expires_at,
+  };
 }
 
 export async function pushToXero(

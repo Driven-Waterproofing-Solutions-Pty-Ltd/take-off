@@ -10,6 +10,7 @@ export interface Env {
   XERO_CLIENT_ID?: string;
   XERO_CLIENT_SECRET?: string;
   XERO_REDIRECT_URI?: string;
+  XERO_TOKEN_KEY?: string; // AES-GCM key for encrypting Xero tokens at rest
 
   // Anthropic (Phase 5)
   ANTHROPIC_API_KEY?: string;

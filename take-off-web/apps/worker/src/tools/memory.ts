@@ -46,12 +46,21 @@ export async function searchProjects(
 > {
   const q = `%${args.query}%`;
   const limit = args.limit ?? 10;
+  // Pick the most-recent past_quote per project so each project shows up once.
   const rows = await env.DB.prepare(
-    `SELECT p.id, p.name, c.name AS customer_name, pq.total, p.created_at
+    `SELECT p.id, p.name, c.name AS customer_name, latest_pq.total, p.created_at
      FROM projects p
      LEFT JOIN customers c ON c.id = p.customer_id
-     LEFT JOIN past_quotes pq ON pq.project_id = p.id
+     LEFT JOIN (
+       SELECT pq.project_id, pq.total
+       FROM past_quotes pq
+       JOIN (
+         SELECT project_id, MAX(created_at) AS max_created
+         FROM past_quotes GROUP BY project_id
+       ) m ON m.project_id = pq.project_id AND m.max_created = pq.created_at
+     ) latest_pq ON latest_pq.project_id = p.id
      WHERE p.name LIKE ? OR c.name LIKE ?
+     GROUP BY p.id
      ORDER BY p.created_at DESC
      LIMIT ?`
   )
@@ -112,7 +121,7 @@ export async function listAssemblies(
 
 export async function applyAssembly(
   env: Env,
-  args: { project_id: string; item_id: string; assembly_id: string; qty_override?: number }
+  args: { project_id: string; item_id: string; assembly_id: string }
 ): Promise<TakeoffItem> {
   await env.DB.prepare(
     'UPDATE items SET assembly_id = ?, updated_at = ? WHERE id = ? AND project_id = ?'
@@ -122,7 +131,6 @@ export async function applyAssembly(
   const items = await listItems(env, args.project_id);
   const item = items.find((i) => i.id === args.item_id);
   if (!item) throw new Error(`Item ${args.item_id} not found`);
-  if (args.qty_override !== undefined) item.totalValue = args.qty_override;
   return item;
 }
 
@@ -133,6 +141,13 @@ export async function buildQuote(env: Env, projectId: string): Promise<QuoteDraf
   )
     .bind(projectId)
     .first()) as { customer_id: string | null } | null;
+
+  // Default labour charge-out (used when assembly_lines specify minutes per unit
+  // but no specific labour_rate is set on the assembly).
+  const labourRow = (await env.DB.prepare(
+    'SELECT charge_out_rate FROM labour_rates ORDER BY id LIMIT 1'
+  ).first()) as { charge_out_rate: number } | null;
+  const defaultChargeOutPerHour = labourRow?.charge_out_rate ?? 0;
 
   const lines: QuoteLineItem[] = [];
 
@@ -156,6 +171,7 @@ export async function buildQuote(env: Env, projectId: string): Promise<QuoteDraf
 
       const qty = evaluateFormula(item, item.totalValue, assembly?.formula ?? undefined);
 
+      let assemblyLabourMinutes = 0;
       for (const r of linesRes.results as unknown as Array<{
         qty_per_unit: number;
         waste_pct: number;
@@ -172,6 +188,20 @@ export async function buildQuote(env: Env, projectId: string): Promise<QuoteDraf
           unit: r.material_unit,
           unitPrice: r.unit_cost,
           lineTotal: totalQty * r.unit_cost,
+          assemblyId: item.assemblyId,
+          itemId: item.id,
+        });
+        assemblyLabourMinutes += qty * r.labour_min_per_unit;
+      }
+
+      if (assemblyLabourMinutes > 0 && defaultChargeOutPerHour > 0) {
+        const labourHours = assemblyLabourMinutes / 60;
+        lines.push({
+          description: `${assembly?.name ?? 'Assembly'} — labour`,
+          qty: labourHours,
+          unit: 'hrs',
+          unitPrice: defaultChargeOutPerHour,
+          lineTotal: labourHours * defaultChargeOutPerHour,
           assemblyId: item.assemblyId,
           itemId: item.id,
         });

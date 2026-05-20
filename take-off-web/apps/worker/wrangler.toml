@@ -6,8 +6,8 @@ compatibility_flags = ["nodejs_compat"]
 # D1 database
 [[d1_databases]]
 binding = "DB"
-database_name = "takeoff"
-database_id = "REPLACE_WITH_D1_ID"
+database_name = "takeoff-production"
+database_id = "cacd85f3-b42e-4d09-be7a-bbe11cbb2cdc"
 migrations_dir = "migrations"
 
 # R2 bucket for plan PDFs
@@ -23,9 +23,10 @@ crons = ["0 16 * * *"] # 16:00 UTC = 02:00 AEST
 # - XERO_CLIENT_ID
 # - XERO_CLIENT_SECRET
 # - XERO_REDIRECT_URI
-# - ANTHROPIC_API_KEY        (Phase 5 only)
-# - MCP_BOOTSTRAP_TOKEN      (one-off token to mint per-client MCP tokens)
+# - XERO_TOKEN_KEY           (AES-GCM key for Xero token encryption at rest)
+# - MCP_BOOTSTRAP_TOKEN      (used to mint per-client MCP tokens AND to HMAC OAuth state)
 # - APP_BASE_URL             (e.g. https://takeoff.drivenwp.com)
+# - ANTHROPIC_API_KEY        (Phase 5 only)
 
 [observability]
 enabled = true

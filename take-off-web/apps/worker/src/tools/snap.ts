@@ -43,6 +43,12 @@ function snapOne(p: Point, cache: VectorCache, tolerance: number): Point {
   return best;
 }
 
+function isVectorCache(x: unknown): x is VectorCache {
+  if (!x || typeof x !== 'object') return false;
+  const c = x as Record<string, unknown>;
+  return Array.isArray(c.vertices) && Array.isArray(c.segments);
+}
+
 export async function snapToVector(
   env: Env,
   args: { project_id: string; page_index: number; points: Point[]; tolerance_px?: number }
@@ -51,7 +57,14 @@ export async function snapToVector(
   if (!page?.vector_cache_json) {
     return { snapped: args.points };
   }
-  const cache = JSON.parse(page.vector_cache_json) as VectorCache;
+  let cache: VectorCache;
+  try {
+    const parsed = JSON.parse(page.vector_cache_json);
+    if (!isVectorCache(parsed)) return { snapped: args.points };
+    cache = parsed;
+  } catch {
+    return { snapped: args.points };
+  }
   const tol = args.tolerance_px ?? 8;
   const snapped = args.points.map((p) => snapOne(p, cache, tol));
   return { snapped };

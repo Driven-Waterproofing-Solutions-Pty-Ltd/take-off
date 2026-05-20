@@ -1,7 +1,10 @@
 import { Hono } from 'hono';
 import type { Env } from '../env';
+import { requireAuth } from '../lib/auth';
 
 const app = new Hono<{ Bindings: Env }>();
+
+app.use('*', requireAuth);
 
 app.post('/', async (c) => {
   const body = await c.req.json<{ name: string; customer_id?: string }>();
@@ -32,18 +35,47 @@ app.get('/:id', async (c) => {
   return c.json({ project, pdfs: pdfs.results, pages: pages.results });
 });
 
-// Get a signed upload key — client PUTs PDF bytes to R2 directly via the worker
+// Server-bound key — caller cannot choose the prefix. Bound to :id.
 app.post('/:id/upload-url', async (c) => {
   const id = c.req.param('id');
+  const exists = await c.env.DB.prepare('SELECT 1 FROM projects WHERE id = ?').bind(id).first();
+  if (!exists) return c.json({ error: 'project not found' }, 404);
   const { filename } = await c.req.json<{ filename: string }>();
-  const fileKey = `projects/${id}/${crypto.randomUUID()}-${filename}`;
+  const safe = (filename ?? 'plan.pdf').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
+  const fileKey = `projects/${id}/${crypto.randomUUID()}-${safe}`;
   return c.json({ file_key: fileKey });
 });
 
+const MAX_PDF_BYTES = 100 * 1024 * 1024; // 100 MB
+
 app.put('/:id/upload/:key{.+}', async (c) => {
+  const id = c.req.param('id');
   const key = c.req.param('key');
+
+  // Defense in depth: key MUST be scoped to this project's prefix.
+  const expectedPrefix = `projects/${id}/`;
+  if (!key.startsWith(expectedPrefix) || key.includes('..')) {
+    return c.json({ error: 'key not bound to project' }, 403);
+  }
+  const exists = await c.env.DB.prepare('SELECT 1 FROM projects WHERE id = ?').bind(id).first();
+  if (!exists) return c.json({ error: 'project not found' }, 404);
+
+  const contentType = c.req.header('Content-Type');
+  if (contentType && contentType !== 'application/pdf' && contentType !== 'application/octet-stream') {
+    return c.json({ error: 'expected application/pdf' }, 415);
+  }
+  const lenHeader = c.req.header('Content-Length');
+  if (lenHeader && Number(lenHeader) > MAX_PDF_BYTES) {
+    return c.json({ error: 'pdf too large' }, 413);
+  }
+
   const bytes = await c.req.arrayBuffer();
-  await c.env.PDFS.put(key, bytes);
+  if (bytes.byteLength > MAX_PDF_BYTES) {
+    return c.json({ error: 'pdf too large' }, 413);
+  }
+  await c.env.PDFS.put(key, bytes, {
+    httpMetadata: { contentType: 'application/pdf' },
+  });
   return c.json({ ok: true, key });
 });
 
@@ -57,6 +89,9 @@ app.post('/:id/pdfs', async (c) => {
     start_page_index?: number;
     sha256?: string;
   }>();
+  if (!body.file_key.startsWith(`projects/${projectId}/`)) {
+    return c.json({ error: 'file_key not bound to project' }, 403);
+  }
   const pdfId = crypto.randomUUID();
   await c.env.DB.prepare(
     `INSERT INTO pdfs (id, project_id, r2_key, name, page_count, page_sizes, start_page_index, sha256, created_at)
@@ -78,7 +113,17 @@ app.post('/:id/pdfs', async (c) => {
 });
 
 app.get('/:id/pdfs/:key{.+}', async (c) => {
+  const projectId = c.req.param('id');
   const key = c.req.param('key');
+
+  // Must be a registered PDF for this project (DB-join check, not just key prefix).
+  const owned = await c.env.DB.prepare(
+    'SELECT 1 FROM pdfs WHERE project_id = ? AND r2_key = ?'
+  )
+    .bind(projectId, key)
+    .first();
+  if (!owned) return c.json({ error: 'not found' }, 404);
+
   const obj = await c.env.PDFS.get(key);
   if (!obj) return c.json({ error: 'not found' }, 404);
   return new Response(obj.body, {

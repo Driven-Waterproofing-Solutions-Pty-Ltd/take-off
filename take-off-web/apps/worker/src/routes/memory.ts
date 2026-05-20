@@ -8,8 +8,11 @@ import {
   applyAssembly,
   buildQuote,
 } from '../tools/memory';
+import { requireAuth } from '../lib/auth';
 
 const app = new Hono<{ Bindings: Env }>();
+
+app.use('*', requireAuth);
 
 app.get('/projects/search', async (c) => {
   const q = c.req.query('q') ?? '';

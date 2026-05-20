@@ -35,7 +35,7 @@ export async function setScaleManual(
     p1: Point;
     p2: Point;
     real_distance: number;
-    unit: string;
+    unit: Unit;
   }
 ): Promise<ScaleCalibration> {
   const pixelDistance = calculateDistance(args.p1, args.p2);
@@ -45,7 +45,7 @@ export async function setScaleManual(
   const scale: ScaleCalibration = {
     isSet: true,
     pixelsPerUnit: pixelDistance / args.real_distance,
-    unit: args.unit as Unit,
+    unit: args.unit,
   };
   await upsertPage(env.DB, args.project_id, args.page_index, { scale });
   return scale;

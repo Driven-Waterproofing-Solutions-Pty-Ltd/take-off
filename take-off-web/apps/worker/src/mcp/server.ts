@@ -1,5 +1,6 @@
 import type { Env } from '../env';
 import { tools, type ToolName } from '@takeoff/shared';
+import { zodToJsonSchema } from 'zod-to-json-schema';
 import { setScalePreset, setScaleManual } from '../tools/scale';
 import { addArea, addLinear, addCount, addArc } from '../tools/measure';
 import { snapToVector } from '../tools/snap';
@@ -12,16 +13,32 @@ import {
   buildQuote,
 } from '../tools/memory';
 import { pushToXero } from '../tools/xero';
+import { sha256Hex } from '../lib/crypto';
 
 type Handler = (env: Env, input: unknown) => Promise<unknown>;
 
-const handlers: Record<ToolName, Handler> = {
-  load_pdf: async () => {
-    throw new Error('load_pdf is a client-driven flow: upload via /api/projects/:id/upload-url then POST /api/projects/:id/pdfs');
-  },
-  get_page_image: async () => {
-    throw new Error('get_page_image is rendered client-side from the canvas viewport');
-  },
+// Only tools that can be fully executed server-side belong on the MCP surface.
+// load_pdf and get_page_image are client-driven (browser uploads to R2, MuPDF
+// renders the page) and are intentionally hidden from MCP discovery so AI
+// clients don't try to invoke unusable contracts.
+const MCP_TOOLS: ToolName[] = [
+  'set_scale_preset',
+  'set_scale_manual',
+  'add_area',
+  'add_linear',
+  'add_count',
+  'add_arc',
+  'snap_to_vector',
+  'list_items',
+  'search_projects',
+  'recall_customer',
+  'list_assemblies',
+  'apply_assembly',
+  'build_quote',
+  'push_to_xero',
+];
+
+const handlers: Partial<Record<ToolName, Handler>> = {
   set_scale_preset: (env, i) => setScalePreset(env, i as Parameters<typeof setScalePreset>[1]),
   set_scale_manual: (env, i) => setScaleManual(env, i as Parameters<typeof setScaleManual>[1]),
   add_area: (env, i) => addArea(env, i as Parameters<typeof addArea>[1]),
@@ -55,37 +72,21 @@ async function verifyMcpToken(env: Env, authHeader: string | undefined): Promise
   return false;
 }
 
-async function sha256Hex(s: string): Promise<string> {
-  const bytes = new TextEncoder().encode(s);
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
 interface JsonRpcRequest {
   jsonrpc: '2.0';
-  id?: string | number;
+  id?: string | number | null;
   method: string;
   params?: Record<string, unknown>;
 }
 
 function jsonRpcResult(id: unknown, result: unknown) {
-  return { jsonrpc: '2.0', id, result };
+  return Response.json({ jsonrpc: '2.0', id: id ?? null, result });
 }
-function jsonRpcError(id: unknown, code: number, message: string, data?: unknown) {
-  return { jsonrpc: '2.0', id, error: { code, message, data } };
-}
-
-function zodToJsonSchema(name: ToolName): Record<string, unknown> {
-  // Lightweight inline conversion. For production, use zod-to-json-schema.
-  // We expose a permissive object schema; full validation happens at handler entry.
-  const desc = tools[name].description;
-  return {
-    type: 'object',
-    description: desc,
-    additionalProperties: true,
-  };
+function jsonRpcError(id: unknown, code: number, message: string, data?: unknown, status = 200) {
+  return Response.json(
+    { jsonrpc: '2.0', id: id ?? null, error: { code, message, data } },
+    { status }
+  );
 }
 
 export async function handleMcp(request: Request, env: Env): Promise<Response> {
@@ -97,62 +98,67 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
     return new Response('Method Not Allowed', { status: 405 });
   }
 
-  const body = (await request.json()) as JsonRpcRequest;
+  let body: JsonRpcRequest;
+  try {
+    body = (await request.json()) as JsonRpcRequest;
+  } catch {
+    // JSON-RPC: -32700 = Parse error
+    return jsonRpcError(null, -32700, 'Parse error: invalid JSON', undefined, 400);
+  }
 
   if (body.method === 'initialize') {
-    return Response.json(
-      jsonRpcResult(body.id, {
-        protocolVersion: '2025-06-18',
-        capabilities: { tools: {} },
-        serverInfo: { name: 'takeoff-mcp', version: '0.1.0' },
-      })
-    );
+    return jsonRpcResult(body.id, {
+      protocolVersion: '2025-06-18',
+      capabilities: { tools: {} },
+      serverInfo: { name: 'takeoff-mcp', version: '0.1.0' },
+    });
   }
 
   if (body.method === 'tools/list') {
-    const list = (Object.keys(tools) as ToolName[]).map((name) => ({
+    const list = MCP_TOOLS.map((name) => ({
       name,
       description: tools[name].description,
-      inputSchema: zodToJsonSchema(name),
+      inputSchema: zodToJsonSchema(tools[name].input, {
+        $refStrategy: 'none',
+        target: 'jsonSchema7',
+      }),
     }));
-    return Response.json(jsonRpcResult(body.id, { tools: list }));
+    return jsonRpcResult(body.id, { tools: list });
   }
 
   if (body.method === 'tools/call') {
-    const params = body.params as { name: ToolName; arguments?: unknown };
+    const params = body.params as { name: ToolName; arguments?: unknown } | undefined;
     const name = params?.name;
     const args = params?.arguments ?? {};
-    if (!name || !(name in tools)) {
-      return Response.json(jsonRpcError(body.id, -32601, `Unknown tool: ${name}`));
+    if (!name || !MCP_TOOLS.includes(name)) {
+      return jsonRpcError(body.id, -32601, `Unknown or unavailable tool: ${name}`);
+    }
+    const handler = handlers[name];
+    if (!handler) {
+      return jsonRpcError(body.id, -32601, `No handler for tool: ${name}`);
     }
     const schema = tools[name].input;
     const parsed = schema.safeParse(args);
     if (!parsed.success) {
-      return Response.json(
-        jsonRpcError(body.id, -32602, 'Invalid arguments', parsed.error.flatten())
-      );
+      return jsonRpcError(body.id, -32602, 'Invalid arguments', parsed.error.flatten());
     }
     try {
-      const out = await handlers[name](env, parsed.data);
-      return Response.json(
-        jsonRpcResult(body.id, {
-          content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
-          structuredContent: out,
-          isError: false,
-        })
-      );
+      const out = await handler(env, parsed.data);
+      return jsonRpcResult(body.id, {
+        content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
+        structuredContent: out,
+        isError: false,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return Response.json(
-        jsonRpcResult(body.id, {
-          content: [{ type: 'text', text: `Error: ${message}` }],
-          isError: true,
-        })
-      );
+      return jsonRpcResult(body.id, {
+        content: [{ type: 'text', text: `Error: ${message}` }],
+        isError: true,
+      });
     }
   }
 
-  return Response.json(jsonRpcError(body.id, -32601, `Method not found: ${body.method}`));
+  return jsonRpcError(body.id, -32601, `Method not found: ${body.method}`);
 }
 
 export async function mintMcpClientToken(
