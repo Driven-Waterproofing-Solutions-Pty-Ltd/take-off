@@ -1,0 +1,31 @@
+name = "takeoff-worker"
+main = "src/index.ts"
+compatibility_date = "2026-05-01"
+compatibility_flags = ["nodejs_compat"]
+
+# D1 database
+[[d1_databases]]
+binding = "DB"
+database_name = "takeoff"
+database_id = "REPLACE_WITH_D1_ID"
+migrations_dir = "migrations"
+
+# R2 bucket for plan PDFs
+[[r2_buckets]]
+binding = "PDFS"
+bucket_name = "takeoff-pdfs"
+
+# Cron — nightly Xero contact sync
+[triggers]
+crons = ["0 16 * * *"] # 16:00 UTC = 02:00 AEST
+
+# Vars set via `wrangler secret put` (never commit values):
+# - XERO_CLIENT_ID
+# - XERO_CLIENT_SECRET
+# - XERO_REDIRECT_URI
+# - ANTHROPIC_API_KEY        (Phase 5 only)
+# - MCP_BOOTSTRAP_TOKEN      (one-off token to mint per-client MCP tokens)
+# - APP_BASE_URL             (e.g. https://takeoff.drivenwp.com)
+
+[observability]
+enabled = true

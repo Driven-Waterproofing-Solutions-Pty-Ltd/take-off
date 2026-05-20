@@ -1,0 +1,16 @@
+{
+  "name": "take-off-web",
+  "version": "0.0.1",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:worker": "pnpm --filter @takeoff/worker dev",
+    "dev:web": "pnpm --filter @takeoff/web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "packageManager": "pnpm@9.0.0"
+}
