@@ -1,0 +1,280 @@
+import { useCallback, useEffect, useState } from 'react';
+import { useHistory } from './useHistory';
+import { TakeoffItem, ProjectData, PlanSet, ToolType, Unit } from '../types';
+import { useToast } from '../contexts/ToastContext';
+import { getAreaUnitFromLinear } from '../utils/geometry';
+import {
+  exportProjectToZip,
+  importProjectFromZip,
+} from '../utils/storage';
+import { api } from '../lib/api';
+
+// Web-port of the desktop useProjectManager hook.
+// Same returned shape so App.tsx and downstream components don't change.
+// Differences from desktop:
+//   - "File path" is replaced by a project id (URL: /projects/:id)
+//   - Autosave hits REST (debounced) instead of writing a SQLite file
+//   - "Save to file" emits a JSON snapshot Blob (download), not a .takeoff zip
+//   - "Load project" opens a JSON file picker (project state only — PDFs come from R2)
+
+interface ProjectSnapshot {
+  items: TakeoffItem[];
+  projectData: ProjectData;
+  planSets: PlanSet[];
+  totalPages: number;
+  projectName: string;
+}
+
+async function fetchProject(projectId: string): Promise<ProjectSnapshot | null> {
+  try {
+    const items = await api.items.list(projectId);
+    // Project metadata + pages live in the same endpoint
+    const meta = (await api.projects.get(projectId)) as {
+      project: { name: string };
+      pages: Array<{ page_index: number; scale_json: string; name: string | null }>;
+      pdfs: Array<{
+        id: string;
+        name: string | null;
+        page_count: number;
+        start_page_index: number;
+        page_sizes: string;
+      }>;
+    };
+    const projectData: ProjectData = {};
+    for (const p of meta.pages) {
+      projectData[p.page_index] = {
+        scale: JSON.parse(p.scale_json),
+        name: p.name ?? undefined,
+      };
+    }
+    const planSets: PlanSet[] = meta.pdfs.map((pdf) => ({
+      id: pdf.id,
+      // file is a server-side concept here — we keep an empty stand-in;
+      // the canvas resolves pages via /api/projects/:id/pdfs/:key on demand
+      file: undefined as unknown as File,
+      name: pdf.name ?? 'plan.pdf',
+      pageCount: pdf.page_count,
+      startPageIndex: pdf.start_page_index,
+    }));
+    const totalPages = planSets.reduce((sum, p) => sum + p.pageCount, 0);
+    return {
+      items,
+      projectData,
+      planSets,
+      totalPages,
+      projectName: meta.project.name,
+    };
+  } catch (e) {
+    console.error('fetchProject failed', e);
+    return null;
+  }
+}
+
+export const useProjectManager = (_isLicensed = true) => {
+  const { addToast } = useToast();
+
+  const {
+    state: historyState,
+    set: setHistory,
+    setTransient: setHistoryTransient,
+    commit: commitHistory,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+    clear: clearHistory,
+  } = useHistory<{
+    items: TakeoffItem[];
+    projectData: ProjectData;
+    planSets: PlanSet[];
+    totalPages: number;
+  }>({
+    items: [],
+    projectData: {},
+    planSets: [],
+    totalPages: 0,
+  });
+
+  const { items, projectData, planSets, totalPages } = historyState;
+
+  const [projectName, setProjectName] = useState('Untitled Project');
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [isInitializing, setIsInitializing] = useState(true);
+  const [loadingMessage, setLoadingMessage] = useState('Loading project…');
+  const [showImportConfirm, setShowImportConfirm] = useState(false);
+  const [showNewProjectPrompt, setShowNewProjectPrompt] = useState(false);
+  const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
+
+  // Initial load — read ?project=ID from URL if present, otherwise just leave empty.
+  useEffect(() => {
+    const init = async () => {
+      try {
+        const url = new URL(window.location.href);
+        const id = url.searchParams.get('project');
+        if (id) {
+          const snap = await fetchProject(id);
+          if (snap) {
+            const patched = snap.items.map((item) => {
+              if (item.type === ToolType.AREA) {
+                const correctedUnit = getAreaUnitFromLinear(item.unit as Unit);
+                if (correctedUnit !== item.unit) return { ...item, unit: correctedUnit };
+              }
+              return item;
+            });
+            clearHistory({
+              items: patched,
+              projectData: snap.projectData,
+              planSets: snap.planSets,
+              totalPages: snap.totalPages,
+            });
+            setProjectId(id);
+            setProjectName(snap.projectName);
+            setLastSavedAt(new Date());
+          }
+        }
+      } catch (e) {
+        console.error('init failed', e);
+        addToast('Failed to load project', 'error');
+      } finally {
+        setIsInitializing(false);
+      }
+    };
+    init();
+    // Intentionally omit deps; this runs once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // No autosave loop for project items in this slice — every measurement
+  // tool already persists to D1 the moment it's invoked through /api/measure.
+  // Project NAME is the only thing this hook tracks that needs a save call;
+  // we save it on blur via setProjectNameAndSync.
+  const setProjectNameAndSync = useCallback(
+    async (next: string) => {
+      setProjectName(next);
+      // Currently no PATCH endpoint — name set at create time.
+      // Add later when the rename flow is needed.
+      void next;
+    },
+    []
+  );
+
+  const handleNewProjectRequest = () => setShowNewProjectPrompt(true);
+
+  const handleNewProjectConfirmed = async (name: string) => {
+    setShowNewProjectPrompt(false);
+    try {
+      const created = await api.projects.create(name);
+      const url = new URL(window.location.href);
+      url.searchParams.set('project', created.id);
+      window.history.replaceState({}, '', url.toString());
+      clearHistory({ items: [], projectData: {}, planSets: [], totalPages: 0 });
+      setProjectId(created.id);
+      setProjectName(name);
+      setLastSavedAt(new Date());
+      addToast(`Created project: ${name}`, 'success');
+    } catch (e) {
+      console.error('create failed', e);
+      addToast('Failed to create project', 'error');
+    }
+  };
+
+  const handleSaveProject = async () => {
+    setIsSaving(true);
+    try {
+      const blob = await exportProjectToZip(items, projectData, planSets, totalPages, projectName);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${projectName.replace(/[^a-z0-9]/gi, '_')}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      addToast('Project snapshot downloaded', 'success');
+    } catch (e) {
+      console.error('save failed', e);
+      addToast('Failed to save project', 'error');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleLoadProjectClick = async () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json,.json,.takeoff';
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      setPendingImportFile(file);
+      setShowImportConfirm(true);
+    };
+    input.click();
+  };
+
+  const handleImportConfirmed = async () => {
+    if (!pendingImportFile) return;
+    setShowImportConfirm(false);
+    setIsInitializing(true);
+    setLoadingMessage('Importing project…');
+    try {
+      const snap = await importProjectFromZip(pendingImportFile);
+      // Import currently fills the in-memory state only.
+      // To persist, the user should "Save to cloud" — TODO when we wire it.
+      clearHistory({
+        items: snap.items,
+        projectData: snap.projectData,
+        planSets: snap.planSets,
+        totalPages: snap.totalPages,
+      });
+      setProjectName(snap.projectName);
+      setLastSavedAt(new Date());
+      addToast('Project imported (local only — save to persist)', 'success');
+    } catch (e) {
+      console.error('import failed', e);
+      addToast('Failed to import project', 'error');
+    } finally {
+      setIsInitializing(false);
+      setLoadingMessage('Loading project…');
+      setPendingImportFile(null);
+    }
+  };
+
+  return {
+    // State
+    projectName,
+    items,
+    projectData,
+    planSets,
+    totalPages,
+    isSaving,
+    lastSavedAt,
+    isInitializing,
+    loadingMessage,
+    currentFilePath: projectId, // legacy field name — now project id
+    showImportConfirm,
+    showNewProjectPrompt,
+
+    // Setters
+    setProjectName: setProjectNameAndSync,
+    setHistory,
+    setHistoryTransient,
+    commitHistory,
+    setShowImportConfirm,
+    setPendingImportPath: () => {},
+    setShowNewProjectPrompt,
+
+    // Actions
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+    handleNewProjectRequest,
+    handleNewProjectConfirmed,
+    handleSaveProject,
+    handleLoadProjectClick,
+    handleImportConfirmed,
+  };
+};
