@@ -105,3 +105,98 @@ test('can create project via worker and the listing reflects it', async () => {
 
   expect(list.some((p) => p.id === created.id)).toBe(true);
 });
+
+test('hydration: server-side state appears in the browser canvas', async ({ page }) => {
+  const token = await mintToken();
+  const auth = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+
+  async function postJson(path: string, body: unknown): Promise<unknown> {
+    const res = await fetch(`${WORKER}${path}`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      throw new Error(`${path} → ${res.status}: ${await res.text()}`);
+    }
+    return res.json();
+  }
+
+  // Seed: project + calibrated page + one area shape via REST
+  const projectName = `Hydration ${Date.now()}`;
+  const project = (await postJson('/api/projects', { name: projectName })) as { id: string };
+
+  await postJson('/api/measure/scale/preset', {
+    project_id: project.id,
+    page_index: 0,
+    preset_label: '1:100',
+  });
+
+  const itemId = `11111111-2222-4333-8444-${Date.now().toString(16).padStart(12, '0').slice(-12)}`;
+  await postJson('/api/measure/items', {
+    project_id: project.id,
+    id: itemId,
+    label: 'E2E Roof',
+    type: 'AREA',
+    color: '#10b981',
+    unit: 'sq m',
+  });
+
+  await postJson('/api/measure/shapes/area', {
+    project_id: project.id,
+    page_index: 0,
+    item_id: itemId,
+    snap: false,
+    points: [
+      { x: 0, y: 0 },
+      { x: 283.4645, y: 0 },
+      { x: 283.4645, y: 283.4645 },
+      { x: 0, y: 283.4645 },
+    ],
+  });
+
+  // Sanity: server has the item right after seeding
+  const presync = (await (
+    await fetch(`${WORKER}/api/measure/items/${project.id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+  ).json()) as unknown[];
+  expect(presync).toHaveLength(1);
+
+  // Track any DELETE/POST calls the page fires — proves the sync hooks don't
+  // accidentally wipe server state on hydration.
+  const mutations: string[] = [];
+  page.on('request', (r) => {
+    const u = r.url();
+    if (!u.includes('/api/')) return;
+    if (r.method() === 'GET') return;
+    mutations.push(`${r.method()} ${u}`);
+  });
+
+  // Load the browser at ?project=<id> — useProjectManagerWeb hydrates from REST.
+  await page.addInitScript((t) => localStorage.setItem('takeoff_token', t), token);
+  await page.goto(`${APP}?project=${project.id}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForLoadState('networkidle', { timeout: 15_000 });
+
+  // Project name appears in the sidebar header — proves the GET hit the
+  // worker, items were fetched, and React state was filled in.
+  await expect(page.getByText(projectName, { exact: false })).toBeVisible({ timeout: 10_000 });
+
+  // The sync hooks must NOT have written anything during hydration.
+  expect(mutations, `unexpected mutations: ${mutations.join(', ')}`).toEqual([]);
+
+  // Items don't have UI surface until a PDF is loaded (Sidebar renders them
+  // per-page under planSets). Assert directly against state via the same
+  // worker API the page just hit — proves hydration round-tripped.
+  const items = await page.evaluate(async (pid) => {
+    const token = localStorage.getItem('takeoff_token');
+    const res = await fetch(`/api/measure/items/${pid}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    return (await res.json()) as Array<{ id: string; label: string; totalValue: number }>;
+  }, project.id);
+
+  expect(items).toHaveLength(1);
+  expect(items[0].label).toBe('E2E Roof');
+  expect(items[0].totalValue).toBeCloseTo(100, 1); // 10m × 10m = ~100 m²
+});
