@@ -8,11 +8,28 @@ import type {
 
 const BASE = '';
 
+// Auth: in production, Cloudflare Access sits in front of the app and the
+// browser carries the Access cookie automatically. Locally there's no Access,
+// so the canvas reads a one-off bearer token from localStorage. Mint one with
+//   curl -X POST :8787/admin/mcp/tokens \
+//        -H "Authorization: Bearer $MCP_BOOTSTRAP_TOKEN" \
+//        -H "Content-Type: application/json" -d '{"name":"local-dev"}'
+// then in DevTools: localStorage.takeoff_token = '<token>'
+function devAuthHeaders(): Record<string, string> {
+  try {
+    const t = typeof localStorage !== 'undefined' ? localStorage.getItem('takeoff_token') : null;
+    return t ? { Authorization: `Bearer ${t}` } : {};
+  } catch {
+    return {};
+  }
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
+      ...devAuthHeaders(),
       ...(init?.headers ?? {}),
     },
   });
@@ -36,12 +53,15 @@ export const api = {
         body: JSON.stringify({ filename }),
       }),
     uploadPdfBytes: async (projectId: string, fileKey: string, bytes: ArrayBuffer) => {
+      // The fileKey returned by requestUploadUrl has slashes; the route is
+      // `/api/projects/:id/upload/:key{.+}` so we just concatenate.
       const res = await fetch(`/api/projects/${projectId}/upload/${fileKey}`, {
         method: 'PUT',
+        headers: { 'Content-Type': 'application/pdf', ...devAuthHeaders() },
         body: bytes,
       });
-      if (!res.ok) throw new Error(`upload failed: ${res.status}`);
-      return res.json();
+      if (!res.ok) throw new Error(`upload failed: ${res.status} ${await res.text()}`);
+      return res.json() as Promise<{ ok: boolean; key: string }>;
     },
     registerPdf: (
       projectId: string,
@@ -50,12 +70,20 @@ export const api = {
         name?: string;
         page_count: number;
         page_sizes: Array<{ width: number; height: number }>;
+        start_page_index?: number;
       }
     ) =>
-      req<{ pdf_id: string }>(`/api/projects/${projectId}/pdfs`, {
+      req<{ pdf_id: string; page_count: number }>(`/api/projects/${projectId}/pdfs`, {
         method: 'POST',
         body: JSON.stringify(body),
       }),
+    fetchPdfBlob: async (projectId: string, fileKey: string): Promise<Blob> => {
+      const res = await fetch(`/api/projects/${projectId}/pdfs/${fileKey}`, {
+        headers: devAuthHeaders(),
+      });
+      if (!res.ok) throw new Error(`pdf fetch failed: ${res.status}`);
+      return res.blob();
+    },
   },
 
   scale: {

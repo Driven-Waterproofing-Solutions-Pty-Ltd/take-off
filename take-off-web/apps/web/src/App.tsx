@@ -22,6 +22,7 @@ import { Loader2 } from 'lucide-react';
 import { useProjectManager } from './hooks/useProjectManagerWeb';
 import { useShapeSync } from './hooks/useShapeSync';
 import { useScaleSync } from './hooks/useScaleSync';
+import { usePlanSetSync } from './hooks/usePlanSetSync';
 import { RamCacheProvider, useRamCache } from './contexts/RamCacheContext';
 import { savePlanFile } from './utils/storage';
 import { flattenOCG } from './utils/flattenOCG';
@@ -67,9 +68,10 @@ const AppContent: React.FC = () => {
     currentFilePath: projectId,
   } = useProjectManager(isLicensed);
 
-  // Persist every local state change back to D1.
+  // Persist every local state change back to D1 + R2.
   useShapeSync(projectId, items);
   useScaleSync(projectId, projectData);
+  usePlanSetSync(projectId, planSets);
 
   const historyState = { items, projectData, planSets, totalPages };
 

@@ -28,13 +28,13 @@ interface ProjectSnapshot {
 async function fetchProject(projectId: string): Promise<ProjectSnapshot | null> {
   try {
     const items = await api.items.list(projectId);
-    // Project metadata + pages live in the same endpoint
     const meta = (await api.projects.get(projectId)) as {
       project: { name: string };
       pages: Array<{ page_index: number; scale_json: string; name: string | null }>;
       pdfs: Array<{
         id: string;
         name: string | null;
+        r2_key: string;
         page_count: number;
         start_page_index: number;
         page_sizes: string;
@@ -47,15 +47,29 @@ async function fetchProject(projectId: string): Promise<ProjectSnapshot | null> 
         name: p.name ?? undefined,
       };
     }
-    const planSets: PlanSet[] = meta.pdfs.map((pdf) => ({
-      id: pdf.id,
-      // file is a server-side concept here — we keep an empty stand-in;
-      // the canvas resolves pages via /api/projects/:id/pdfs/:key on demand
-      file: undefined as unknown as File,
-      name: pdf.name ?? 'plan.pdf',
-      pageCount: pdf.page_count,
-      startPageIndex: pdf.start_page_index,
-    }));
+    // Fetch each PDF blob and reconstruct File objects so MuPDF can render.
+    // PlanSets are typically 1–3 per project; eager fetch is acceptable.
+    const planSets: PlanSet[] = await Promise.all(
+      meta.pdfs.map(async (pdf) => {
+        let file: File;
+        try {
+          const blob = await api.projects.fetchPdfBlob(projectId, pdf.r2_key);
+          file = new File([blob], pdf.name ?? 'plan.pdf', { type: 'application/pdf' });
+        } catch (e) {
+          console.error('fetchPdfBlob failed for', pdf.id, e);
+          file = undefined as unknown as File;
+        }
+        return {
+          id: pdf.id,
+          file,
+          name: pdf.name ?? 'plan.pdf',
+          pageCount: pdf.page_count,
+          startPageIndex: pdf.start_page_index,
+          // Stamp the R2 key so usePlanSetSync skips re-uploading
+          __r2_key: pdf.r2_key,
+        } as PlanSet & { __r2_key: string };
+      })
+    );
     const totalPages = planSets.reduce((sum, p) => sum + p.pageCount, 0);
     return {
       items,
