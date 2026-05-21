@@ -90,59 +90,120 @@ export const api = {
   },
 
   shapes: {
-    area: (projectId: string, pageIndex: number, points: Point[], itemId?: string) =>
+    area: (body: {
+      project_id: string;
+      page_index: number;
+      points: Point[];
+      item_id?: string;
+      shape_id?: string;
+      name?: string;
+      color?: string;
+      snap?: boolean;
+    }) =>
       req<Shape>('/api/measure/shapes/area', {
         method: 'POST',
-        body: JSON.stringify({
-          project_id: projectId,
-          page_index: pageIndex,
-          points,
-          item_id: itemId,
-        }),
+        body: JSON.stringify(body),
       }),
-    linear: (projectId: string, pageIndex: number, points: Point[], itemId?: string) =>
+    linear: (body: {
+      project_id: string;
+      page_index: number;
+      points: Point[];
+      item_id?: string;
+      shape_id?: string;
+      name?: string;
+      color?: string;
+      snap?: boolean;
+    }) =>
       req<Shape>('/api/measure/shapes/linear', {
         method: 'POST',
-        body: JSON.stringify({
-          project_id: projectId,
-          page_index: pageIndex,
-          points,
-          item_id: itemId,
-        }),
+        body: JSON.stringify(body),
       }),
-    count: (projectId: string, pageIndex: number, points: Point[], itemId?: string) =>
+    count: (body: {
+      project_id: string;
+      page_index: number;
+      points: Point[];
+      item_id?: string;
+      shape_id?: string;
+      name?: string;
+      color?: string;
+    }) =>
       req<Shape>('/api/measure/shapes/count', {
         method: 'POST',
-        body: JSON.stringify({
-          project_id: projectId,
-          page_index: pageIndex,
-          points,
-          item_id: itemId,
-        }),
+        body: JSON.stringify(body),
       }),
-    arc: (
-      projectId: string,
-      pageIndex: number,
-      start: Point,
-      end: Point,
-      bulge: number,
-      itemId?: string
-    ) =>
+    arc: (body: {
+      project_id: string;
+      page_index: number;
+      start: Point;
+      end: Point;
+      bulge: number;
+      item_id?: string;
+      shape_id?: string;
+      name?: string;
+      color?: string;
+    }) =>
       req<Shape>('/api/measure/shapes/arc', {
         method: 'POST',
-        body: JSON.stringify({
-          project_id: projectId,
-          page_index: pageIndex,
-          start,
-          end,
-          bulge,
-          item_id: itemId,
-        }),
+        body: JSON.stringify(body),
+      }),
+    delete: (id: string) =>
+      req<{ deleted: boolean; item_id: string | null }>(`/api/measure/shapes/${id}`, {
+        method: 'DELETE',
+      }),
+    update: (
+      id: string,
+      patch: { points?: Point[]; deduction?: boolean; value?: number }
+    ) =>
+      req<{ updated: boolean; item_id: string | null }>(`/api/measure/shapes/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(patch),
       }),
   },
 
   items: {
     list: (projectId: string) => req<TakeoffItem[]>(`/api/measure/items/${projectId}`),
+    create: (body: {
+      project_id: string;
+      id?: string;
+      label: string;
+      type: string;
+      color: string;
+      unit: string;
+      properties?: unknown;
+      formula?: string;
+      price?: number;
+      group?: string;
+      visible?: boolean;
+      depth?: number;
+    }) =>
+      req<TakeoffItem>('/api/measure/items', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    update: (
+      id: string,
+      patch: Partial<{
+        label: string;
+        color: string;
+        unit: string;
+        properties: unknown;
+        formula: string;
+        price: number | null;
+        group: string;
+        visible: boolean;
+        depth: number | null;
+        assembly_id: string | null;
+        hidden_pages: number[];
+      }>
+    ) =>
+      req<TakeoffItem>(`/api/measure/items/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(patch),
+      }),
+    delete: (id: string) =>
+      req<{ deleted: boolean }>(`/api/measure/items/${id}`, {
+        method: 'DELETE',
+      }),
   },
 
   vectorCache: {

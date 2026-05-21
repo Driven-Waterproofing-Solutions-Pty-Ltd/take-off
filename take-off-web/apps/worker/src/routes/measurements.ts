@@ -5,6 +5,7 @@ import { setScalePreset, setScaleManual } from '../tools/scale';
 import { addArea, addLinear, addCount, addArc } from '../tools/measure';
 import { snapToVector } from '../tools/snap';
 import { listItems } from '../tools/memory';
+import { createItem, updateItem, deleteItem, deleteShape, updateShape } from '../tools/items';
 import { upsertPage } from '../db/queries';
 import { requireAuth } from '../lib/auth';
 
@@ -56,6 +57,29 @@ app.post('/snap', async (c) => {
 
 app.get('/items/:projectId', async (c) => {
   return c.json(await listItems(c.env, c.req.param('projectId')));
+});
+
+app.post('/items', async (c) => {
+  const body = await c.req.json();
+  return c.json(await createItem(c.env, body));
+});
+
+app.put('/items/:id', async (c) => {
+  const body = await c.req.json();
+  return c.json(await updateItem(c.env, c.req.param('id'), body));
+});
+
+app.delete('/items/:id', async (c) => {
+  return c.json(await deleteItem(c.env, c.req.param('id')));
+});
+
+app.delete('/shapes/:id', async (c) => {
+  return c.json(await deleteShape(c.env, c.req.param('id')));
+});
+
+app.put('/shapes/:id', async (c) => {
+  const body = await c.req.json();
+  return c.json(await updateShape(c.env, c.req.param('id'), body));
 });
 
 // Client uploads its extracted PDF vector cache for a page (for snap)

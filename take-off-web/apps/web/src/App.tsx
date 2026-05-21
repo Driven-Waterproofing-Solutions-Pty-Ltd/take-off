@@ -20,6 +20,8 @@ import { useToast } from './contexts/ToastContext';
 import { generateMarkupPDF } from './utils/pdfExport';
 import { Loader2 } from 'lucide-react';
 import { useProjectManager } from './hooks/useProjectManagerWeb';
+import { useShapeSync } from './hooks/useShapeSync';
+import { useScaleSync } from './hooks/useScaleSync';
 import { RamCacheProvider, useRamCache } from './contexts/RamCacheContext';
 import { savePlanFile } from './utils/storage';
 import { flattenOCG } from './utils/flattenOCG';
@@ -62,7 +64,12 @@ const AppContent: React.FC = () => {
     handleImportConfirmed,
     setShowImportConfirm,
     setPendingImportPath,
+    currentFilePath: projectId,
   } = useProjectManager(isLicensed);
+
+  // Persist every local state change back to D1.
+  useShapeSync(projectId, items);
+  useScaleSync(projectId, projectData);
 
   const historyState = { items, projectData, planSets, totalPages };
 

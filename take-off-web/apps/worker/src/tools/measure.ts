@@ -36,16 +36,18 @@ async function maybeSnap(
   return snapped;
 }
 
+interface AddCommon {
+  project_id: string;
+  page_index: number;
+  item_id?: string;
+  shape_id?: string;
+  name?: string;
+  color?: string;
+}
+
 export async function addArea(
   env: Env,
-  args: {
-    project_id: string;
-    page_index: number;
-    points: Point[];
-    item_id?: string;
-    name?: string;
-    snap?: boolean;
-  }
+  args: AddCommon & { points: Point[]; snap?: boolean }
 ): Promise<Shape> {
   const points = await maybeSnap(env, args.project_id, args.page_index, args.points, args.snap);
   const page = await getPage(env.DB, args.project_id, args.page_index);
@@ -65,11 +67,11 @@ export async function addArea(
     label: args.name ?? 'Area',
     type: ToolType.AREA,
     unit: areaUnit,
-    color: '#10b981',
+    color: args.color ?? '#10b981',
   });
 
   const shape: Shape & { itemId: string } = {
-    id: crypto.randomUUID(),
+    id: args.shape_id ?? crypto.randomUUID(),
     itemId: item.id,
     pageIndex: args.page_index,
     points,
@@ -83,13 +85,7 @@ export async function addArea(
 
 export async function addLinear(
   env: Env,
-  args: {
-    project_id: string;
-    page_index: number;
-    points: Point[];
-    item_id?: string;
-    snap?: boolean;
-  }
+  args: AddCommon & { points: Point[]; snap?: boolean }
 ): Promise<Shape> {
   const points = await maybeSnap(env, args.project_id, args.page_index, args.points, args.snap);
   const page = await getPage(env.DB, args.project_id, args.page_index);
@@ -101,14 +97,14 @@ export async function addLinear(
 
   const item = await getOrCreateItem(env.DB, args.project_id, {
     id: args.item_id,
-    label: 'Linear',
+    label: args.name ?? 'Linear',
     type: ToolType.LINEAR,
     unit: scale.unit,
-    color: '#3b82f6',
+    color: args.color ?? '#3b82f6',
   });
 
   const shape: Shape & { itemId: string } = {
-    id: crypto.randomUUID(),
+    id: args.shape_id ?? crypto.randomUUID(),
     itemId: item.id,
     pageIndex: args.page_index,
     points,
@@ -122,23 +118,18 @@ export async function addLinear(
 
 export async function addCount(
   env: Env,
-  args: {
-    project_id: string;
-    page_index: number;
-    points: Point[];
-    item_id?: string;
-  }
+  args: AddCommon & { points: Point[] }
 ): Promise<Shape> {
   const item = await getOrCreateItem(env.DB, args.project_id, {
     id: args.item_id,
-    label: 'Count',
+    label: args.name ?? 'Count',
     type: ToolType.COUNT,
     unit: Unit.EACH,
-    color: '#ef4444',
+    color: args.color ?? '#ef4444',
   });
 
   const shape: Shape & { itemId: string } = {
-    id: crypto.randomUUID(),
+    id: args.shape_id ?? crypto.randomUUID(),
     itemId: item.id,
     pageIndex: args.page_index,
     points: args.points,
@@ -152,14 +143,7 @@ export async function addCount(
 
 export async function addArc(
   env: Env,
-  args: {
-    project_id: string;
-    page_index: number;
-    start: Point;
-    end: Point;
-    bulge: number;
-    item_id?: string;
-  }
+  args: AddCommon & { start: Point; end: Point; bulge: number }
 ): Promise<Shape> {
   const page = await getPage(env.DB, args.project_id, args.page_index);
   const scale = parseScale(page);
@@ -170,14 +154,14 @@ export async function addArc(
 
   const item = await getOrCreateItem(env.DB, args.project_id, {
     id: args.item_id,
-    label: 'Arc',
+    label: args.name ?? 'Arc',
     type: ToolType.ARC,
     unit: scale.unit,
-    color: '#8b5cf6',
+    color: args.color ?? '#8b5cf6',
   });
 
   const shape: Shape & { itemId: string } = {
-    id: crypto.randomUUID(),
+    id: args.shape_id ?? crypto.randomUUID(),
     itemId: item.id,
     pageIndex: args.page_index,
     points: [args.start, args.end],

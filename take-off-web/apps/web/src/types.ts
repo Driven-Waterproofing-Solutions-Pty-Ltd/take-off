@@ -118,6 +118,7 @@ export interface TakeoffItem {
   visible?: boolean; // Controls global visibility (legacy support)
   hiddenPages?: number[]; // List of page indices where this item is hidden
   depth?: number; // Depth in feet for volume calculations (VOLUME type only)
+  assemblyId?: string; // Linked memory-layer assembly id (web port)
 }
 
 export interface ItemTemplate {
