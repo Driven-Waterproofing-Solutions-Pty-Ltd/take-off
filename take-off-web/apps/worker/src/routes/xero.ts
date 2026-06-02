@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Env } from '../env';
 import { tools } from '@takeoff/shared';
 import { pushToXero, syncXeroContacts } from '../tools/xero';
-import { requireAuth } from '../lib/auth';
+import { requireAuth, requireAdmin } from '../lib/auth';
 import { encryptString, signOauthState, verifyOauthState } from '../lib/crypto';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -26,18 +26,19 @@ function getTokenSecret(env: Env): string {
   return env.XERO_TOKEN_KEY;
 }
 
-// /oauth/start REQUIRES an authenticated session (browser cookie, MCP token,
-// or Cf-Access) to prevent an unauthenticated visitor from overwriting the
-// org's xero_tokens row by completing a Xero connection against their own
-// tenant. The CSRF state cookie defends against forged callbacks but doesn't
-// prove the starter was an admin.
+// /oauth/start REQUIRES an ADMIN session: the org's xero_tokens row is a
+// single, shared connection. If any authenticated member could re-run the
+// flow, they could repoint the integration at their own Xero tenant, and
+// every later quote/invoice push would silently land there. We also reject
+// MCP tokens — Xero's consent screen needs a real browser, so server-to-
+// server "admin" doesn't apply to this endpoint.
 //
 // /oauth/callback is hit by Xero's redirect (no app session header), so it
 // stays public — CSRF is handled by the HMAC-signed state cookie set in
-// /oauth/start. Combined: only an authenticated user can initiate the flow,
-// and only their browser can complete it.
+// /oauth/start. Combined: only an admin user can initiate the flow, and
+// only their browser can complete it.
 
-app.get('/oauth/start', requireAuth, async (c) => {
+app.get('/oauth/start', requireAdmin, async (c) => {
   if (!c.env.XERO_CLIENT_ID || !c.env.XERO_REDIRECT_URI) {
     return c.json({ error: 'Xero is not configured' }, 500);
   }

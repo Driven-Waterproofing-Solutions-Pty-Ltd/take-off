@@ -19,6 +19,7 @@ import {
   PresetScale,
   getAreaUnitFromLinear,
   getVolumeUnitFromLinear,
+  convertLinearUnit,
   isPointInPolygon,
   calculatePolygonArea,
   calculatePolylineLength,
@@ -239,6 +240,15 @@ const AppContent: React.FC = () => {
   };
 
   const handleUpload = async (files: File[], names: string[]) => {
+    // Sync hooks (planSet/shape/scale) all short-circuit when projectId is
+    // null, so uploading into an empty workspace would create local-only
+    // state that's silently lost on reload. Force project creation first.
+    if (!projectId) {
+      setShowUploadModal(false);
+      addToast('Create or open a project before uploading plans', 'error');
+      handleNewProjectRequest();
+      return;
+    }
     setShowUploadModal(false);
     setIsUploadingPdf(true);
     setIsUploadingPdf(true);
@@ -717,6 +727,13 @@ const AppContent: React.FC = () => {
       if (!draft.projectData[pageIndex]) {
         draft.projectData[pageIndex] = { scale: { isSet: false, pixelsPerUnit: 1, unit: Unit.FEET } };
       }
+      // Capture the previous linear unit BEFORE we overwrite the scale, so we
+      // can convert any per-item depth (stored in the old scale's unit) into
+      // the new unit below. Without this, a 1 ft depth survived a ft→m
+      // recalibration as "1 m" and quadrupled the resulting cu m volume.
+      const prevUnit = draft.projectData[pageIndex].scale.isSet
+        ? draft.projectData[pageIndex].scale.unit
+        : null;
       draft.projectData[pageIndex].scale = { isSet: true, pixelsPerUnit: ppu, unit };
 
       // Recalibration: existing shape values + item units were computed
@@ -747,6 +764,12 @@ const AppContent: React.FC = () => {
           if (item.type === ToolType.AREA || item.type === ToolType.FILL) item.unit = areaUnit;
           else if (item.type === ToolType.VOLUME) item.unit = volumeUnit;
           else if (item.type === ToolType.LINEAR || item.type === ToolType.ARC || item.type === ToolType.SEGMENT || item.type === ToolType.DIMENSION) item.unit = unit;
+          // Convert VOLUME depth into the new linear unit before folding it
+          // into totalValue; otherwise an item depth of "1" silently changes
+          // meaning (1 ft → 1 m) and over/under-states the cubic quantity.
+          if (item.type === ToolType.VOLUME && item.depth != null && prevUnit && prevUnit !== unit) {
+            item.depth = convertLinearUnit(item.depth, prevUnit, unit);
+          }
           // totalValue mirrors calculateTotalValue: shape sum, with depth fold for VOLUME.
           const baseValue = item.shapes.reduce(
             (sum, s) => (s.deduction ? sum - s.value : sum + s.value),

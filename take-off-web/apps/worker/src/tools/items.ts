@@ -24,8 +24,25 @@ export async function createItem(
 ): Promise<TakeoffItem> {
   const id = args.id ?? crypto.randomUUID();
   const now = Date.now();
+  // Idempotent on client-supplied id: if useShapeSync retries after a network
+  // failure (where the original INSERT may have committed but the response was
+  // lost), the second call must not throw a PK constraint — that would block
+  // the retry loop forever and strand the item's child shapes. INSERT OR
+  // IGNORE means a duplicate id is a no-op; the follow-up SELECT returns the
+  // row that's already there. We still defend against cross-project id reuse
+  // by scoping the lookup to (id, project_id) and treating a mismatch as an
+  // error (UUID collisions across projects are statistically impossible —
+  // this guards against malicious or buggy callers).
+  const existing = (await env.DB.prepare(
+    'SELECT project_id FROM items WHERE id = ?'
+  )
+    .bind(id)
+    .first()) as { project_id: string } | null;
+  if (existing && existing.project_id !== args.project_id) {
+    throw new Error(`Item ${id} already exists in a different project`);
+  }
   await env.DB.prepare(
-    `INSERT INTO items
+    `INSERT OR IGNORE INTO items
        (id, project_id, label, type, color, unit, total_value, group_name,
         properties_json, price, formula, sub_items_json, visible, depth,
         hidden_pages_json, assembly_id, created_at, updated_at)

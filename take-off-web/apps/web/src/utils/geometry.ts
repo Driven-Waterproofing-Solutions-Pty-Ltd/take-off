@@ -221,14 +221,41 @@ export const getAreaUnitFromLinear = (unit: Unit): Unit => {
   }
 };
 
+// Linear-unit conversion factors (meters per unit). Only linear units are
+// included — calling convertLinearUnit on a square/cubic unit returns the
+// input unchanged.
+const LINEAR_TO_METERS: Partial<Record<Unit, number>> = {
+  [Unit.MILLIMETERS]: 0.001,
+  [Unit.CENTIMETERS]: 0.01,
+  [Unit.METERS]: 1,
+  [Unit.KILOMETERS]: 1000,
+  [Unit.INCHES]: 0.0254,
+  [Unit.FEET]: 0.3048,
+  [Unit.YARDS]: 0.9144,
+  [Unit.MILES]: 1609.344,
+};
+
+export const convertLinearUnit = (value: number, from: Unit, to: Unit): number => {
+  if (from === to) return value;
+  const a = LINEAR_TO_METERS[from];
+  const b = LINEAR_TO_METERS[to];
+  if (a === undefined || b === undefined) return value;
+  return (value * a) / b;
+};
+
 export const getVolumeUnitFromLinear = (unit: Unit): Unit => {
   switch (unit) {
     case Unit.FEET: return Unit.CU_FT;
     case Unit.INCHES: return Unit.CU_IN;
     case Unit.YARDS: return Unit.CU_YD;
+    // Without these, VOLUME items on mile/km-calibrated pages would keep the
+    // linear unit on a cubic quantity (legends/quotes would label area×depth
+    // as a length).
+    case Unit.MILES: return Unit.CU_MI;
     case Unit.METERS: return Unit.CU_M;
     case Unit.CENTIMETERS: return Unit.CU_CM;
     case Unit.MILLIMETERS: return Unit.CU_MM;
+    case Unit.KILOMETERS: return Unit.CU_KM;
     default: return unit;
   }
 };

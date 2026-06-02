@@ -61,3 +61,29 @@ export const requireAuth: MiddlewareHandler<{ Bindings: Env; Variables: { auth: 
     c.set('auth', auth);
     await next();
   };
+
+// Gate for operations that mutate org-wide integration state (currently:
+// reconnecting Xero — a member user could otherwise repoint the shared
+// xero_tokens row at their own tenant, and all subsequent quote/invoice
+// pushes would silently flow there).
+//
+// MCP tokens are rejected: re-auth needs a real browser to complete the
+// Xero consent flow, so impersonating a "user" via a server-to-server
+// token is meaningless here. If a future need arises (e.g. machine-only
+// admin actions) we can add an mcp_clients.role column and re-evaluate.
+export const requireAdmin: MiddlewareHandler<{ Bindings: Env; Variables: { auth: AuthContext } }> =
+  async (c, next) => {
+    const auth = await authenticate(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    if (auth.via !== 'session') {
+      return c.json({ error: 'admin session required' }, 403);
+    }
+    const row = (await c.env.DB.prepare('SELECT role FROM users WHERE id = ?')
+      .bind(auth.identity)
+      .first()) as { role: string } | null;
+    if (row?.role !== 'admin') {
+      return c.json({ error: 'admin role required' }, 403);
+    }
+    c.set('auth', auth);
+    await next();
+  };

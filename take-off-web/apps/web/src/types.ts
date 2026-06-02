@@ -44,11 +44,13 @@ export enum Unit {
   CU_FT = 'cu ft',
   CU_IN = 'cu in',
   CU_YD = 'cu yd',
+  CU_MI = 'cu mi',
 
   // Volume Metric
   CU_M = 'cu m',
   CU_CM = 'cu cm',
   CU_MM = 'cu mm',
+  CU_KM = 'cu km',
   LITERS = 'L',
   MILLILITERS = 'mL',
 
