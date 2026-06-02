@@ -2494,6 +2494,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                             if (parentShape && !parentShape.deduction) {
                                                 const childCutouts = item.shapes.filter(other =>
                                                     other.deduction &&
+                                                    other.pageIndex === parentShape.pageIndex && // same page only
                                                     !processedIds.has(other.id) &&
                                                     other.points.length > 0 &&
                                                     isPointInPolygon(other.points[0], parentShape.points)
