@@ -710,7 +710,14 @@ const drawNativeLegend = (
     items.forEach((item, idx) => {
         const pageShapes = item.shapes.filter(s => s.pageIndex === globalIdx);
         const raw = pageShapes.reduce((sum, s) => s.deduction ? sum - s.value : sum + s.value, 0);
-        const qty = evaluateFormula(item, raw);
+        // VOLUME shapes store polygon area; multiply by item.depth so the
+        // exported legend shows cubic quantity, matching the canvas legend
+        // and the server quote. Without this, the printed legend would
+        // understate the volume and label an area number with the cubic unit.
+        const base = item.type === ToolType.VOLUME && item.depth
+            ? raw * item.depth
+            : raw;
+        const qty = evaluateFormula(item, base);
 
         const label = item.label.length > 18 ? item.label.substring(0, 16) + '..' : item.label;
         const qtyText = `${qty.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${item.unit}`;

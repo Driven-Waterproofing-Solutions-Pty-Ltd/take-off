@@ -753,44 +753,65 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     const [vectorRetryTick, setVectorRetryTick] = useState(0);
     useEffect(() => {
         if (!projectId || cachedVectors.length === 0) return;
-        const failed: string[] = [];
-        for (const page of cachedVectors) {
-            const globalIdx = planStartPageIndex + page.pageIndex;
-            const dedupKey = `${projectId}:${globalIdx}`;
-            if (uploadedVectorPages.current.has(dedupKey)) continue;
 
-            const vertices: Point[] = [];
-            const segments: { a: Point; b: Point }[] = [];
-            for (const path of page.paths) {
-                for (let i = 0; i < path.points.length; i++) {
-                    vertices.push(path.points[i]);
-                    if (i + 1 < path.points.length) {
-                        segments.push({ a: path.points[i], b: path.points[i + 1] });
+        let cancelled = false;
+        let retryHandle: ReturnType<typeof setTimeout> | null = null;
+
+        const uploadPending = async () => {
+            const promises: Promise<boolean>[] = [];
+            for (const page of cachedVectors) {
+                const globalIdx = planStartPageIndex + page.pageIndex;
+                const dedupKey = `${projectId}:${globalIdx}`;
+                if (uploadedVectorPages.current.has(dedupKey)) continue;
+
+                const vertices: Point[] = [];
+                const segments: { a: Point; b: Point }[] = [];
+                for (const path of page.paths) {
+                    for (let i = 0; i < path.points.length; i++) {
+                        vertices.push(path.points[i]);
+                        if (i + 1 < path.points.length) {
+                            segments.push({ a: path.points[i], b: path.points[i + 1] });
+                        }
+                    }
+                    if (path.closed && path.points.length > 2) {
+                        segments.push({
+                            a: path.points[path.points.length - 1],
+                            b: path.points[0],
+                        });
                     }
                 }
-                if (path.closed && path.points.length > 2) {
-                    segments.push({
-                        a: path.points[path.points.length - 1],
-                        b: path.points[0],
-                    });
-                }
+
+                promises.push(
+                    api.vectorCache.upload(projectId, globalIdx, { vertices, segments })
+                        .then(() => { uploadedVectorPages.current.add(dedupKey); return true; })
+                        .catch((e) => {
+                            console.warn('vector-cache upload failed', dedupKey, e);
+                            return false;
+                        })
+                );
             }
 
-            api.vectorCache.upload(projectId, globalIdx, { vertices, segments })
-                .then(() => uploadedVectorPages.current.add(dedupKey))
-                .catch((e) => {
-                    failed.push(dedupKey);
-                    console.warn('vector-cache upload failed', dedupKey, e);
-                });
-        }
-        // If any upload promise rejected this pass, schedule a retry.
-        if (failed.length > 0) {
-            const handle = setTimeout(
-                () => setVectorRetryTick((t) => t + 1),
-                5_000
-            );
-            return () => clearTimeout(handle);
-        }
+            // Await ALL settled uploads before deciding whether to schedule
+            // a retry. The previous version checked `failed.length` synchronously
+            // — before any rejection had a chance to populate it — so failures
+            // never scheduled a retry.
+            const results = await Promise.all(promises);
+            if (cancelled) return;
+            const anyFailed = results.some((ok) => !ok);
+            if (anyFailed) {
+                retryHandle = setTimeout(
+                    () => setVectorRetryTick((t) => t + 1),
+                    5_000
+                );
+            }
+        };
+
+        uploadPending();
+
+        return () => {
+            cancelled = true;
+            if (retryHandle) clearTimeout(retryHandle);
+        };
     }, [cachedVectors, projectId, planStartPageIndex, vectorRetryTick]);
 
     // Render Page with MuPDF
@@ -1018,7 +1039,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         // Use capture: true to ensure this handler runs before global shortcuts
         window.addEventListener('keydown', handleKeyDown, { capture: true });
         return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
-    }, [selectedShape, selectedItems, drawingPoints, showScaleModal, activeTool, onStopRecording, contextMenu, selectedVertex]);
+    }, [selectedShape, selectedItems, drawingPoints, showScaleModal, activeTool, onStopRecording, contextMenu, selectedVertex, clipboardItems, items]);
 
     useEffect(() => {
         if (activeTool !== ToolType.SELECT) {
@@ -1407,7 +1428,10 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             return;
         }
 
-        const measurementTools = [ToolType.LINEAR, ToolType.ARC, ToolType.AREA, ToolType.VOLUME, ToolType.FILL, ToolType.SEGMENT, ToolType.DIMENSION, ToolType.NOTE];
+        // NOTE + COUNT are annotations / per-shape unit measurements that
+        // don't need a calibrated page (addNote / addCount on the worker
+        // skip the scale check too). Only real measurement tools require it.
+        const measurementTools = [ToolType.LINEAR, ToolType.ARC, ToolType.AREA, ToolType.VOLUME, ToolType.FILL, ToolType.SEGMENT, ToolType.DIMENSION];
         if (measurementTools.includes(activeTool) && !scaleInfo.isSet) {
             addToast("Scale is not set. Please calibrate scale first.", 'error');
             return;

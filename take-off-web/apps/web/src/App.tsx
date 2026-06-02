@@ -710,7 +710,25 @@ const AppContent: React.FC = () => {
   }, [addToast]);
 
   useKeyboardShortcuts({
-    undo, redo, setTool: (t) => { setActiveTool(t); if (t === ToolType.SELECT) setActiveTakeoffId(null); },
+    undo, redo, setTool: (t) => {
+      if (t === ToolType.SELECT) {
+        setActiveTool(ToolType.SELECT);
+        setActiveTakeoffId(null);
+        return;
+      }
+      // If there's already an ACTIVE item AND its type matches the shortcut,
+      // continue measuring under it (matches the toolbar's "resume" semantics).
+      // Otherwise route through handleInitiateTool so the New Item modal runs
+      // and the resulting shape has a compatible item to land on. Without
+      // this, a number-key shortcut would either drop the shape (no active
+      // item) or record it under the wrong item type.
+      const activeItem = activeTakeoffId ? items.find(i => i.id === activeTakeoffId) : null;
+      if (activeItem && activeItem.type === t) {
+        setActiveTool(t);
+      } else {
+        handleInitiateTool(t);
+      }
+    },
     toggleDeductionMode: () => { if (activeTakeoffId) setIsDeductionMode(p => !p); },
     deleteSelectedItem: () => {
       if (activeTakeoffId) {
