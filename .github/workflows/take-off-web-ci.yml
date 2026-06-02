@@ -132,7 +132,10 @@ jobs:
 
       - name: start web (background)
         run: |
-          pnpm --filter @takeoff/web dev > web.log 2>&1 &
+          # Vite binds to "localhost" by default which on the runner resolves
+          # to IPv6 ::1; force IPv4 so the curl healthcheck (and Playwright,
+          # which goes through 127.0.0.1) can reach it.
+          pnpm --filter @takeoff/web exec vite --host 127.0.0.1 > web.log 2>&1 &
           echo $! > web.pid
           for i in $(seq 1 30); do
             sleep 1
