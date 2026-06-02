@@ -1,0 +1,52 @@
+swagger: '2.0'
+info:
+  title: Driven Takeoff MCP
+  version: 1.0.0
+  description: |
+    Model Context Protocol server for the Driven Waterproofing takeoff
+    platform. Exposes 14 tools for plan measurement (areas / lines / counts
+    / arcs), vector snapping, customer + assembly recall, quote building,
+    and pushing DRAFT quotes/invoices to Xero.
+
+    Xero pushes are hard-coded to Status: DRAFT — nothing is auto-sent.
+    Reviewing the draft in Xero and clicking Send is always a human action.
+
+# Replace if the worker is bound to a different custom domain.
+host: takeoff.drivenwp.com
+basePath: /
+schemes:
+  - https
+consumes:
+  - application/json
+produces:
+  - application/json
+
+paths:
+  /mcp:
+    post:
+      summary: Invoke Driven Takeoff MCP
+      description: |
+        Streamable-HTTP MCP endpoint. JSON-RPC 2.0 body in, JSON-RPC 2.0
+        response out. Use methods: initialize, tools/list, tools/call.
+      operationId: InvokeMCP
+      # Magic property that tells Power Platform this connector is an MCP
+      # surface, not a plain REST endpoint. Without it Copilot Studio won't
+      # treat the operation as an agent tool source.
+      x-ms-agentic-protocol: mcp-streamable-1.0
+      responses:
+        '200':
+          description: JSON-RPC response
+
+securityDefinitions:
+  # The Driven Takeoff worker accepts `Authorization: Bearer <token>` where
+  # the token is minted by POST /admin/mcp/tokens (gated by the bootstrap
+  # secret). When connecting in Copilot Studio, paste the full string
+  # `Bearer <token>` into the API-key field — Power Apps puts the value
+  # verbatim into the Authorization header.
+  api_key:
+    type: apiKey
+    in: header
+    name: Authorization
+
+security:
+  - api_key: []
