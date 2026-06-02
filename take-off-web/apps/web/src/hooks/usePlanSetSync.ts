@@ -6,18 +6,15 @@ import { mupdfController } from '../utils/mupdfController';
 // Upload newly-added PlanSet PDFs to R2 + register them in D1.
 // First render after a projectId change primes snapshots without uploading
 // (hydration path: those planSets already live on the server).
-//
-// PDF metadata stored on the planSet so we can re-resolve the R2 key later:
-//   (planSet as any).__r2_key  — set after successful register
-
-interface PlanSetWithR2 extends PlanSet {
-  __r2_key?: string;
-}
 
 export function usePlanSetSync(projectId: string | null, planSets: PlanSet[]): void {
   const lastProjectId = useRef<string | null>(null);
+  // Per-project dedup state. `seen` covers planSets we don't need to (re)upload;
+  // `r2Keys` remembers the R2 file_key we got back for each upload so we don't
+  // try to mutate the (frozen) Immer-backed PlanSet to stash it.
   const seen = useRef<Set<string>>(new Set());
   const inflight = useRef<Set<string>>(new Set());
+  const r2Keys = useRef<Map<string, string>>(new Map());
   // Same retry-loop pattern as useScaleSync / useShapeSync. A transient R2
   // upload or /api/projects/:id/pdfs failure should not strand the PDF in
   // local-only state; bumping tick on every inflight completion wakes the
@@ -31,20 +28,21 @@ export function usePlanSetSync(projectId: string | null, planSets: PlanSet[]): v
     if (projectId !== lastProjectId.current) {
       seen.current = new Set(planSets.map((p) => p.id));
       inflight.current = new Set();
+      r2Keys.current = new Map();
       lastProjectId.current = projectId;
       return;
     }
 
-    for (const set of planSets as PlanSetWithR2[]) {
+    for (const set of planSets) {
       if (seen.current.has(set.id)) continue;
       if (inflight.current.has(set.id)) continue;
-      if (!set.file) {
-        // No bytes locally and no key on server — nothing we can upload.
+      if (r2Keys.current.has(set.id)) {
+        // Already uploaded earlier in this session — nothing to do.
         seen.current.add(set.id);
         continue;
       }
-      if (set.__r2_key) {
-        // Already uploaded (e.g. re-add from same session).
+      if (!set.file) {
+        // No bytes locally and no key on server — nothing we can upload.
         seen.current.add(set.id);
         continue;
       }
@@ -76,7 +74,7 @@ export function usePlanSetSync(projectId: string | null, planSets: PlanSet[]): v
             start_page_index: set.startPageIndex,
           });
 
-          set.__r2_key = file_key;
+          r2Keys.current.set(set.id, file_key);
           seen.current.add(set.id);
         } catch (e) {
           console.error('sync: planSet upload failed', set.id, e);

@@ -789,6 +789,14 @@ const AppContent: React.FC = () => {
         setActiveTakeoffId(null);
         return;
       }
+      // SCALE is a calibration mode, not a measurement item — mirror the
+      // toolbar's Calibrate Scale action, which sets the tool directly. If
+      // we routed this through handleInitiateTool, the New Item modal would
+      // open and a bogus SCALE-typed item could be created.
+      if (t === ToolType.SCALE) {
+        setActiveTool(ToolType.SCALE);
+        return;
+      }
       // If there's already an ACTIVE item AND its type matches the shortcut,
       // continue measuring under it (matches the toolbar's "resume" semantics).
       // Otherwise route through handleInitiateTool so the New Item modal runs

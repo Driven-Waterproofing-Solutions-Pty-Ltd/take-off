@@ -278,21 +278,33 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
                       deduction: dedupe,
                     })
                   : item.type === ToolType.ARC && shape.points.length >= 2
-                    ? api.shapes.arc({
-                        project_id: projectId,
-                        page_index: shape.pageIndex,
-                        start: shape.points[0],
-                        end: shape.points[1],
-                        // Arcs drawn in the canvas finalize with bulges = []
-                        // (a polyline of straight chords). Fall back to bulge
-                        // = 0 so the geometry persists; the worker treats a
-                        // zero-bulge arc as a straight segment with the same
-                        // chord length.
-                        bulge: shape.bulges?.[0] ?? 0,
-                        item_id: item.id,
-                        shape_id: shape.id,
-                        deduction: dedupe,
-                      })
+                    ? // Multi-vertex ARCs in the canvas are polylines of straight
+                      // chords (bulges = []). The arc endpoint only persists a
+                      // single segment, which truncated everything past the
+                      // first chord on reload. Route polyline arcs through the
+                      // linear endpoint so all vertices survive; single-segment
+                      // arcs with a bulge still go through /arc to preserve
+                      // curvature.
+                      shape.points.length > 2
+                      ? api.shapes.linear({
+                          project_id: projectId,
+                          page_index: shape.pageIndex,
+                          points: shape.points,
+                          item_id: item.id,
+                          shape_id: shape.id,
+                          deduction: dedupe,
+                          snap: false,
+                        })
+                      : api.shapes.arc({
+                          project_id: projectId,
+                          page_index: shape.pageIndex,
+                          start: shape.points[0],
+                          end: shape.points[1],
+                          bulge: shape.bulges?.[0] ?? 0,
+                          item_id: item.id,
+                          shape_id: shape.id,
+                          deduction: dedupe,
+                        })
                     : Promise.resolve(null);
         promise
           .then(() => shapeSnapshots.current.set(shapeId, nextSnap))

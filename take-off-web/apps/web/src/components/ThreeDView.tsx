@@ -33,7 +33,11 @@ const Shape3D: React.FC<{ shape: Shape; itemType: ToolType; color: string; depth
   // moved to those same coordinates, displacing solids one extra centroid
   // away from the plan texture.
   const geometry = React.useMemo(() => {
-    if ((itemType === ToolType.AREA || itemType === ToolType.VOLUME) && shape.points.length >= 3) {
+    // FILL is an area polygon (auto-detected enclosed region) — render it as
+    // an extruded slab just like AREA. Without this branch, fill measurements
+    // fell through to the tiny BoxGeometry fallback and showed misleading
+    // 10×10 boxes at the centroid instead of their true footprint.
+    if ((itemType === ToolType.AREA || itemType === ToolType.VOLUME || itemType === ToolType.FILL) && shape.points.length >= 3) {
       const points = shape.points.map(p => new THREE.Vector2(p.x - centroid.x, p.y - centroid.y));
       const shape3D = new THREE.Shape(points);
       return new THREE.ExtrudeGeometry(shape3D, { depth: itemType === ToolType.VOLUME ? depth : 0.1, bevelEnabled: false });
@@ -148,6 +152,11 @@ const ThreeDView: React.FC<ThreeDViewProps> = ({ items, onBack, planSets, pageIn
         {items.map((item, itemIndex) => (
           item.shapes
             .filter(shape => pageIndex === undefined || shape.pageIndex === pageIndex)
+            // Skip deductions — cutouts should subtract from the parent solid,
+            // not appear as standalone slabs. Real CSG (e.g. three-bvh-csg) is
+            // out of scope here; rendering nothing is strictly better than
+            // double-counting the cutout as an extra solid.
+            .filter(shape => !shape.deduction)
             .map((shape, shapeIndex) => (
             <Shape3D
               key={`${itemIndex}-${shapeIndex}`}

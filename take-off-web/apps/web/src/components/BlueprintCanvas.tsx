@@ -17,6 +17,7 @@ import { useRamCache } from '../contexts/RamCacheContext';
 import { SearchHit } from '../utils/mupdfController';
 import { PDFDocument } from 'pdf-lib';
 import { api } from '../lib/api';
+import { extractPdfVectorPaths } from '../utils/vectorExtractor';
 
 // Removed html2canvas import as we now use pdf-lib for vector export
 
@@ -192,34 +193,22 @@ const isShapeIntersectingRect = (shape: Shape, rectStart: Point, rectEnd: Point)
     return false;
 };
 
-// Vector extraction functions
-// KNOWN STUB — lifted from the desktop app. pdf-lib doesn't parse content
-// streams into geometry primitives; doing it properly requires either a
-// content-stream walker (e.g. via pdfjs operatorList) or hooking MuPDF's
-// Device API. Until that's wired, this returns empty `paths` for every
-// page, so:
-//   - The vector-cache upload effect below skips pages with no paths
-//     (no point sending zeros to the server).
-//   - Server-side snap_to_vector returns proposed points unchanged when
-//     no cache exists for a page — graceful fallback, not a crash.
-//   - The FILL tool's vector-loop search finds nothing and the existing
-//     fallback (shape-loop tracer over user-drawn measurements) takes over.
-// Replacing this with real extraction is tracked separately. The
-// surrounding plumbing — schema, worker route, retry effect, client API
-// — is correct and ready to consume non-empty data the moment it lands.
+// Vector extraction: walk pdf.js operator lists per page, track the CTM, and
+// emit polylines/rects in content-pixel space (i.e. RENDER_SCALE × PDF points).
+// Output is consumed by the cache-upload effect below and round-trips into
+// `pages.vector_cache_json`, which powers the server-side snap_to_vector tool
+// used by REST + MCP.
 const extractVectorPaths = async (file: File): Promise<CachedVectorData[]> => {
-    const arrayBuffer = await file.arrayBuffer();
-    const pdfDoc = await PDFDocument.load(arrayBuffer);
-    const vectorData: CachedVectorData[] = [];
-    for (let i = 0; i < pdfDoc.getPageCount(); i++) {
-        const page = pdfDoc.getPage(i);
-        vectorData.push({
-            pageIndex: i,
-            paths: [],
-            bounds: { x: 0, y: 0, width: page.getWidth(), height: page.getHeight() },
-        });
-    }
-    return vectorData;
+    const pages = await extractPdfVectorPaths(file, RENDER_SCALE);
+    return pages.map((p) => ({
+        pageIndex: p.pageIndex,
+        paths: p.paths.map((path) => ({
+            type: path.type,
+            points: path.points,
+            closed: path.closed,
+        })),
+        bounds: p.bounds,
+    }));
 };
 
 const renderPdfAsImage = async (file: File): Promise<string> => {
@@ -1722,9 +1711,9 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 
         if (item.type === ToolType.SEGMENT || item.type === ToolType.LINEAR || item.type === ToolType.ARC || item.type === ToolType.DIMENSION) {
             newValue = getScaledValue(calculatePolylineLength(pdfPoints), ppu);
-        } else if (item.type === ToolType.AREA) {
-            newValue = getScaledArea(calculatePolygonArea(pdfPoints), ppu);
-        } else if (item.type === ToolType.VOLUME) {
+        } else if (item.type === ToolType.AREA || item.type === ToolType.VOLUME || item.type === ToolType.FILL) {
+            // FILL is a polygon like AREA; without this branch dragging or
+            // vertex-editing a fill shape silently zeroes its area.
             newValue = getScaledArea(calculatePolygonArea(pdfPoints), ppu);
         } else if (item.type === ToolType.COUNT) {
             newValue = newPoints.length;
