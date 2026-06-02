@@ -16,6 +16,7 @@ import { mupdfController } from '../utils/mupdfController';
 import { useRamCache } from '../contexts/RamCacheContext';
 import { SearchHit } from '../utils/mupdfController';
 import { PDFDocument } from 'pdf-lib';
+import { api } from '../lib/api';
 
 // Removed html2canvas import as we now use pdf-lib for vector export
 
@@ -24,6 +25,19 @@ export interface BlueprintCanvasRef {
 }
 
 interface BlueprintCanvasProps {
+    /**
+     * Project id (from useProjectManagerWeb). When set, the canvas uploads
+     * extracted PDF vector geometry to the worker so server-side
+     * snap_to_vector (used by REST + MCP) can snap proposed points to
+     * real PDF vertices.
+     */
+    projectId?: string | null;
+    /**
+     * Plan-set start page index — converts the local page index returned
+     * by mupdfController into a project-wide global index when uploading
+     * vector caches.
+     */
+    planStartPageIndex?: number;
     file: File | null;
     fileId: string;
     localPageIndex: number;  // The index within the specific file (0-based)
@@ -350,6 +364,8 @@ const getPasteAsNewItemsPayload = (
 };
 
 const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
+    projectId,
+    planStartPageIndex = 0,
     file,
     fileId,
     localPageIndex,
@@ -392,6 +408,8 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     const konvaLayerRef = useRef<Konva.Layer>(null); // For Konva Shapes
     const legendContainerRef = useRef<HTMLDivElement>(null); // For Legend (CSS Transform, Top Layer)
     const loupeRef = useRef<HTMLCanvasElement>(null);
+    // Dedup vector-cache uploads: `${projectId}:${globalPageIndex}` once sent.
+    const uploadedVectorPages = useRef<Set<string>>(new Set());
 
     const [contentWidth, setContentWidth] = useState(0);
     const [originalPdfWidth, setOriginalPdfWidth] = useState(0);
@@ -678,7 +696,43 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 // Extract vector data and render image
                 const vectorData = await extractVectorPaths(file);
                 setCachedVectors(vectorData);
-                
+
+                // Push each page's geometry to the worker so server-side
+                // snap_to_vector (used by REST + MCP tools/call add_*) can
+                // snap proposed points to real PDF vertices/segments.
+                // Without this upload the server falls back to "no snap" and
+                // AI-driven measurements come out less precise than the
+                // canvas implies. Dedup by (projectId, globalPageIndex) so
+                // we don't re-upload when switching back to a loaded plan.
+                if (projectId) {
+                    for (const page of vectorData) {
+                        const globalIdx = planStartPageIndex + page.pageIndex;
+                        const dedupKey = `${projectId}:${globalIdx}`;
+                        if (uploadedVectorPages.current.has(dedupKey)) continue;
+                        uploadedVectorPages.current.add(dedupKey);
+                        const vertices: Point[] = [];
+                        const segments: { a: Point; b: Point }[] = [];
+                        for (const path of page.paths) {
+                            for (let i = 0; i < path.points.length; i++) {
+                                vertices.push(path.points[i]);
+                                if (i + 1 < path.points.length) {
+                                    segments.push({ a: path.points[i], b: path.points[i + 1] });
+                                }
+                            }
+                            if (path.closed && path.points.length > 2) {
+                                segments.push({
+                                    a: path.points[path.points.length - 1],
+                                    b: path.points[0],
+                                });
+                            }
+                        }
+                        api.vectorCache.upload(projectId, globalIdx, { vertices, segments }).catch((e) => {
+                            uploadedVectorPages.current.delete(dedupKey);
+                            console.warn('vector-cache upload failed', dedupKey, e);
+                        });
+                    }
+                }
+
                 const imageData = await renderPdfAsImage(file);
                 setPdfImage(imageData);
 

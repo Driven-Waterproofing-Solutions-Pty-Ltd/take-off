@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { TakeoffItem, Shape } from '../types';
 import { ToolType } from '../types';
 import { api } from '../lib/api';
@@ -109,6 +109,15 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
   const inflight = useRef<Map<string, SyncOp>>(new Map());
   const lastProjectId = useRef<string | null>(null);
 
+  // Refs can't trigger a re-render on their own — bumping this tick on every
+  // completed in-flight op forces the effect to run again so:
+  //  (a) shapes deferred while their parent item was creating get processed,
+  //  (b) work that failed on a transient prerequisite (e.g. shape POST
+  //      arriving before the scale POST) gets retried instead of getting
+  //      stuck in local state until something else nudges items.
+  const [tick, setTick] = useState(0);
+  const retry = () => setTick((t) => t + 1);
+
   useEffect(() => {
     if (!projectId) return;
 
@@ -160,13 +169,17 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
             group: item.group,
             visible: item.visible,
             depth: item.depth,
+            assembly_id: item.assemblyId, // P1 fix: preserve assembly link
           })
           .catch((e) => {
             // If create fails, drop the snapshot so the next pass retries.
             itemSnapshots.current.delete(itemId);
             console.error('sync: create item failed', itemId, e);
           })
-          .finally(() => inflight.current.delete(`item:${itemId}`));
+          .finally(() => {
+            inflight.current.delete(`item:${itemId}`);
+            retry(); // wake the effect so child shapes deferred for this item run
+          });
       } else if (itemChanged(prev, snapshotItem(item))) {
         // Mutated item — PUT it.
         inflight.current.set(`item:${itemId}`, 'updating');
@@ -175,7 +188,10 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
         api.items
           .update(itemId, pickItemPatch(item))
           .catch((e) => console.error('sync: update item failed', itemId, e))
-          .finally(() => inflight.current.delete(`item:${itemId}`));
+          .finally(() => {
+            inflight.current.delete(`item:${itemId}`);
+            retry();
+          });
       }
     }
 
@@ -187,7 +203,10 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
       api.items
         .delete(itemId)
         .catch((e) => console.error('sync: delete item failed', itemId, e))
-        .finally(() => inflight.current.delete(`item:${itemId}`));
+        .finally(() => {
+          inflight.current.delete(`item:${itemId}`);
+          retry();
+        });
     }
 
     // --- SHAPES: create / update / delete --------------------------------
@@ -246,10 +265,18 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
                   : Promise.resolve(null);
         promise
           .catch((e) => {
+            // Drop the snapshot so the next pass retries. A failed create
+            // here is usually a transient "scale isn't synced yet" race —
+            // useScaleSync POSTs the calibration in parallel; the retry()
+            // below wakes the effect once any inflight op completes, by
+            // which point the scale POST may have landed.
             shapeSnapshots.current.delete(shapeId);
             console.error('sync: create shape failed', shapeId, e);
           })
-          .finally(() => inflight.current.delete(`shape:${shapeId}`));
+          .finally(() => {
+            inflight.current.delete(`shape:${shapeId}`);
+            retry();
+          });
       } else if (
         prev.pointsHash !== nextSnap.pointsHash ||
         prev.deduction !== nextSnap.deduction
@@ -259,7 +286,10 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
         api.shapes
           .update(shapeId, { points: shape.points, deduction: shape.deduction })
           .catch((e) => console.error('sync: update shape failed', shapeId, e))
-          .finally(() => inflight.current.delete(`shape:${shapeId}`));
+          .finally(() => {
+            inflight.current.delete(`shape:${shapeId}`);
+            retry();
+          });
       }
     }
 
@@ -278,9 +308,12 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
       api.shapes
         .delete(shapeId)
         .catch((e) => console.error('sync: delete shape failed', shapeId, e))
-        .finally(() => inflight.current.delete(`shape:${shapeId}`));
+        .finally(() => {
+          inflight.current.delete(`shape:${shapeId}`);
+          retry();
+        });
     }
-  }, [projectId, items]);
+  }, [projectId, items, tick]);
 }
 
 export function primeShapeSyncFromServerState(

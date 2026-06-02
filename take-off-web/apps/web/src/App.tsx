@@ -213,7 +213,7 @@ const AppContent: React.FC = () => {
         } else if (set.pages && set.pages.length <= localIdx) {
           pdfPageIndex = localIdx;
         }
-        return { file: set.file, localPageIndex: pdfPageIndex, name: set.name, id: set.id };
+        return { file: set.file, localPageIndex: pdfPageIndex, name: set.name, id: set.id, startPageIndex: set.startPageIndex };
       }
     }
     return null;
@@ -797,6 +797,8 @@ const AppContent: React.FC = () => {
             <BlueprintCanvas
               key={pageIndex}
               ref={canvasRef}
+              projectId={projectId}
+              planStartPageIndex={activePlan?.startPageIndex ?? 0}
               file={activePlan?.file || null}
               fileId={activePlan?.id || ''}
               localPageIndex={activePlan?.localPageIndex || 0}
@@ -818,6 +820,7 @@ const AppContent: React.FC = () => {
               onClose={() => setShowPDFSearch(false)}
               onNavigateToPage={setPageIndex}
               currentPageIndex={pageIndex}
+              activePlanStartPageIndex={activePlan?.startPageIndex ?? 0}
               onHighlightsChange={setSearchHighlights}
               onCurrentHitChange={setCurrentSearchHitIndex}
             />

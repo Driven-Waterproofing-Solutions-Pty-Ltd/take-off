@@ -9,8 +9,17 @@ import { mupdfController, DocumentSearchResult, PageSearchResult, SearchHit } fr
 interface PDFSearchProps {
     isOpen: boolean;
     onClose: () => void;
+    /** Global page index callback (App.tsx tracks pages across all plan sets). */
     onNavigateToPage: (pageIndex: number) => void;
+    /** Global page index of the page currently shown on the canvas. */
     currentPageIndex: number;
+    /**
+     * Start page index of the plan set the search is running against.
+     * mupdfController only has the currently-loaded PDF, so the page indexes
+     * it returns are local to that PDF; we offset by this value to convert
+     * them to the project-wide global index space used by everything else.
+     */
+    activePlanStartPageIndex: number;
     onHighlightsChange?: (hits: SearchHit[]) => void;
     onCurrentHitChange?: (index: number | null) => void;
 }
@@ -20,6 +29,7 @@ const PDFSearch: React.FC<PDFSearchProps> = ({
     onClose,
     onNavigateToPage,
     currentPageIndex,
+    activePlanStartPageIndex,
     onHighlightsChange,
     onCurrentHitChange,
 }) => {
@@ -64,7 +74,18 @@ const PDFSearch: React.FC<PDFSearchProps> = ({
         setIsSearching(true);
 
         debounceRef.current = setTimeout(() => {
-            const searchResults = mupdfController.searchDocument(searchQuery);
+            // mupdfController has only the active plan loaded; rebase its
+            // local page indexes to global so every consumer downstream
+            // (highlight matching, navigation, the result list) works in
+            // one consistent coordinate space.
+            const raw = mupdfController.searchDocument(searchQuery);
+            const searchResults: DocumentSearchResult = {
+                ...raw,
+                pages: raw.pages.map((p) => ({
+                    ...p,
+                    pageIndex: p.pageIndex + activePlanStartPageIndex,
+                })),
+            };
             setResults(searchResults);
             setIsSearching(false);
             setSelectedResultIndex(0);
@@ -73,7 +94,7 @@ const PDFSearch: React.FC<PDFSearchProps> = ({
             onHighlightsChange?.(currentPageHits);
             onCurrentHitChange?.(0);
         }, 300);
-    }, []);
+    }, [activePlanStartPageIndex]);
 
     // Handle input change
     const handleQueryChange = (e: React.ChangeEvent<HTMLInputElement>) => {

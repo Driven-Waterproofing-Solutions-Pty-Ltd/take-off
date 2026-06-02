@@ -203,6 +203,7 @@ export const api = {
       group?: string;
       visible?: boolean;
       depth?: number;
+      assembly_id?: string;
     }) =>
       req<TakeoffItem>('/api/measure/items', {
         method: 'POST',
