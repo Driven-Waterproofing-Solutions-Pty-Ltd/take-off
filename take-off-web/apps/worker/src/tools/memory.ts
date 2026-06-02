@@ -123,11 +123,24 @@ export async function applyAssembly(
   env: Env,
   args: { project_id: string; item_id: string; assembly_id: string }
 ): Promise<TakeoffItem> {
-  await env.DB.prepare(
+  // Validate the assembly exists before attaching it. Without this check, a
+  // typoed or deleted assembly_id would silently land on the item, and
+  // buildQuote would skip it (no material lines, no priced-item fallback),
+  // making the item disappear from generated quotes.
+  const exists = await env.DB.prepare('SELECT 1 FROM assemblies WHERE id = ?')
+    .bind(args.assembly_id)
+    .first();
+  if (!exists) throw new Error(`Assembly ${args.assembly_id} not found`);
+
+  const res = await env.DB.prepare(
     'UPDATE items SET assembly_id = ?, updated_at = ? WHERE id = ? AND project_id = ?'
   )
     .bind(args.assembly_id, Date.now(), args.item_id, args.project_id)
     .run();
+  if ((res.meta?.changes ?? 0) === 0) {
+    throw new Error(`Item ${args.item_id} not found in project ${args.project_id}`);
+  }
+
   const items = await listItems(env, args.project_id);
   const item = items.find((i) => i.id === args.item_id);
   if (!item) throw new Error(`Item ${args.item_id} not found`);

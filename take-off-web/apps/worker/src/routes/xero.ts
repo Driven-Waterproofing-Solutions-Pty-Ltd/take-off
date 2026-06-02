@@ -26,12 +26,18 @@ function getTokenSecret(env: Env): string {
   return env.XERO_TOKEN_KEY;
 }
 
-// /oauth/start and /oauth/callback are intentionally NOT behind requireAuth:
-// - /oauth/start initiates the flow from a browser tab
-// - /oauth/callback is hit by Xero's redirect (no app session header)
-// CSRF protection is the HMAC-signed state cookie.
+// /oauth/start REQUIRES an authenticated session (browser cookie, MCP token,
+// or Cf-Access) to prevent an unauthenticated visitor from overwriting the
+// org's xero_tokens row by completing a Xero connection against their own
+// tenant. The CSRF state cookie defends against forged callbacks but doesn't
+// prove the starter was an admin.
+//
+// /oauth/callback is hit by Xero's redirect (no app session header), so it
+// stays public — CSRF is handled by the HMAC-signed state cookie set in
+// /oauth/start. Combined: only an authenticated user can initiate the flow,
+// and only their browser can complete it.
 
-app.get('/oauth/start', async (c) => {
+app.get('/oauth/start', requireAuth, async (c) => {
   if (!c.env.XERO_CLIENT_ID || !c.env.XERO_REDIRECT_URI) {
     return c.json({ error: 'Xero is not configured' }, 500);
   }

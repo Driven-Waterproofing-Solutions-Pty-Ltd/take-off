@@ -325,6 +325,7 @@ export const generateMarkupPDF = async (
 
             const pageItems = items.filter(item =>
                 item.visible !== false &&
+                !item.hiddenPages?.includes(globalIdx) &&
                 item.shapes.some(s => s.pageIndex === globalIdx)
             );
 
@@ -335,7 +336,7 @@ export const generateMarkupPDF = async (
                 const pdfColor = rgb(c.r, c.g, c.b);
                 const shapes = item.shapes.filter(s => s.pageIndex === globalIdx);
 
-                if (item.type === ToolType.AREA) {
+                if (item.type === ToolType.AREA || item.type === ToolType.FILL) {
                     const positiveShapes = shapes.filter(s => !s.deduction);
                     const negativeShapes = shapes.filter(s => s.deduction);
                     const FILL_OPACITY = 0.4;
@@ -499,7 +500,11 @@ export const generateMarkupPDF = async (
                                 });
                             }
                         }
-                        else if (item.type === ToolType.LINEAR || item.type === ToolType.SEGMENT || item.type === ToolType.DIMENSION) {
+                        else if (item.type === ToolType.LINEAR || item.type === ToolType.SEGMENT || item.type === ToolType.DIMENSION || item.type === ToolType.ARC) {
+                            // ARC stores points + bulges; rendering as a polyline
+                            // is lower fidelity than the canvas but ensures the
+                            // measurement geometry appears at all. Proper curve
+                            // tessellation can come later via calculateArcPoints.
                             for (let k = 0; k < points.length - 1; k++) {
                                 page.drawLine({
                                     start: points[k], end: points[k + 1],

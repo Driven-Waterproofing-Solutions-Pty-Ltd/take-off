@@ -157,11 +157,13 @@ In the Cloudflare dashboard:
 1. Zero Trust dashboard → **Access → Applications → Add an application → Self-hosted**.
 2. Application domain: `takeoff.drivenwp.com`.
 3. **Bypass paths** (so Xero's OAuth callback and the MCP endpoint can reach the worker without an Access challenge):
-   - `/xero/oauth/callback`
-   - `/xero/oauth/start`
-   - `/mcp`
-   - `/health`
-   - `/admin/mcp/tokens`
+   - `/xero/oauth/callback` — Xero's redirect carries no Access cookie. CSRF is enforced by the HMAC-signed state cookie set in `/oauth/start`.
+   - `/mcp` — bearer-token authed at the application layer.
+   - `/health` — public liveness probe.
+   - `/admin/mcp/tokens` — bootstrap-token authed at the application layer.
+   - `/auth/login`, `/auth/logout` — the login page itself must be reachable.
+
+   **Do NOT bypass `/xero/oauth/start`** — it requires an authenticated session at the worker layer to prevent unauthenticated visitors from hijacking which Xero tenant is connected.
 4. Identity provider: Google (or your team's preferred SSO).
 5. Access policy: `Allow if email ends with @drivenwp.com` — start strict, loosen later.
 
