@@ -272,6 +272,14 @@ export const api = {
       }),
   },
 
+  pageName: {
+    set: (projectId: string, pageIndex: number, name: string) =>
+      req(`/api/measure/pages/${projectId}/${pageIndex}/name`, {
+        method: 'PUT',
+        body: JSON.stringify({ name }),
+      }),
+  },
+
   memory: {
     searchProjects: (q: string) =>
       req<Array<{ project_id: string; name: string; customer_name?: string; total?: number }>>(

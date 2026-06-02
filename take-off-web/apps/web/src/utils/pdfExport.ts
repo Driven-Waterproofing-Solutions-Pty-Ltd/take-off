@@ -336,7 +336,11 @@ export const generateMarkupPDF = async (
                 const pdfColor = rgb(c.r, c.g, c.b);
                 const shapes = item.shapes.filter(s => s.pageIndex === globalIdx);
 
-                if (item.type === ToolType.AREA || item.type === ToolType.FILL) {
+                if (
+                    item.type === ToolType.AREA ||
+                    item.type === ToolType.FILL ||
+                    item.type === ToolType.VOLUME
+                ) {
                     const positiveShapes = shapes.filter(s => !s.deduction);
                     const negativeShapes = shapes.filter(s => s.deduction);
                     const FILL_OPACITY = 0.4;

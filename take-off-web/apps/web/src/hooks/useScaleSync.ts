@@ -21,8 +21,10 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
   const lastProjectId = useRef<string | null>(null);
   const snapshots = useRef<Map<number, string>>(new Map());
   const legendSnapshots = useRef<Map<number, string>>(new Map());
+  const nameSnapshots = useRef<Map<number, string>>(new Map());
   const inflight = useRef<Set<number>>(new Set());
   const legendInflight = useRef<Set<number>>(new Set());
+  const nameInflight = useRef<Set<number>>(new Set());
   // Mirror the useShapeSync pattern: refs don't trigger re-renders, so a
   // transient failure (e.g. network blip) would leave the page calibrated
   // only in the browser. Bumping this tick in every .finally() wakes the
@@ -37,12 +39,15 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
       // Prime from server state.
       snapshots.current = new Map();
       legendSnapshots.current = new Map();
+      nameSnapshots.current = new Map();
       inflight.current = new Set();
       legendInflight.current = new Set();
+      nameInflight.current = new Set();
       for (const k of Object.keys(projectData)) {
         const i = Number(k);
         snapshots.current.set(i, scaleKey(projectData[i].scale));
         legendSnapshots.current.set(i, legendKey(projectData[i].legend));
+        nameSnapshots.current.set(i, projectData[i].name ?? '');
       }
       lastProjectId.current = projectId;
       return;
@@ -61,7 +66,6 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
           // re-derives the same pixelsPerUnit (distance(p1,p2) / real_distance).
           // distance = pixelsPerUnit, real_distance = 1 → ppu / 1 = ppu. ✅
           inflight.current.add(pageIndex);
-          snapshots.current.set(pageIndex, key);
           api.scale
             .manual(
               projectId,
@@ -71,10 +75,8 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
               1,
               scale.unit as Unit
             )
-            .catch((e) => {
-              snapshots.current.delete(pageIndex);
-              console.error('sync: scale push failed', pageIndex, e);
-            })
+            .then(() => snapshots.current.set(pageIndex, key))
+            .catch((e) => console.error('sync: scale push failed', pageIndex, e))
             .finally(() => {
               inflight.current.delete(pageIndex);
               retry();
@@ -88,18 +90,30 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
         const lk = legendKey(legend);
         if (legendSnapshots.current.get(pageIndex) !== lk && !legendInflight.current.has(pageIndex)) {
           legendInflight.current.add(pageIndex);
-          legendSnapshots.current.set(pageIndex, lk);
           api.legend
             .set(projectId, pageIndex, legend)
-            .catch((e) => {
-              legendSnapshots.current.delete(pageIndex);
-              console.error('sync: legend push failed', pageIndex, e);
-            })
+            .then(() => legendSnapshots.current.set(pageIndex, lk))
+            .catch((e) => console.error('sync: legend push failed', pageIndex, e))
             .finally(() => {
               legendInflight.current.delete(pageIndex);
               retry();
             });
         }
+      }
+
+      // --- Page name (sidebar inline rename) ---
+      const name = page.name ?? '';
+      const prevName = nameSnapshots.current.get(pageIndex) ?? '';
+      if (name !== prevName && !nameInflight.current.has(pageIndex)) {
+        nameInflight.current.add(pageIndex);
+        api.pageName
+          .set(projectId, pageIndex, name)
+          .then(() => nameSnapshots.current.set(pageIndex, name))
+          .catch((e) => console.error('sync: page name push failed', pageIndex, e))
+          .finally(() => {
+            nameInflight.current.delete(pageIndex);
+            retry();
+          });
       }
     }
   }, [projectId, projectData, tick]);

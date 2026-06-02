@@ -14,7 +14,7 @@ export interface SessionUser {
 export type SessionState =
   | { status: 'loading' }
   | { status: 'authenticated'; via: 'session'; user: SessionUser }
-  | { status: 'authenticated'; via: 'mcp' | 'access'; identity: string }
+  | { status: 'authenticated'; via: 'mcp'; identity: string }
   | { status: 'unauthenticated' };
 
 function getDevAuthHeader(): Record<string, string> {
@@ -50,7 +50,7 @@ export function useSession(): SessionState {
         }
         const body = (await res.json()) as
           | { user: SessionUser; via: 'session' }
-          | { identity: string; via: 'mcp' | 'access' };
+          | { identity: string; via: 'mcp' };
         if ('user' in body) {
           setState({ status: 'authenticated', via: 'session', user: body.user });
         } else {

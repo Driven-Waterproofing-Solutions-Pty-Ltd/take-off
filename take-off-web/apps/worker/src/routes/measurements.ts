@@ -114,4 +114,13 @@ app.put('/pages/:projectId/:pageIndex/legend', async (c) => {
   return c.json({ ok: true });
 });
 
+// Client persists per-page name (sidebar inline rename).
+app.put('/pages/:projectId/:pageIndex/name', async (c) => {
+  const projectId = c.req.param('projectId');
+  const pageIndex = parseInt(c.req.param('pageIndex'), 10);
+  const { name } = await c.req.json<{ name: string }>();
+  await upsertPage(c.env.DB, projectId, pageIndex, { name });
+  return c.json({ ok: true });
+});
+
 export default app;

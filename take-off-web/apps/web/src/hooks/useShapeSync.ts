@@ -242,8 +242,12 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
                 item_id: item.id,
                 shape_id: shape.id,
               })
-            : item.type === ToolType.AREA || item.type === ToolType.FILL
-              ? api.shapes.area({
+            : item.type === ToolType.AREA ||
+                item.type === ToolType.FILL ||
+                item.type === ToolType.VOLUME
+              ? // VOLUME stores a polygon (area) shape; the volume itself is
+                // area × item.depth, computed in buildQuote on the server.
+                api.shapes.area({
                   project_id: projectId,
                   page_index: shape.pageIndex,
                   points: shape.points,

@@ -1,5 +1,26 @@
 import type { Env } from '../env';
-import { evaluateFormula, TakeoffItem, QuoteDraft, QuoteLineItem } from '@takeoff/shared';
+import {
+  evaluateFormula,
+  TakeoffItem,
+  QuoteDraft,
+  QuoteLineItem,
+  ToolType,
+  toVariableName,
+} from '@takeoff/shared';
+
+/**
+ * Effective base quantity for an item, mirroring the canvas's calculateTotalValue:
+ *   - VOLUME items store polygon AREA in shape.value (and item.totalValue);
+ *     the volume is area × item.depth. Server-side recalc keeps the raw area
+ *     in total_value, so we apply the depth here.
+ *   - All other types use total_value as-is.
+ */
+function baseQty(item: TakeoffItem): number {
+  if (item.type === ToolType.VOLUME && item.depth) {
+    return item.totalValue * item.depth;
+  }
+  return item.totalValue;
+}
 import { rowToShape, rowToTakeoffItem, ItemRow, ShapeRow } from '../db/queries';
 
 export async function listItems(env: Env, projectId: string): Promise<TakeoffItem[]> {
@@ -182,7 +203,7 @@ export async function buildQuote(env: Env, projectId: string): Promise<QuoteDraf
         .bind(item.assemblyId)
         .all();
 
-      const qty = evaluateFormula(item, item.totalValue, assembly?.formula ?? undefined);
+      const qty = evaluateFormula(item, baseQty(item), assembly?.formula ?? undefined);
 
       let assemblyLabourMinutes = 0;
       for (const r of linesRes.results as unknown as Array<{
@@ -220,7 +241,7 @@ export async function buildQuote(env: Env, projectId: string): Promise<QuoteDraf
         });
       }
     } else if (item.price !== undefined) {
-      const qty = evaluateFormula(item);
+      const qty = evaluateFormula(item, baseQty(item));
       lines.push({
         description: item.label,
         qty,
@@ -238,11 +259,15 @@ export async function buildQuote(env: Env, projectId: string): Promise<QuoteDraf
     // dropped from /api/memory/quote and Xero pushes silently. Each sub-item
     // gets its own quote line so the customer sees the breakdown.
     if (item.subItems && item.subItems.length > 0) {
+      // Mirror the canvas Estimates view: each sub-item formula can reference
+      // every PRIOR sub-item by its variable-safe label. Without this context
+      // a chain like `Membrane = Qty`, `Adhesive = Membrane * 0.2` would
+      // evaluate Adhesive with Membrane unset, fall back to 0 / Qty, and
+      // diverge from what the user sees on screen.
+      const subContext: Record<string, number> = {};
       for (const sub of item.subItems) {
-        // Sub-item formulas can reference Qty (item totalValue) and other
-        // item properties; reuse evaluateFormula with the sub-item's formula
-        // override so the calculation matches what the UI shows.
-        const subQty = evaluateFormula(item, undefined, sub.formula);
+        const subQty = evaluateFormula(item, baseQty(item), sub.formula, subContext);
+        subContext[toVariableName(sub.label)] = subQty;
         const lineTotal = subQty * sub.price;
         if (lineTotal === 0) continue; // skip zero-cost lines to keep quotes clean
         lines.push({
