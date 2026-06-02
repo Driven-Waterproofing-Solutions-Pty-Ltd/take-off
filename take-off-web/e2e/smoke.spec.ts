@@ -106,6 +106,57 @@ test('can create project via worker and the listing reflects it', async () => {
   expect(list.some((p) => p.id === created.id)).toBe(true);
 });
 
+test('email + password login lands the user on the canvas', async ({ page, browser }) => {
+  // Seed an admin account via the bootstrap-protected /admin/users route.
+  const ts = Date.now();
+  const email = `e2e-${ts}@drivenwp.com`;
+  const password = `hunter2-${ts}`;
+
+  const created = await fetch(`${WORKER}/admin/users`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${BOOTSTRAP}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, name: 'E2E User', role: 'admin' }),
+  });
+  expect(created.status).toBe(200);
+
+  // Brand-new context so no cookies / localStorage carry over from prior tests.
+  const ctx = await browser.newContext();
+  const fresh = await ctx.newPage();
+  await fresh.goto(APP, { waitUntil: 'domcontentloaded' });
+
+  // Auth gate shows the login page (no token in localStorage, no session cookie).
+  await expect(fresh.getByRole('heading', { name: 'Sign in' })).toBeVisible({ timeout: 5_000 });
+
+  // Fill and submit.
+  await fresh.getByLabel('Email').fill(email);
+  await fresh.getByLabel('Password').fill(password);
+  await fresh.getByRole('button', { name: 'Sign in' }).click();
+
+  // After login the page reloads; useSession sees `via: 'session'` and renders
+  // the canvas — sidebar title "Untitled Project" is the canonical marker.
+  await fresh.waitForLoadState('networkidle', { timeout: 10_000 });
+  await expect(fresh.getByText('Untitled Project', { exact: false })).toBeVisible({ timeout: 10_000 });
+
+  // /auth/me should now report the session-backed user.
+  const me = await fresh.evaluate(async () => {
+    const r = await fetch('/auth/me', { credentials: 'include' });
+    return r.json();
+  });
+  expect(me).toMatchObject({ via: 'session', user: { email } });
+
+  // Wrong-password attempt produces a visible error and stays on the login form.
+  const wrongCtx = await browser.newContext();
+  const wrong = await wrongCtx.newPage();
+  await wrong.goto(APP, { waitUntil: 'domcontentloaded' });
+  await wrong.getByLabel('Email').fill(email);
+  await wrong.getByLabel('Password').fill('nope-not-the-password');
+  await wrong.getByRole('button', { name: 'Sign in' }).click();
+  await expect(wrong.getByText(/Incorrect email or password/i)).toBeVisible({ timeout: 5_000 });
+
+  await ctx.close();
+  await wrongCtx.close();
+});
+
 test('hydration: server-side state appears in the browser canvas', async ({ page }) => {
   const token = await mintToken();
   const auth = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };

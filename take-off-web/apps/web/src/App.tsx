@@ -23,13 +23,15 @@ import { useProjectManager } from './hooks/useProjectManagerWeb';
 import { useShapeSync } from './hooks/useShapeSync';
 import { useScaleSync } from './hooks/useScaleSync';
 import { usePlanSetSync } from './hooks/usePlanSetSync';
+import { useSession } from './hooks/useSession';
+import { LoginPage } from './pages/Login';
 import { RamCacheProvider, useRamCache } from './contexts/RamCacheContext';
 import { savePlanFile } from './utils/storage';
 import { flattenOCG } from './utils/flattenOCG';
 import { mupdfController, SearchHit } from './utils/mupdfController';
 
-// Web port: license is implicit (Cloudflare Access guards the whole app);
-// view mode is local state (no router needed for v1).
+// Web port: license is implicit (the canvas is gated by useSession at the
+// App boundary); view mode is local state (no router needed for v1).
 const useLicense = () => ({ isLicensed: true });
 
 const AppContent: React.FC = () => {
@@ -834,10 +836,24 @@ const AppContent: React.FC = () => {
   );
 };
 
-const App: React.FC = () => (
-  <RamCacheProvider>
-    <AppContent />
-  </RamCacheProvider>
-);
+const AuthGate: React.FC = () => {
+  const session = useSession();
 
-export default App;
+  if (session.status === 'loading') {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center bg-slate-50">
+        <div className="w-12 h-12 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin" />
+      </div>
+    );
+  }
+  if (session.status === 'unauthenticated') {
+    return <LoginPage />;
+  }
+  return (
+    <RamCacheProvider>
+      <AppContent />
+    </RamCacheProvider>
+  );
+};
+
+export default AuthGate;
