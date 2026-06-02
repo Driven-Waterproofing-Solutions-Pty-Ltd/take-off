@@ -5,8 +5,10 @@ import projects from './routes/projects';
 import measurements from './routes/measurements';
 import memory from './routes/memory';
 import xero from './routes/xero';
+import auth, { adminApp as adminUsers } from './routes/auth';
 import { handleMcp, mintMcpClientToken } from './mcp/server';
 import { syncXeroContacts } from './tools/xero';
+import { pruneExpiredSessions } from './lib/sessions';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -40,6 +42,8 @@ app.get('/health', async (c) => {
   return c.json({ ok: row?.ok === 1 });
 });
 
+app.route('/auth', auth);
+app.route('/admin/users', adminUsers);
 app.route('/api/projects', projects);
 app.route('/api/measure', measurements);
 app.route('/api/memory', memory);
@@ -66,12 +70,18 @@ app.post('/admin/mcp/tokens', async (c) => {
 export default {
   fetch: app.fetch,
 
-  // Nightly Xero contact sync
+  // Nightly: Xero contact sync + prune expired sessions
   async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
     try {
       await syncXeroContacts(env);
     } catch (err) {
       console.error('xero sync failed', err);
+    }
+    try {
+      const { deleted } = await pruneExpiredSessions(env.DB);
+      if (deleted > 0) console.log(`pruned ${deleted} expired sessions`);
+    } catch (err) {
+      console.error('session prune failed', err);
     }
   },
 };

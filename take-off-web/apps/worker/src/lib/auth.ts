@@ -1,34 +1,33 @@
 import type { MiddlewareHandler } from 'hono';
 import type { Env } from '../env';
 import { sha256Hex } from './crypto';
+import { readSession } from './sessions';
 
-// Use a structural type so authenticate() can be called from any Hono context
-// (with or without extra Variables), not just one whose Variables shape matches.
+// Three accept paths, checked in order:
+//   1. Signed session cookie (browser users after /auth/login)
+//   2. Bearer MCP token (Claude Desktop, Copilot, server-to-server)
+//   3. Cf-Access-Authenticated-User-Email header (transitional fallback
+//      while in-app auth is being rolled out; remove the Access policy
+//      from the dashboard once everyone has a user account)
+
 interface MinimalContext {
   req: { header: (name: string) => string | undefined };
   env: Env;
 }
 
-// Auth model:
-//   1. Cloudflare Access in front of takeoff.drivenwp.com handles browser auth.
-//      When Access is configured, every request carries `Cf-Access-Authenticated-User-Email`
-//      (header set by Access, not spoofable from the public internet because the
-//      CF edge strips inbound headers with that name).
-//   2. MCP / programmatic clients present `Authorization: Bearer <mcp-token>`
-//      that maps to a SHA-256 hash in `mcp_clients`.
-//   3. The bootstrap token (env.MCP_BOOTSTRAP_TOKEN) is accepted only by
-//      /admin/mcp/tokens — see mcp/server.ts mintMcpClientToken.
-
 export type AuthContext = {
-  via: 'access' | 'mcp';
-  identity: string; // email for Access, client-id for MCP
+  via: 'session' | 'mcp' | 'access';
+  identity: string; // user_id (session), client_id (mcp), or email (access)
 };
 
 export async function authenticate(c: MinimalContext): Promise<AuthContext | null> {
-  const accessEmail = c.req.header('Cf-Access-Authenticated-User-Email');
-  if (accessEmail) {
-    return { via: 'access', identity: accessEmail };
+  // 1. Session cookie
+  const session = await readSession(c.env, c.req.header('Cookie'));
+  if (session) {
+    return { via: 'session', identity: session.userId };
   }
+
+  // 2. MCP bearer token
   const auth = c.req.header('Authorization');
   if (auth?.startsWith('Bearer ')) {
     const token = auth.slice('Bearer '.length);
@@ -45,6 +44,13 @@ export async function authenticate(c: MinimalContext): Promise<AuthContext | nul
       return { via: 'mcp', identity: row.id };
     }
   }
+
+  // 3. Cloudflare Access (transitional)
+  const accessEmail = c.req.header('Cf-Access-Authenticated-User-Email');
+  if (accessEmail) {
+    return { via: 'access', identity: accessEmail };
+  }
+
   return null;
 }
 
