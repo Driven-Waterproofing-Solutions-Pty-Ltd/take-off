@@ -203,7 +203,14 @@ export const useProjectManager = (_isLicensed = true) => {
   const handleSaveProject = async () => {
     setIsSaving(true);
     try {
-      const blob = await exportProjectToZip(items, projectData, planSets, totalPages, projectName);
+      const blob = await exportProjectToZip(
+        items,
+        projectData,
+        planSets,
+        totalPages,
+        projectName,
+        projectId ?? undefined
+      );
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -241,13 +248,38 @@ export const useProjectManager = (_isLicensed = true) => {
     setLoadingMessage('Importing project…');
     try {
       const snap = await importProjectFromZip(pendingImportFile);
-      // CRITICAL: detach from any currently-open cloud project FIRST. If we
-      // leave projectId pointing at the cloud project while clearHistory()
-      // replaces local state with the imported snapshot, useShapeSync sees
-      // every item in the old cloud project as "removed" and DELETEs them,
-      // then POSTs the imported items into the open cloud project. Clearing
-      // projectId before the state swap makes the sync hooks treat the
-      // imported state as a brand-new local-only project that doesn't sync.
+
+      // Rehydrate PDF bytes from R2 BEFORE detaching from any open cloud
+      // project. The snapshot carries each plan set's r2_key plus the
+      // sourceProjectId those keys belong to; we resolve them now so the
+      // imported plan sets land in local state with real File objects
+      // (otherwise the canvas can't render — see usePlanSetSync's "no
+      // bytes locally and no key on server" branch). After detach there
+      // would be no projectId to authorise the GETs against, so order
+      // matters: fetch first, detach second.
+      let planSets = snap.planSets;
+      if (snap.sourceProjectId) {
+        planSets = await Promise.all(
+          snap.planSets.map(async (p) => {
+            const key = (p as PlanSet & { __r2_key?: string }).__r2_key;
+            if (!key || p.file) return p;
+            try {
+              const blob = await api.projects.fetchPdfBlob(snap.sourceProjectId!, key);
+              const file = new File([blob], p.name ?? 'plan.pdf', { type: 'application/pdf' });
+              return { ...p, file };
+            } catch (e) {
+              console.warn('snapshot PDF fetch failed', p.id, key, e);
+              return p;
+            }
+          })
+        );
+      }
+
+      // CRITICAL: detach from any currently-open cloud project. If we left
+      // projectId pointing at it while clearHistory() replaced state with
+      // the imported snapshot, useShapeSync would treat every item in the
+      // old cloud project as removed and DELETE them, then POST the
+      // imported items into the open cloud project.
       setProjectId(null);
       const url = new URL(window.location.href);
       url.searchParams.delete('project');
@@ -256,7 +288,7 @@ export const useProjectManager = (_isLicensed = true) => {
       clearHistory({
         items: snap.items,
         projectData: snap.projectData,
-        planSets: snap.planSets,
+        planSets,
         totalPages: snap.totalPages,
       });
       setProjectName(snap.projectName);

@@ -59,6 +59,7 @@ export interface ProjectState {
   planSets: PlanSet[];
   totalPages: number;
   projectName: string;
+  sourceProjectId?: string;
 }
 
 export const exportProjectToZip = async (
@@ -66,13 +67,16 @@ export const exportProjectToZip = async (
   projectData: ProjectData,
   planSets: PlanSet[],
   totalPages: number,
-  projectName: string
+  projectName: string,
+  sourceProjectId?: string
 ): Promise<Blob> => {
-  // "Zip" is a misnomer on web — we emit a plain JSON snapshot.
-  // PDFs themselves stay in R2; the snapshot carries the r2_key so
-  // useProjectManagerWeb can fetch the blob back after import. Stamping the
-  // key (and the stable plan-set id) means a reimported snapshot reopens
-  // with renderable plans instead of empty placeholders.
+  // "Zip" is a misnomer on web — a plain JSON snapshot.
+  // PDFs themselves stay in R2; the snapshot carries each plan set's
+  // r2_key plus the SOURCE project id so that on import the loader can
+  // fetch the blobs back from `/api/projects/:sourceProjectId/pdfs/:key`
+  // before the sync hooks detach to a local-only project. Without the
+  // source id, the import flow can't reach R2 (the detached project has
+  // no id) and re-opened snapshots show empty plan placeholders.
   const snapshot = {
     items,
     projectData,
@@ -86,6 +90,7 @@ export const exportProjectToZip = async (
     })),
     totalPages,
     projectName,
+    sourceProjectId,
     exportedAt: new Date().toISOString(),
   };
   return new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json' });
@@ -111,6 +116,7 @@ export const importProjectFromZip = async (data: File | Uint8Array): Promise<Pro
     planSets,
     totalPages: parsed.totalPages ?? 0,
     projectName: parsed.projectName ?? 'Imported Project',
+    sourceProjectId: parsed.sourceProjectId,
   };
 };
 

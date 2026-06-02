@@ -101,7 +101,12 @@ const PDFPlane: React.FC<{ planSets?: PlanSet[]; pageIndex?: number }> = ({ plan
   }, [planSets, pageIndex]);
 
   return (
-    <mesh ref={meshRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.05, 0]}>
+    // PDF plane sits in the same X/Y plane as the extruded shape geometry
+    // (Shape3D builds its polygons from PDF X/Y and extrudes along Z).
+    // Earlier this plane was rotated into X/Z, leaving the texture
+    // perpendicular to every measurement solid. Now both share X/Y; the
+    // plane sits just below z=0 so solids extruded into +Z appear on top.
+    <mesh ref={meshRef} position={[2000, 2000, -0.05]}>
       <planeGeometry args={[4000, 4000]} />
       {texture ? (
         <meshStandardMaterial map={texture} />

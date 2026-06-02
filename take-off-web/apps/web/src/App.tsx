@@ -15,7 +15,17 @@ import EstimatesView from './components/EstimatesView';
 import ThreeDView from './components/ThreeDView';
 import PDFSearch from './components/PDFSearch';
 import { ToolType, ProjectData, TakeoffItem, Shape, Unit, PlanSet, LegendSettings } from './types';
-import { PresetScale, getAreaUnitFromLinear, getVolumeUnitFromLinear, isPointInPolygon } from './utils/geometry';
+import {
+  PresetScale,
+  getAreaUnitFromLinear,
+  getVolumeUnitFromLinear,
+  isPointInPolygon,
+  calculatePolygonArea,
+  calculatePolylineLength,
+  calculateArcLength,
+  getScaledArea,
+  getScaledValue,
+} from './utils/geometry';
 import { useToast } from './contexts/ToastContext';
 import { generateMarkupPDF } from './utils/pdfExport';
 import { Loader2 } from 'lucide-react';
@@ -287,7 +297,13 @@ const AppContent: React.FC = () => {
   };
 
   const handleInitiateTool = (tool: ToolType) => {
-    if ([ToolType.LINEAR, ToolType.ARC, ToolType.AREA, ToolType.FILL, ToolType.SEGMENT, ToolType.DIMENSION].includes(tool)) {
+    // VOLUME requires scale for two reasons: shape persistence (the worker
+    // add_area path needs ppu) AND the depth-input UI + item unit are
+    // derived from the page's linear unit. Without this guard, a user could
+    // make a volume item on an uncalibrated page with the default ft-based
+    // unit/depth, get a calibration error on every placement attempt, then
+    // later calibrate to metric and end up with a cu-ft item on a metric page.
+    if ([ToolType.LINEAR, ToolType.ARC, ToolType.AREA, ToolType.VOLUME, ToolType.FILL, ToolType.SEGMENT, ToolType.DIMENSION].includes(tool)) {
       const scale = getCurrentPageScale();
       if (!scale.isSet) {
         addToast("Please set the scale for this page first", 'error');
@@ -691,6 +707,45 @@ const AppContent: React.FC = () => {
         draft.projectData[pageIndex] = { scale: { isSet: false, pixelsPerUnit: 1, unit: Unit.FEET } };
       }
       draft.projectData[pageIndex].scale = { isSet: true, pixelsPerUnit: ppu, unit };
+
+      // Recalibration: existing shape values + item units were computed
+      // against the OLD scale. Walk every shape on this page and recompute
+      // its value with the new ppu; for AREA/VOLUME/FILL items also retune
+      // the item.unit so a metric→imperial recalibration doesn't leave
+      // "sq m" labels on cu-ft quantities. Other pages stay untouched.
+      const areaUnit = getAreaUnitFromLinear(unit);
+      const volumeUnit = getVolumeUnitFromLinear(unit);
+      for (const item of draft.items) {
+        let touched = false;
+        for (const shape of item.shapes) {
+          if (shape.pageIndex !== pageIndex) continue;
+          touched = true;
+          if (item.type === ToolType.AREA || item.type === ToolType.FILL || item.type === ToolType.VOLUME) {
+            shape.value = getScaledArea(calculatePolygonArea(shape.points), ppu);
+          } else if (item.type === ToolType.ARC && shape.points.length >= 2) {
+            shape.value = getScaledValue(
+              calculateArcLength(shape.points[0], shape.points[1], shape.bulges?.[0] ?? 0),
+              ppu
+            );
+          } else if (item.type === ToolType.LINEAR || item.type === ToolType.SEGMENT || item.type === ToolType.DIMENSION) {
+            shape.value = getScaledValue(calculatePolylineLength(shape.points), ppu);
+          }
+          // NOTE / COUNT shapes carry annotation/count semantics independent of scale.
+        }
+        if (touched) {
+          if (item.type === ToolType.AREA || item.type === ToolType.FILL) item.unit = areaUnit;
+          else if (item.type === ToolType.VOLUME) item.unit = volumeUnit;
+          else if (item.type === ToolType.LINEAR || item.type === ToolType.ARC || item.type === ToolType.SEGMENT || item.type === ToolType.DIMENSION) item.unit = unit;
+          // totalValue mirrors calculateTotalValue: shape sum, with depth fold for VOLUME.
+          const baseValue = item.shapes.reduce(
+            (sum, s) => (s.deduction ? sum - s.value : sum + s.value),
+            0
+          );
+          item.totalValue = item.type === ToolType.VOLUME && item.depth
+            ? baseValue * item.depth
+            : baseValue;
+        }
+      }
     });
     addToast("Scale calibrated", 'success');
   };
@@ -768,7 +823,14 @@ const AppContent: React.FC = () => {
     saveProject: handleSaveProject, nextPage: () => pageIndex < totalPages - 1 && setPageIndex(p => p + 1),
     prevPage: () => pageIndex > 0 && setPageIndex(p => p - 1), zoomToFit: () => setZoomLevel(1.0),
     toggleRecord: () => activeTakeoffId && handleStopTakeoff(), toggleViewMode: () => setViewMode(viewMode === 'canvas' ? 'estimates' : viewMode === 'estimates' ? '3d' : 'canvas'),
-    finishShape: () => activeTakeoffId && handleStopTakeoff(), copyItem: () => { }, pasteItem: () => { },
+    // 'C' shortcut: commit the in-progress shape (close polygon / polyline)
+    // via the canvas's finalize path, NOT a tool-switch that would discard
+    // drawingPoints. Falls back to stopping the active item if there's
+    // nothing being drawn so the muscle-memory of "C" still feels sensible.
+    finishShape: () => {
+      if (canvasRef.current) canvasRef.current.finishShape();
+      if (activeTakeoffId) handleStopTakeoff();
+    }, copyItem: () => { }, pasteItem: () => { },
     openSearch: () => setShowPDFSearch(prev => !prev)
   });
 

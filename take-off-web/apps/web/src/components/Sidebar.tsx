@@ -462,7 +462,14 @@ const Sidebar: React.FC<SidebarProps> = ({
                                                                 if (s.deduction) return sum - s.value;
                                                                 return sum + s.value;
                                                             }, 0);
-                                                            const displayQty = evaluateFormula(item, pageRawQty);
+                                                            // VOLUME shapes store polygon area; the sidebar list shows
+                                                            // per-page quantity in the item's (cubic) unit, so multiply by
+                                                            // depth before evaluateFormula — same fix as DraggableLegend +
+                                                            // pdfExport so all three surfaces stay consistent.
+                                                            const baseQty = item.type === ToolType.VOLUME && item.depth
+                                                                ? pageRawQty * item.depth
+                                                                : pageRawQty;
+                                                            const displayQty = evaluateFormula(item, baseQty);
                                                             const isEditingThisItem = editingItemId === item.id;
 
                                                             return (

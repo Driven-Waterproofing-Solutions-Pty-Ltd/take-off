@@ -21,7 +21,13 @@ import { api } from '../lib/api';
 // Removed html2canvas import as we now use pdf-lib for vector export
 
 export interface BlueprintCanvasRef {
-    // Legacy ref methods can be removed if unused, but keeping generic ref for future
+    /**
+     * Commit any in-progress drawing (closes the current polygon /
+     * polyline at its existing points). Used by the keyboard "close shape"
+     * shortcut so a user mid-draw can finalize without losing their work
+     * via a tool-switch that would clear drawingPoints.
+     */
+    finishShape: () => void;
 }
 
 interface BlueprintCanvasProps {
@@ -187,31 +193,32 @@ const isShapeIntersectingRect = (shape: Shape, rectStart: Point, rectEnd: Point)
 };
 
 // Vector extraction functions
+// KNOWN STUB — lifted from the desktop app. pdf-lib doesn't parse content
+// streams into geometry primitives; doing it properly requires either a
+// content-stream walker (e.g. via pdfjs operatorList) or hooking MuPDF's
+// Device API. Until that's wired, this returns empty `paths` for every
+// page, so:
+//   - The vector-cache upload effect below skips pages with no paths
+//     (no point sending zeros to the server).
+//   - Server-side snap_to_vector returns proposed points unchanged when
+//     no cache exists for a page — graceful fallback, not a crash.
+//   - The FILL tool's vector-loop search finds nothing and the existing
+//     fallback (shape-loop tracer over user-drawn measurements) takes over.
+// Replacing this with real extraction is tracked separately. The
+// surrounding plumbing — schema, worker route, retry effect, client API
+// — is correct and ready to consume non-empty data the moment it lands.
 const extractVectorPaths = async (file: File): Promise<CachedVectorData[]> => {
     const arrayBuffer = await file.arrayBuffer();
     const pdfDoc = await PDFDocument.load(arrayBuffer);
     const vectorData: CachedVectorData[] = [];
-    
     for (let i = 0; i < pdfDoc.getPageCount(); i++) {
         const page = pdfDoc.getPage(i);
-        const paths: VectorPath[] = [];
-        
-        // For now, we'll use a simplified approach
-        // In a full implementation, you'd parse the PDF content stream
-        // This is a placeholder that would need proper PDF parsing
-        
         vectorData.push({
             pageIndex: i,
-            paths,
-            bounds: {
-                x: 0,
-                y: 0,
-                width: page.getWidth(),
-                height: page.getHeight()
-            }
+            paths: [],
+            bounds: { x: 0, y: 0, width: page.getWidth(), height: page.getHeight() },
         });
     }
-    
     return vectorData;
 };
 
@@ -783,6 +790,13 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 const globalIdx = planStartPageIndex + page.pageIndex;
                 const dedupKey = `${projectId}:${globalIdx}`;
                 if (uploadedVectorPages.current.has(dedupKey)) continue;
+                // Skip pages with no extractable paths — sending empty vertices
+                // would mark the page synced with zero data, masking the actual
+                // "no extractor yet" state. See the extractVectorPaths stub note.
+                if (page.paths.length === 0) {
+                    uploadedVectorPages.current.add(dedupKey);
+                    continue;
+                }
 
                 const vertices: Point[] = [];
                 const segments: { a: Point; b: Point }[] = [];
@@ -1849,6 +1863,17 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         
         return loop;
     };
+
+    // Expose finishShape() to App.tsx so the keyboard "close shape" shortcut
+    // can commit an in-progress drawing instead of just dropping it via a
+    // tool-switch that clears drawingPoints.
+    useImperativeHandle(ref, () => ({
+        finishShape: () => {
+            if (drawingPoints.length > 0) {
+                finalizeMeasurement(drawingPoints);
+            }
+        },
+    }), [drawingPoints]);
 
     const finalizeMeasurement = (points: Point[]) => {
         let value = 0;
