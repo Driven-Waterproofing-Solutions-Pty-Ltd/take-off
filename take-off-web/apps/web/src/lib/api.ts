@@ -198,7 +198,13 @@ export const api = {
       }),
     update: (
       id: string,
-      patch: { points?: Point[]; deduction?: boolean; value?: number; item_id?: string }
+      patch: {
+        points?: Point[];
+        deduction?: boolean;
+        value?: number;
+        item_id?: string;
+        text?: string;
+      }
     ) =>
       req<{ updated: boolean; item_id: string | null; previous_item_id?: string }>(
         `/api/measure/shapes/${id}`,

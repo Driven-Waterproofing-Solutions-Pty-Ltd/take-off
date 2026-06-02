@@ -1,10 +1,10 @@
 import type { D1Database } from '@cloudflare/workers-types';
+import { ToolType } from '@takeoff/shared';
 import type {
   Shape,
   TakeoffItem,
   ScaleCalibration,
   Unit,
-  ToolType,
 } from '@takeoff/shared';
 
 export interface ProjectRow {
@@ -207,14 +207,23 @@ export async function recalcItemTotal(db: D1Database, itemId: string): Promise<n
 }
 
 export function rowToTakeoffItem(row: ItemRow, shapes: Shape[]): TakeoffItem {
+  const type = row.type as ToolType;
+  const depth = row.depth ?? undefined;
+  // total_value stores the raw shape-sum (polygon area for VOLUME). The canvas
+  // treats item.totalValue as the FINAL quantity though — area×depth for
+  // VOLUME items — so hydrate that final number here. Without this, after a
+  // cloud reload the Estimates/Properties UI would show the area number
+  // labeled as cubic and underprice the item until the user edits a shape.
+  const totalValue =
+    type === ToolType.VOLUME && depth ? row.total_value * depth : row.total_value;
   return {
     id: row.id,
     label: row.label,
-    type: row.type as ToolType,
+    type,
     color: row.color,
     unit: row.unit as Unit,
     shapes,
-    totalValue: row.total_value,
+    totalValue,
     group: row.group_name ?? undefined,
     properties: row.properties_json ? JSON.parse(row.properties_json) : undefined,
     price: row.price ?? undefined,
@@ -222,7 +231,7 @@ export function rowToTakeoffItem(row: ItemRow, shapes: Shape[]): TakeoffItem {
     subItems: row.sub_items_json ? JSON.parse(row.sub_items_json) : undefined,
     visible: row.visible === 1,
     hiddenPages: row.hidden_pages_json ? JSON.parse(row.hidden_pages_json) : undefined,
-    depth: row.depth ?? undefined,
+    depth,
     assemblyId: row.assembly_id ?? undefined,
   };
 }

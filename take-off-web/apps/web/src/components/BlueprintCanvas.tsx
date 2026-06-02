@@ -256,11 +256,38 @@ const copySelectedItems = (
     return itemsToCopy;
 };
 
+// Recompute a pasted shape's value against the destination page's scale so
+// the local state matches what the server-side create endpoint will compute
+// from the same points. Without this, a measurement copied between pages
+// with different calibrations briefly shows the source page's quantity in
+// the estimate/legend until the next refresh.
+const recomputePastedValue = (
+    sourceShape: Shape,
+    sourceItem: TakeoffItem,
+    destPpu: number,
+    destPoints: Point[]
+): number => {
+    if (!destPpu || destPpu <= 0) return sourceShape.value;
+    if (sourceItem.type === ToolType.COUNT || sourceItem.type === ToolType.NOTE) {
+        return sourceShape.value;
+    }
+    if (
+        sourceItem.type === ToolType.AREA ||
+        sourceItem.type === ToolType.FILL ||
+        sourceItem.type === ToolType.VOLUME
+    ) {
+        return getScaledArea(calculatePolygonArea(destPoints), destPpu);
+    }
+    // LINEAR / DIMENSION / SEGMENT / ARC: polyline length.
+    return getScaledValue(calculatePolylineLength(destPoints), destPpu);
+};
+
 // Helper function to paste items from clipboard back to their original items
 const pasteToOriginalItems = (
     items: TakeoffItem[],
     clipboardItems: { itemId: string, shapeId: string, offset: Point }[],
     globalPageIndex: number,
+    destPpu: number,
     onBatchAddShapes: (shapes: { itemId: string, shape: Shape }[]) => void,
     setPendingSelection: (selection: { itemId: string, shapeId: string }[]) => void
 ) => {
@@ -287,7 +314,7 @@ const pasteToOriginalItems = (
                 id: crypto.randomUUID(),
                 pageIndex: globalPageIndex,
                 points: newPoints,
-                value: originalShape.value,
+                value: recomputePastedValue(originalShape, originalItem, destPpu, newPoints),
                 deduction: originalShape.deduction,
                 text: originalShape.text
             };
@@ -307,7 +334,8 @@ const pasteToOriginalItems = (
 const getPasteAsNewItemsPayload = (
     items: TakeoffItem[],
     clipboardItems: { itemId: string, shapeId: string, offset: Point }[],
-    globalPageIndex: number
+    globalPageIndex: number,
+    destPpu: number
 ): { payload: { newItemId: string, sourceItemId: string, shapes: Shape[] }[], newSelectedItems: { itemId: string, shapeId: string }[] } => {
     if (clipboardItems.length === 0) {
         return { payload: [], newSelectedItems: [] };
@@ -346,7 +374,7 @@ const getPasteAsNewItemsPayload = (
                     id: crypto.randomUUID(),
                     pageIndex: globalPageIndex,
                     points: newPoints,
-                    value: originalShape.value,
+                    value: recomputePastedValue(originalShape, sourceItem, destPpu, newPoints),
                     deduction: originalShape.deduction,
                     text: originalShape.text
                 };
@@ -697,41 +725,9 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 const vectorData = await extractVectorPaths(file);
                 setCachedVectors(vectorData);
 
-                // Push each page's geometry to the worker so server-side
-                // snap_to_vector (used by REST + MCP tools/call add_*) can
-                // snap proposed points to real PDF vertices/segments.
-                // Without this upload the server falls back to "no snap" and
-                // AI-driven measurements come out less precise than the
-                // canvas implies. Dedup by (projectId, globalPageIndex) so
-                // we don't re-upload when switching back to a loaded plan.
-                if (projectId) {
-                    for (const page of vectorData) {
-                        const globalIdx = planStartPageIndex + page.pageIndex;
-                        const dedupKey = `${projectId}:${globalIdx}`;
-                        if (uploadedVectorPages.current.has(dedupKey)) continue;
-                        uploadedVectorPages.current.add(dedupKey);
-                        const vertices: Point[] = [];
-                        const segments: { a: Point; b: Point }[] = [];
-                        for (const path of page.paths) {
-                            for (let i = 0; i < path.points.length; i++) {
-                                vertices.push(path.points[i]);
-                                if (i + 1 < path.points.length) {
-                                    segments.push({ a: path.points[i], b: path.points[i + 1] });
-                                }
-                            }
-                            if (path.closed && path.points.length > 2) {
-                                segments.push({
-                                    a: path.points[path.points.length - 1],
-                                    b: path.points[0],
-                                });
-                            }
-                        }
-                        api.vectorCache.upload(projectId, globalIdx, { vertices, segments }).catch((e) => {
-                            uploadedVectorPages.current.delete(dedupKey);
-                            console.warn('vector-cache upload failed', dedupKey, e);
-                        });
-                    }
-                }
+                // Vector cache uploads are handled by a dedicated effect that
+                // retries on failure — see the [cachedVectors, projectId, …]
+                // effect below.
 
                 const imageData = await renderPdfAsImage(file);
                 setPdfImage(imageData);
@@ -748,6 +744,54 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 
         return () => { setMuPdfLoaded(false); };
     }, [file]);
+
+    // Vector-cache upload: dedicated effect with snapshot-on-success and
+    // tick-based retry. Pages are dedup'd by (projectId, globalPageIndex);
+    // a transient API failure leaves the key out of uploadedVectorPages so
+    // the next vectorRetryTick bump re-tries instead of stranding the page
+    // server-side (which would silently disable snap_to_vector for it).
+    const [vectorRetryTick, setVectorRetryTick] = useState(0);
+    useEffect(() => {
+        if (!projectId || cachedVectors.length === 0) return;
+        const failed: string[] = [];
+        for (const page of cachedVectors) {
+            const globalIdx = planStartPageIndex + page.pageIndex;
+            const dedupKey = `${projectId}:${globalIdx}`;
+            if (uploadedVectorPages.current.has(dedupKey)) continue;
+
+            const vertices: Point[] = [];
+            const segments: { a: Point; b: Point }[] = [];
+            for (const path of page.paths) {
+                for (let i = 0; i < path.points.length; i++) {
+                    vertices.push(path.points[i]);
+                    if (i + 1 < path.points.length) {
+                        segments.push({ a: path.points[i], b: path.points[i + 1] });
+                    }
+                }
+                if (path.closed && path.points.length > 2) {
+                    segments.push({
+                        a: path.points[path.points.length - 1],
+                        b: path.points[0],
+                    });
+                }
+            }
+
+            api.vectorCache.upload(projectId, globalIdx, { vertices, segments })
+                .then(() => uploadedVectorPages.current.add(dedupKey))
+                .catch((e) => {
+                    failed.push(dedupKey);
+                    console.warn('vector-cache upload failed', dedupKey, e);
+                });
+        }
+        // If any upload promise rejected this pass, schedule a retry.
+        if (failed.length > 0) {
+            const handle = setTimeout(
+                () => setVectorRetryTick((t) => t + 1),
+                5_000
+            );
+            return () => clearTimeout(handle);
+        }
+    }, [cachedVectors, projectId, planStartPageIndex, vectorRetryTick]);
 
     // Render Page with MuPDF
     useEffect(() => {
@@ -1634,8 +1678,13 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     }, [activeTool, globalPageIndex]);
 
     const handleFillClick = (point: Point) => {
-        // Use cached vector data for more accurate fill detection
-        const currentVectors = cachedVectors.find(v => v.pageIndex === globalPageIndex);
+        // cachedVectors stores page indexes LOCAL to the loaded PDF; the
+        // canvas tracks pages by GLOBAL project-wide index. For plan sets
+        // with startPageIndex > 0 (any plan set after the first) the local
+        // and global indexes differ — without this conversion the fill
+        // tool finds no vector data and silently falls back to the slower
+        // shape-loop tracer.
+        const currentVectors = cachedVectors.find(v => v.pageIndex === localPageIndex);
         
         if (currentVectors && currentVectors.paths.length > 0) {
             // Use vector paths for fill detection
@@ -1964,9 +2013,10 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                         onClick={handleStageClick}
                     >
                         <Layer ref={konvaLayerRef}>
-                            {/* Render cached vector paths for snapping reference */}
+                            {/* Render cached vector paths for snapping reference. cachedVectors
+                                uses local-to-PDF page indexes; rebase to local before comparing. */}
                             {cachedVectors
-                                .filter(vectorData => vectorData.pageIndex === globalPageIndex)
+                                .filter(vectorData => vectorData.pageIndex === localPageIndex)
                                 .map(vectorData => 
                                     vectorData.paths.map((path, pathIndex) => (
                                         <KonvaLine
@@ -2469,7 +2519,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 onPasteToOriginal={() => {
                     setShowPasteOptions(false);
                     if (onBatchAddShapes) {
-                        pasteToOriginalItems(items, clipboardItems, globalPageIndex, onBatchAddShapes, setPendingSelection);
+                        pasteToOriginalItems(items, clipboardItems, globalPageIndex, scaleInfo.ppu, onBatchAddShapes, setPendingSelection);
                     } else {
                         addToast('Paste to original items is not supported', 'error');
                     }
@@ -2477,7 +2527,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 onPasteAsNewItems={() => {
                     setShowPasteOptions(false);
                     if (onBatchCreateItems) {
-                        const { payload, newSelectedItems } = getPasteAsNewItemsPayload(items, clipboardItems, globalPageIndex);
+                        const { payload, newSelectedItems } = getPasteAsNewItemsPayload(items, clipboardItems, globalPageIndex, scaleInfo.ppu);
                         onBatchCreateItems(payload);
                         setPendingSelection(newSelectedItems);
                     } else {

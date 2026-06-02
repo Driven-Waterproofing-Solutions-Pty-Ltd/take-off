@@ -143,7 +143,13 @@ export async function deleteShape(
 export async function updateShape(
   env: Env,
   shapeId: string,
-  patch: { points?: unknown; deduction?: boolean; value?: number; item_id?: string }
+  patch: {
+    points?: unknown;
+    deduction?: boolean;
+    value?: number;
+    item_id?: string;
+    text?: string;
+  }
 ): Promise<{ updated: boolean; item_id: string | null; previous_item_id?: string }> {
   const row = (await env.DB.prepare('SELECT item_id FROM shapes WHERE id = ?')
     .bind(shapeId)
@@ -155,6 +161,7 @@ export async function updateShape(
   if (patch.points !== undefined) { sets.push('points_json = ?'); binds.push(JSON.stringify(patch.points)); }
   if (patch.deduction !== undefined) { sets.push('deduction = ?'); binds.push(patch.deduction ? 1 : 0); }
   if (patch.value !== undefined) { sets.push('value = ?'); binds.push(patch.value); }
+  if (patch.text !== undefined) { sets.push('text = ?'); binds.push(patch.text); }
   if (patch.item_id !== undefined && patch.item_id !== previousItemId) {
     sets.push('item_id = ?');
     binds.push(patch.item_id);

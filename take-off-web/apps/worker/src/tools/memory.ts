@@ -4,23 +4,11 @@ import {
   TakeoffItem,
   QuoteDraft,
   QuoteLineItem,
-  ToolType,
   toVariableName,
 } from '@takeoff/shared';
 
-/**
- * Effective base quantity for an item, mirroring the canvas's calculateTotalValue:
- *   - VOLUME items store polygon AREA in shape.value (and item.totalValue);
- *     the volume is area × item.depth. Server-side recalc keeps the raw area
- *     in total_value, so we apply the depth here.
- *   - All other types use total_value as-is.
- */
-function baseQty(item: TakeoffItem): number {
-  if (item.type === ToolType.VOLUME && item.depth) {
-    return item.totalValue * item.depth;
-  }
-  return item.totalValue;
-}
+// VOLUME depth is folded into item.totalValue by rowToTakeoffItem on hydration.
+// buildQuote uses totalValue directly — no per-type fold needed here.
 import { rowToShape, rowToTakeoffItem, ItemRow, ShapeRow } from '../db/queries';
 
 export async function listItems(env: Env, projectId: string): Promise<TakeoffItem[]> {
@@ -203,7 +191,7 @@ export async function buildQuote(env: Env, projectId: string): Promise<QuoteDraf
         .bind(item.assemblyId)
         .all();
 
-      const qty = evaluateFormula(item, baseQty(item), assembly?.formula ?? undefined);
+      const qty = evaluateFormula(item, item.totalValue, assembly?.formula ?? undefined);
 
       let assemblyLabourMinutes = 0;
       for (const r of linesRes.results as unknown as Array<{
@@ -241,7 +229,7 @@ export async function buildQuote(env: Env, projectId: string): Promise<QuoteDraf
         });
       }
     } else if (item.price !== undefined) {
-      const qty = evaluateFormula(item, baseQty(item));
+      const qty = evaluateFormula(item, item.totalValue);
       lines.push({
         description: item.label,
         qty,
@@ -266,7 +254,7 @@ export async function buildQuote(env: Env, projectId: string): Promise<QuoteDraf
       // diverge from what the user sees on screen.
       const subContext: Record<string, number> = {};
       for (const sub of item.subItems) {
-        const subQty = evaluateFormula(item, baseQty(item), sub.formula, subContext);
+        const subQty = evaluateFormula(item, item.totalValue, sub.formula, subContext);
         subContext[toVariableName(sub.label)] = subQty;
         const lineTotal = subQty * sub.price;
         if (lineTotal === 0) continue; // skip zero-cost lines to keep quotes clean

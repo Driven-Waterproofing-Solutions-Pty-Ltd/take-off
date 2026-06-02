@@ -277,13 +277,18 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
                       shape_id: shape.id,
                       deduction: dedupe,
                     })
-                  : item.type === ToolType.ARC && shape.points.length >= 2 && shape.bulges?.length
+                  : item.type === ToolType.ARC && shape.points.length >= 2
                     ? api.shapes.arc({
                         project_id: projectId,
                         page_index: shape.pageIndex,
                         start: shape.points[0],
                         end: shape.points[1],
-                        bulge: shape.bulges[0],
+                        // Arcs drawn in the canvas finalize with bulges = []
+                        // (a polyline of straight chords). Fall back to bulge
+                        // = 0 so the geometry persists; the worker treats a
+                        // zero-bulge arc as a straight segment with the same
+                        // chord length.
+                        bulge: shape.bulges?.[0] ?? 0,
                         item_id: item.id,
                         shape_id: shape.id,
                         deduction: dedupe,
@@ -300,17 +305,19 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
         prev.itemId !== nextSnap.itemId ||
         prev.pointsHash !== nextSnap.pointsHash ||
         prev.deduction !== nextSnap.deduction ||
-        prev.value !== nextSnap.value
+        prev.value !== nextSnap.value ||
+        prev.text !== nextSnap.text
       ) {
-        // Reparenting (itemId changed), geometry edit (pointsHash, value),
-        // or deduction toggle. Send all fields the worker accepts; on a
-        // reparent the worker recalcs both old and new item totals.
+        // Reparenting (itemId), geometry edit (pointsHash, value), deduction
+        // toggle, or NOTE text edit. Send all fields the worker accepts; on
+        // a reparent the worker recalcs both old and new item totals.
         inflight.current.set(`shape:${shapeId}`, 'updating');
         api.shapes
           .update(shapeId, {
             points: shape.points,
             deduction: shape.deduction,
             value: shape.value,
+            text: shape.text,
             item_id: prev.itemId !== nextSnap.itemId ? nextSnap.itemId : undefined,
           })
           .then(() => shapeSnapshots.current.set(shapeId, nextSnap))

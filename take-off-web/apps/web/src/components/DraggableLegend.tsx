@@ -44,6 +44,7 @@ const DraggableLegend: React.FC<DraggableLegendProps> = ({
 
   const pageItems = items.filter(item =>
     item.visible !== false &&
+    !item.hiddenPages?.includes(globalPageIndex) &&
     item.type !== ToolType.NOTE &&
     item.shapes.some(s => s.pageIndex === globalPageIndex)
   );
@@ -192,7 +193,12 @@ const DraggableLegend: React.FC<DraggableLegendProps> = ({
                if (s.deduction) return sum - s.value;
                return sum + s.value;
            }, 0);
-           const displayQty = evaluateFormula(item, pageRawQty);
+           // VOLUME shapes store polygon area; multiply by item.depth so the
+           // legend reflects volume (m³) rather than the underlying area (m²).
+           const baseQty = item.type === ToolType.VOLUME && item.depth
+             ? pageRawQty * item.depth
+             : pageRawQty;
+           const displayQty = evaluateFormula(item, baseQty);
            
            return (
              <div key={item.id} className="flex items-center justify-between gap-2 text-xs">
