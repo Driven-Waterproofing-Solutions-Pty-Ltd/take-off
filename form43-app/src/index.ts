@@ -15,6 +15,8 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { AppType } from './shared/types';
+import type { Env } from './env';
+import { snapshotMemory } from './modules/memory/backup';
 import { correlation } from './middleware/correlation';
 import { bearerAuth } from './middleware/auth';
 import { err } from './shared/response';
@@ -57,4 +59,18 @@ app.onError((e, c) => {
 
 app.notFound((c) => c.json(err('Not found', c.get('correlationId')), 404));
 
-export default app;
+/**
+ * Worker handlers. `fetch` serves HTTP; `scheduled` runs the memory R2
+ * snapshot on the cron defined in wrangler.jsonc (triggers.crons).
+ */
+export default {
+  fetch: app.fetch,
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      snapshotMemory(env)
+        .then((r) => { if (r) console.log(`memory snapshot ${r.key} (${r.bytes} bytes)`); })
+        .catch((e) => console.error('memory snapshot failed', e)),
+    );
+  },
+};
+

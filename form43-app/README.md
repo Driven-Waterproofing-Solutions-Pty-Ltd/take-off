@@ -18,7 +18,9 @@ agents — can drive Form 43 over a single bearer-authenticated MCP endpoint.
 - **Self-contained memory**: D1 `chat_memory` table + Workers AI BGE
   embeddings (1024-dim) + Vectorize. Mirrors aqua's memory shape so any
   client familiar with aqua sees the same surface. Hard-delete is blocked
-  by a D1 trigger.
+  by a D1 trigger, a daily cron snapshots memory to R2, and a CI guard
+  (`tests/unit/memory-protection.test.ts`) fails the build if any code
+  tries to DROP/DELETE/TRUNCATE `chat_memory`.
 - **Geoscape Predictive Address & Property API** for autocomplete + verify,
   falling back to OpenStreetMap Nominatim when `GEOSCAPE_API_KEY` is absent.
   Geoscape sources the G-NAF dataset — the official Australian national
