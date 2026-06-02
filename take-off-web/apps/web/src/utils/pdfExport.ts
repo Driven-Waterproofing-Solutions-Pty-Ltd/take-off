@@ -714,7 +714,7 @@ const drawNativeLegend = (
         // exported legend shows cubic quantity, matching the canvas legend
         // and the server quote. Without this, the printed legend would
         // understate the volume and label an area number with the cubic unit.
-        const base = item.type === ToolType.VOLUME && item.depth
+        const base = item.type === ToolType.VOLUME && item.depth != null
             ? raw * item.depth
             : raw;
         const qty = evaluateFormula(item, base);

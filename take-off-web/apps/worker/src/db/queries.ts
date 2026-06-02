@@ -215,7 +215,7 @@ export function rowToTakeoffItem(row: ItemRow, shapes: Shape[]): TakeoffItem {
   // cloud reload the Estimates/Properties UI would show the area number
   // labeled as cubic and underprice the item until the user edits a shape.
   const totalValue =
-    type === ToolType.VOLUME && depth ? row.total_value * depth : row.total_value;
+    type === ToolType.VOLUME && depth != null ? row.total_value * depth : row.total_value;
   return {
     id: row.id,
     label: row.label,

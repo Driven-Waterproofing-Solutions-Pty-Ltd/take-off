@@ -228,7 +228,10 @@ export async function buildQuote(env: Env, projectId: string): Promise<QuoteDraf
           itemId: item.id,
         });
       }
-    } else if (item.price !== undefined) {
+    } else if (item.price) {
+      // Truthy check (not !== undefined) so price 0 is treated as "unpriced"
+      // and the sub-items below become the line items — matching the canvas
+      // Estimates view, which uses sub-items whenever the parent price is 0.
       const qty = evaluateFormula(item, item.totalValue);
       lines.push({
         description: item.label,
@@ -249,7 +252,7 @@ export async function buildQuote(env: Env, projectId: string): Promise<QuoteDraf
     //       their lineTotals to the project total. Match that behaviour
     //       server-side, otherwise quotes would double-charge: once for the
     //       parent's `qty × price` and again for each sub-item line.
-    const parentHasPrice = !item.assemblyId && item.price !== undefined;
+    const parentHasPrice = !item.assemblyId && !!item.price;
     if (!parentHasPrice && item.subItems && item.subItems.length > 0) {
       // Mirror the canvas Estimates view: each sub-item formula can reference
       // every PRIOR sub-item by its variable-safe label. Without this context

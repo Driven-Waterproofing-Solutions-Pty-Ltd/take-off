@@ -562,10 +562,14 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                                                 });
                                             }
 
+                                            // Pricing model (matches the item row below + server buildQuote):
+                                            //  - parent has no price → sub-items ARE the total.
+                                            //  - parent has a price  → sub-items are informational; the
+                                            //    parent's qty × price is the total. Do NOT add sub-items
+                                            //    on top, or the group subtotal exceeds the sum of the
+                                            //    item rows the user sees.
                                             if ((!item.price || item.price === 0) && subItemsTotal > 0) {
                                                 itemTotal = subItemsTotal;
-                                            } else {
-                                                itemTotal += subItemsTotal;
                                             }
 
                                             return sum + itemTotal;

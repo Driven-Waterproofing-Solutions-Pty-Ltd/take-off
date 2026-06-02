@@ -172,6 +172,10 @@ const ExportModal: React.FC<ExportModalProps> = ({
                                                                 id={`page-${globalIdx}`}
                                                                 checked={isSelected}
                                                                 onCheckedChange={() => togglePage(globalIdx)}
+                                                                // Clicking the box toggles via onCheckedChange;
+                                                                // stop the click bubbling to the row's onClick or
+                                                                // it would toggle a second time (net no change).
+                                                                onClick={(e) => e.stopPropagation()}
                                                             />
                                                             <label
                                                                 htmlFor={`page-${globalIdx}`}

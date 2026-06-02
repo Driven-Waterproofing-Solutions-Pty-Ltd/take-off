@@ -470,7 +470,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                                             // per-page quantity in the item's (cubic) unit, so multiply by
                                                             // depth before evaluateFormula — same fix as DraggableLegend +
                                                             // pdfExport so all three surfaces stay consistent.
-                                                            const baseQty = item.type === ToolType.VOLUME && item.depth
+                                                            const baseQty = item.type === ToolType.VOLUME && item.depth != null
                                                                 ? pageRawQty * item.depth
                                                                 : pageRawQty;
                                                             const displayQty = evaluateFormula(item, baseQty);
@@ -593,8 +593,13 @@ const Sidebar: React.FC<SidebarProps> = ({
                         <Separator className="my-1" />
                         <div
                             onClick={() => {
+                                // Use the page the row was right-clicked from
+                                // (contextMenu.pageIndex), not the active canvas
+                                // page — otherwise expanding multiple sidebar
+                                // pages and acting on a non-active one moves the
+                                // wrong sheet's shapes.
                                 const currentPageShapes = contextMenu.item.shapes
-                                    .filter(s => s.pageIndex === pageIndex)
+                                    .filter(s => s.pageIndex === contextMenu.pageIndex)
                                     .map(s => s.id);
                                 setSourceItemIdForChange(contextMenu.item.id);
                                 setSelectedShapeIdsForChange(currentPageShapes);
@@ -608,7 +613,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                         <div
                             onClick={() => {
                                 const shapesOnPage = contextMenu.item.shapes
-                                    .filter(s => s.pageIndex === pageIndex)
+                                    .filter(s => s.pageIndex === contextMenu.pageIndex)
                                     .map(s => ({ itemId: contextMenu.item.id, shapeId: s.id }));
 
                                 if (shapesOnPage.length > 0 && onDeleteShapes) {

@@ -366,7 +366,9 @@ const AppContent: React.FC = () => {
 
   const calculateTotalValue = (shapes: Shape[], item: TakeoffItem) => {
     const baseValue = shapes.reduce((sum, s) => s.deduction ? sum - s.value : sum + s.value, 0);
-    return item.type === ToolType.VOLUME && item.depth ? baseValue * item.depth : baseValue;
+    // depth != null (not truthy) so an explicit depth of 0 yields 0 volume
+    // rather than silently falling back to the raw polygon area.
+    return item.type === ToolType.VOLUME && item.depth != null ? baseValue * item.depth : baseValue;
   };
 
   const handleBatchCreateItems = (itemsToCreate: { newItemId?: string, sourceItemId: string, shapes: Shape[] }[]) => {
@@ -741,7 +743,7 @@ const AppContent: React.FC = () => {
             (sum, s) => (s.deduction ? sum - s.value : sum + s.value),
             0
           );
-          item.totalValue = item.type === ToolType.VOLUME && item.depth
+          item.totalValue = item.type === ToolType.VOLUME && item.depth != null
             ? baseValue * item.depth
             : baseValue;
         }

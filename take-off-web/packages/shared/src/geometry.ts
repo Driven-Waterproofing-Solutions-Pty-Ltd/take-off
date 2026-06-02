@@ -150,8 +150,11 @@ export const getAreaUnitFromLinear = (unit: Unit): Unit => {
       return Unit.SQ_IN;
     case Unit.YARDS:
       return Unit.SQ_YD;
+    // getScaledArea returns (linear unit)² — i.e. sq mi / sq km. Mapping to
+    // acres/hectares would mislabel without the 640× / 100× conversion, so
+    // return the dimensionally-correct squared unit.
     case Unit.MILES:
-      return Unit.ACRES;
+      return Unit.SQ_MI;
     case Unit.METERS:
       return Unit.SQ_M;
     case Unit.CENTIMETERS:
@@ -159,7 +162,7 @@ export const getAreaUnitFromLinear = (unit: Unit): Unit => {
     case Unit.MILLIMETERS:
       return Unit.SQ_MM;
     case Unit.KILOMETERS:
-      return Unit.HECTARES;
+      return Unit.SQ_KM;
     default:
       return unit;
   }

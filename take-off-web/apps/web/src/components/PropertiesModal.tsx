@@ -199,12 +199,22 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
             .filter(g => g.trim() !== '')
     )).sort();
 
+    // Suggestions for the SUB-ITEM formula editor: prior sub-items are valid
+    // context there (buildQuote + the estimate view thread a subContext).
     const variableSuggestions = [
         { label: 'Base Quantity', value: 'Qty', desc: 'The measured value' },
         { label: 'Unit Price', value: 'Price', desc: 'Price per unit' },
         ...properties.map(p => ({ label: p.name, value: toVariableName(p.name), desc: `Value: ${p.value}` })),
         ...subItems.map(s => ({ label: s.label, value: toVariableName(s.label), desc: 'Sub-Item Qty' }))
     ];
+
+    // Suggestions for the MAIN item formula: NO sub-item variables. The main
+    // quantity is evaluated with evaluateFormula(item, qty) and no sub-item
+    // context, so offering a sub-item var there would silently fall back to
+    // Qty in estimates/legends/quotes. Properties + Qty + Price only.
+    const mainFormulaSuggestions = variableSuggestions.filter(
+        v => v.desc !== 'Sub-Item Qty'
+    );
 
     useEffect(() => {
         const convertedQty = convertValue(item.totalValue, item.unit, unit, item.type);
@@ -656,7 +666,7 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
                                     value={formula}
                                     onChange={setFormula}
                                     onBlur={handleBlurFormula}
-                                    suggestions={variableSuggestions}
+                                    suggestions={mainFormulaSuggestions}
                                     previewValue={previewValue}
                                 />
 

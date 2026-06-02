@@ -30,12 +30,14 @@ export enum Unit {
   SQ_FT = 'sq ft',
   SQ_IN = 'sq in',
   SQ_YD = 'sq yd',
+  SQ_MI = 'sq mi',
   ACRES = 'acres',
 
   // Area Metric
   SQ_M = 'sq m',
   SQ_CM = 'sq cm',
   SQ_MM = 'sq mm',
+  SQ_KM = 'sq km',
   HECTARES = 'hectares',
 
   // Volume Imperial

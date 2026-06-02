@@ -195,7 +195,7 @@ const DraggableLegend: React.FC<DraggableLegendProps> = ({
            }, 0);
            // VOLUME shapes store polygon area; multiply by item.depth so the
            // legend reflects volume (m³) rather than the underlying area (m²).
-           const baseQty = item.type === ToolType.VOLUME && item.depth
+           const baseQty = item.type === ToolType.VOLUME && item.depth != null
              ? pageRawQty * item.depth
              : pageRawQty;
            const displayQty = evaluateFormula(item, baseQty);
