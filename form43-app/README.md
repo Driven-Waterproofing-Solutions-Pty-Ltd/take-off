@@ -86,16 +86,38 @@ payload + a hint.
 
 ## Deploy
 
+The Cloudflare infrastructure is **already provisioned** on the Driven
+account and the IDs are wired into `wrangler.jsonc`:
+
+| Resource | Name | ID |
+|---|---|---|
+| D1 database | `form43` | `29482173-2dd4-40d0-826a-c7ac8af5f08a` |
+| KV namespace | `form43-rate-limit` | `721ff5eff217497e9f3e65c78e508bd5` |
+| R2 bucket | `form43-backups` | — |
+
+All 5 migrations have been applied (6 tables + 12 indexes + the
+chat_memory protection trigger), and a few starter memories are seeded.
+
+### Finish the deploy (one-click, no CLI)
+
+1. In GitHub: **Settings → Secrets and variables → Actions** and add:
+   - `CLOUDFLARE_API_TOKEN` — token with Workers Scripts / D1 / Vectorize /
+     KV / R2 edit perms on the Driven account.
+   - `FORM43_API_TOKEN` — the bearer clients use (`openssl rand -hex 32`).
+   - `GEOSCAPE_API_KEY` *(optional)* — enables Geoscape G-NAF; without it the
+     Worker uses the OSM Nominatim fallback.
+2. **Actions → form43-app Deploy → Run workflow.** It creates the Vectorize
+   index, applies migrations, pushes the secrets, and deploys the Worker.
+
+### Or from a CLI (if you'd rather)
+
 ```bash
-wrangler secret put FORM43_API_TOKEN         # 32+ random bytes (hex)
-wrangler secret put GEOSCAPE_API_KEY         # optional; absent → OSM fallback
-npm run db:migrate:prod
+cd form43-app
+wrangler vectorize create form43-memory --dimensions=1024 --metric=cosine
+wrangler secret put FORM43_API_TOKEN
+wrangler secret put GEOSCAPE_API_KEY   # optional
 npm run deploy
 ```
-
-Replace the `database_id` and `RATE_LIMIT_KV.id` placeholders in
-`wrangler.jsonc` with the values printed by `wrangler d1 create` and
-`wrangler kv namespace create`.
 
 ## Source layout
 

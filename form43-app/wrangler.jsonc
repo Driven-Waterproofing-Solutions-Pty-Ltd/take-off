@@ -19,7 +19,7 @@
     {
       "binding": "FORM43_DB",
       "database_name": "form43",
-      "database_id": "REPLACE_WITH_D1_ID",
+      "database_id": "29482173-2dd4-40d0-826a-c7ac8af5f08a",
       "migrations_dir": "migrations"
     }
   ],
@@ -45,7 +45,7 @@
   "kv_namespaces": [
     {
       "binding": "RATE_LIMIT_KV",
-      "id": "REPLACE_WITH_KV_ID"
+      "id": "721ff5eff217497e9f3e65c78e508bd5"
     }
   ],
 
