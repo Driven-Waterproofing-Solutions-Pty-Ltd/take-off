@@ -124,10 +124,20 @@ jobs:
           pnpm --filter @takeoff/worker exec wrangler dev --port 8787 --ip 127.0.0.1 \
             > worker.log 2>&1 &
           echo $! > worker.pid
-          for i in $(seq 1 30); do
+          # `wrangler dev` runs the [build] block (pnpm install + vite build)
+          # before it serves, so first /health can be ~40s out. Poll generously
+          # (up to 120s) and fail LOUD with the worker log if it never comes up,
+          # instead of letting Playwright race a not-yet-listening worker.
+          ok=0
+          for i in $(seq 1 120); do
+            if curl -sf http://127.0.0.1:8787/health > /dev/null; then ok=1; break; fi
             sleep 1
-            curl -sf http://127.0.0.1:8787/health > /dev/null && break
           done
+          if [ "$ok" != "1" ]; then
+            echo "::error::worker did not become healthy within 120s"
+            echo "----- worker.log -----"; cat worker.log
+            exit 1
+          fi
           curl -sf http://127.0.0.1:8787/health
 
       - name: start web (background)
