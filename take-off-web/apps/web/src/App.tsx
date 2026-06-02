@@ -15,7 +15,7 @@ import EstimatesView from './components/EstimatesView';
 import ThreeDView from './components/ThreeDView';
 import PDFSearch from './components/PDFSearch';
 import { ToolType, ProjectData, TakeoffItem, Shape, Unit, PlanSet, LegendSettings } from './types';
-import { PresetScale, getAreaUnitFromLinear, isPointInPolygon } from './utils/geometry';
+import { PresetScale, getAreaUnitFromLinear, getVolumeUnitFromLinear, isPointInPolygon } from './utils/geometry';
 import { useToast } from './contexts/ToastContext';
 import { generateMarkupPDF } from './utils/pdfExport';
 import { Loader2 } from 'lucide-react';
@@ -312,8 +312,11 @@ const AppContent: React.FC = () => {
     const scale = getCurrentPageScale();
     let unit = data.unit;
     if (!unit) {
-      if (pendingTool === ToolType.COUNT) { unit = Unit.EACH; } 
-      else if (pendingTool === ToolType.VOLUME) { unit = Unit.CU_FT; }
+      if (pendingTool === ToolType.COUNT) { unit = Unit.EACH; }
+      // Derive volume unit from the page's calibrated linear unit (metric →
+      // cu m, imperial → cu ft) instead of hardcoding feet — otherwise a
+      // metric page ends up labelling cubic-metre quantities as "cu ft".
+      else if (pendingTool === ToolType.VOLUME) { unit = getVolumeUnitFromLinear(scale.unit); }
       else if (pendingTool === ToolType.AREA || pendingTool === ToolType.FILL) { unit = getAreaUnitFromLinear(scale.unit); }
       else { unit = scale.unit; }
     }
@@ -536,9 +539,22 @@ const AppContent: React.FC = () => {
       if (!item) return;
       const shape = item.shapes.find(s => s.id === shapeId);
 
-      if (item.type === ToolType.AREA && shape && !shape.deduction) {
+      // Cutout cascade: when a parent polygon is deleted, take its contained
+      // deduction shapes with it. Two earlier bugs:
+      //   1. Only AREA was handled — VOLUME and FILL also support cutouts
+      //      via the context menu, so deleting their parent left orphan
+      //      negative shapes that synced to the server (under-quotes).
+      //   2. The containment check didn't compare pages, so a parent on
+      //      page 1 could pull a deduction with matching coordinates off
+      //      page 2.
+      const supportsCutouts =
+        item.type === ToolType.AREA ||
+        item.type === ToolType.VOLUME ||
+        item.type === ToolType.FILL;
+      if (supportsCutouts && shape && !shape.deduction) {
         const childCutouts = item.shapes.filter(other =>
           other.deduction &&
+          other.pageIndex === shape.pageIndex &&
           !processedIds.has(other.id) &&
           other.points.length > 0 &&
           isPointInPolygon(other.points[0], shape.points)
@@ -846,7 +862,7 @@ const AppContent: React.FC = () => {
         )}
       </main>
       {showUploadModal && <UploadModal onUpload={handleUpload} onCancel={() => setShowUploadModal(false)} isFirstUpload={planSets.length === 0} />}
-      {showNewItemModal && pendingTool && <NewItemModal toolType={pendingTool} existingCount={items.length} onCreate={handleCreateTakeoffItem} onCancel={() => { setShowNewItemModal(false); setPendingTool(null); }} />}
+      {showNewItemModal && pendingTool && <NewItemModal toolType={pendingTool} existingCount={items.length} scaleUnit={currentScale.unit} onCreate={handleCreateTakeoffItem} onCancel={() => { setShowNewItemModal(false); setPendingTool(null); }} />}
       {editingItem && <PropertiesModal item={editingItem} items={items} onSave={handleUpdateItem} onClose={() => setEditingItem(null)} />}
       <HelpModal isOpen={showHelpModal} onClose={() => setShowHelpModal(false)} initialTab={helpModalTab} />
       <ExportModal isOpen={showExportModal} planSets={planSets} projectData={projectData} currentPageIndex={pageIndex} isExporting={isExporting} progress={exportProgress} onClose={() => setShowExportModal(false)} onExport={handleExportPDF} />

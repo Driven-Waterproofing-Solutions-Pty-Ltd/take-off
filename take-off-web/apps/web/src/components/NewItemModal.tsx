@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { TakeoffItem, ToolType } from '../types';
+import { TakeoffItem, ToolType, Unit } from '../types';
 import { generateColor } from '../utils/geometry';
 import TemplateManager from './TemplateManager';
 import { Tag, Edit3 } from 'lucide-react';
@@ -18,21 +18,36 @@ import { Button } from "@/components/ui/button"
 interface NewItemModalProps {
     toolType: ToolType;
     existingCount: number;
+    /** Linear unit of the calibrated page (for VOLUME depth UI). */
+    scaleUnit?: Unit;
     onCreate: (data: Partial<TakeoffItem>) => void;
     onCancel: () => void;
 }
 
-const NewItemModal: React.FC<NewItemModalProps> = ({ toolType, existingCount, onCreate, onCancel }) => {
+// Imperial linear units take the feet+inches UI; everything else uses a
+// single numeric field labelled with the page's unit. Stored `depth` is
+// always in the same linear unit as the area calculation so quote/legend
+// math (area × depth) stays unit-consistent.
+const IMPERIAL_DEPTH = new Set<Unit>([Unit.FEET, Unit.INCHES, Unit.YARDS, Unit.MILES]);
+
+const NewItemModal: React.FC<NewItemModalProps> = ({ toolType, existingCount, scaleUnit, onCreate, onCancel }) => {
     // Basic Form State
     const [name, setName] = useState(`${toolType.charAt(0) + toolType.slice(1).toLowerCase()} ${existingCount + 1}`);
     const [color, setColor] = useState(generateColor(existingCount));
+    const depthUnit: Unit = scaleUnit ?? Unit.FEET;
+    const useImperialDepth = IMPERIAL_DEPTH.has(depthUnit);
     const [depthFeet, setDepthFeet] = useState(0);
     const [depthInches, setDepthInches] = useState(0);
+    const [depthMetric, setDepthMetric] = useState(0); // value in `depthUnit`
 
     const handleBasicSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (name.trim()) {
-            const depth = toolType === ToolType.VOLUME ? (depthFeet + depthInches / 12) : undefined;
+            const depth = toolType === ToolType.VOLUME
+                ? (useImperialDepth
+                    ? depthFeet + depthInches / 12 // value in feet
+                    : depthMetric)                  // value in depthUnit (m, cm, mm)
+                : undefined;
             onCreate({ label: name, color, depth });
         }
     };
@@ -94,28 +109,39 @@ const NewItemModal: React.FC<NewItemModalProps> = ({ toolType, existingCount, on
 
                             {toolType === ToolType.VOLUME && (
                                 <div className="space-y-2">
-                                    <Label>Depth</Label>
-                                    <div className="flex gap-2">
-                                        <div className="flex-1">
-                                            <Input
-                                                type="number"
-                                                placeholder="Feet"
-                                                value={depthFeet}
-                                                onChange={e => setDepthFeet(Number(e.target.value) || 0)}
-                                                min={0}
-                                            />
+                                    <Label>Depth ({useImperialDepth ? 'ft / in' : depthUnit})</Label>
+                                    {useImperialDepth ? (
+                                        <div className="flex gap-2">
+                                            <div className="flex-1">
+                                                <Input
+                                                    type="number"
+                                                    placeholder="Feet"
+                                                    value={depthFeet}
+                                                    onChange={e => setDepthFeet(Number(e.target.value) || 0)}
+                                                    min={0}
+                                                />
+                                            </div>
+                                            <div className="flex-1">
+                                                <Input
+                                                    type="number"
+                                                    placeholder="Inches"
+                                                    value={depthInches}
+                                                    onChange={e => setDepthInches(Number(e.target.value) || 0)}
+                                                    min={0}
+                                                    max={11}
+                                                />
+                                            </div>
                                         </div>
-                                        <div className="flex-1">
-                                            <Input
-                                                type="number"
-                                                placeholder="Inches"
-                                                value={depthInches}
-                                                onChange={e => setDepthInches(Number(e.target.value) || 0)}
-                                                min={0}
-                                                max={11}
-                                            />
-                                        </div>
-                                    </div>
+                                    ) : (
+                                        <Input
+                                            type="number"
+                                            step="0.001"
+                                            placeholder={depthUnit}
+                                            value={depthMetric}
+                                            onChange={e => setDepthMetric(Number(e.target.value) || 0)}
+                                            min={0}
+                                        />
+                                    )}
                                 </div>
                             )}
 

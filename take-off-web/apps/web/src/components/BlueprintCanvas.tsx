@@ -712,8 +712,11 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 setMuPdfLoaded(true);
                 console.log("MuPDF loaded document, pages:", pageCount);
 
-                // Get dimensions of first page to set content width
-                const dims = mupdfController.getPageDimensions(0);
+                // Initialise dimensions from the page the user is currently
+                // viewing (not always page 0 — a project can deep-link into
+                // page 2 of a freshly opened PDF). A separate effect keyed on
+                // [localPageIndex, muPdfLoaded] re-reads when the user pages.
+                const dims = mupdfController.getPageDimensions(localPageIndex);
                 const initialWidth = dims.width * RENDER_SCALE; // Render at high res
 
                 setContentWidth(initialWidth);
@@ -744,6 +747,23 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 
         return () => { setMuPdfLoaded(false); };
     }, [file]);
+
+    // Re-read dimensions when the user navigates to a different page WITHIN
+    // the same PDF. Without this, contentWidth/originalPdfWidth/aspectRatio
+    // stay stuck on page 0 (or the page that was loaded first) — the markup
+    // layer disappears or scales wrong on pages with different sizes.
+    useEffect(() => {
+        if (!muPdfLoaded) return;
+        try {
+            const dims = mupdfController.getPageDimensions(localPageIndex);
+            setContentWidth(dims.width * RENDER_SCALE);
+            setOriginalPdfWidth(dims.width);
+            setPdfAspectRatio(dims.height / dims.width);
+            onPageWidthChange(dims.width);
+        } catch (e) {
+            console.warn('Failed to read page dimensions on page change', localPageIndex, e);
+        }
+    }, [localPageIndex, muPdfLoaded]);
 
     // Vector-cache upload: dedicated effect with snapshot-on-success and
     // tick-based retry. Pages are dedup'd by (projectId, globalPageIndex);
