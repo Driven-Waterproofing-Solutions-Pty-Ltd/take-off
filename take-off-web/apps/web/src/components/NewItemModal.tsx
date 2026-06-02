@@ -24,18 +24,19 @@ interface NewItemModalProps {
     onCancel: () => void;
 }
 
-// Imperial linear units take the feet+inches UI; everything else uses a
-// single numeric field labelled with the page's unit. Stored `depth` is
-// always in the same linear unit as the area calculation so quote/legend
-// math (area × depth) stays unit-consistent.
-const IMPERIAL_DEPTH = new Set<Unit>([Unit.FEET, Unit.INCHES, Unit.YARDS, Unit.MILES]);
+// Only the FEET unit uses the dual feet+inches input affordance (common
+// construction shorthand). Inches / yards / any metric unit use a single
+// numeric field labelled with that unit, and depth is stored in the same
+// linear unit as the area calculation so volume = area × depth is
+// unit-consistent regardless of calibration.
+const USE_FEET_INCHES_DEPTH = (unit: Unit) => unit === Unit.FEET;
 
 const NewItemModal: React.FC<NewItemModalProps> = ({ toolType, existingCount, scaleUnit, onCreate, onCancel }) => {
     // Basic Form State
     const [name, setName] = useState(`${toolType.charAt(0) + toolType.slice(1).toLowerCase()} ${existingCount + 1}`);
     const [color, setColor] = useState(generateColor(existingCount));
     const depthUnit: Unit = scaleUnit ?? Unit.FEET;
-    const useImperialDepth = IMPERIAL_DEPTH.has(depthUnit);
+    const useImperialDepth = USE_FEET_INCHES_DEPTH(depthUnit);
     const [depthFeet, setDepthFeet] = useState(0);
     const [depthInches, setDepthInches] = useState(0);
     const [depthMetric, setDepthMetric] = useState(0); // value in `depthUnit`
@@ -45,8 +46,8 @@ const NewItemModal: React.FC<NewItemModalProps> = ({ toolType, existingCount, sc
         if (name.trim()) {
             const depth = toolType === ToolType.VOLUME
                 ? (useImperialDepth
-                    ? depthFeet + depthInches / 12 // value in feet
-                    : depthMetric)                  // value in depthUnit (m, cm, mm)
+                    ? depthFeet + depthInches / 12 // ft + in/12 → feet (the page unit)
+                    : depthMetric)                  // value in depthUnit (in, yd, m, cm, mm)
                 : undefined;
             onCreate({ label: name, color, depth });
         }

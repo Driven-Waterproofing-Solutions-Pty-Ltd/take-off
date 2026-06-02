@@ -96,7 +96,11 @@ const Sidebar: React.FC<SidebarProps> = ({
     const [tempItemName, setTempItemName] = useState('');
 
     // Context Menu State
-    const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: TakeoffItem } | null>(null);
+    // contextMenu carries the page index the row was right-clicked from, so
+    // hide/show toggles affect THAT page rather than the currently viewed one.
+    // Without this, expanding multiple pages in the sidebar and right-clicking
+    // an item under a non-active page would sync hiddenPages to the wrong sheet.
+    const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: TakeoffItem; pageIndex: number } | null>(null);
 
     // Change Item Modal State
     const [showChangeItemModal, setShowChangeItemModal] = useState(false);
@@ -249,9 +253,9 @@ const Sidebar: React.FC<SidebarProps> = ({
         }
     };
 
-    const handleItemContextMenu = (e: React.MouseEvent, item: TakeoffItem) => {
+    const handleItemContextMenu = (e: React.MouseEvent, item: TakeoffItem, rowPageIndex: number) => {
         e.preventDefault();
-        setContextMenu({ x: e.clientX, y: e.clientY, item });
+        setContextMenu({ x: e.clientX, y: e.clientY, item, pageIndex: rowPageIndex });
     };
 
     // Safety check to strictly enforce min width
@@ -476,7 +480,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                                                 <div
                                                                     key={item.id}
                                                                     onClick={() => onSelect(item.id)}
-                                                                    onContextMenu={(e) => handleItemContextMenu(e, item)}
+                                                                    onContextMenu={(e) => handleItemContextMenu(e, item, globalIdx)}
                                                                     className={`group flex items-center gap-1 px-1 py-1 rounded-md cursor-pointer transition-all border border-transparent ${isHighlighted
                                                                         ? 'bg-background border-primary/20 shadow-sm ring-1 ring-primary/10'
                                                                         : 'hover:bg-muted/40 text-muted-foreground hover:text-foreground'
@@ -580,11 +584,11 @@ const Sidebar: React.FC<SidebarProps> = ({
                             <Settings size={14} className="mr-2 h-4 w-4" /> Properties
                         </div>
                         <div
-                            onClick={() => { onToggleVisibility(contextMenu.item.id, pageIndex); setContextMenu(null); }}
+                            onClick={() => { onToggleVisibility(contextMenu.item.id, contextMenu.pageIndex); setContextMenu(null); }}
                             className="relative flex cursor-pointer select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50"
                         >
-                            {contextMenu.item.visible !== false && !contextMenu.item.hiddenPages?.includes(pageIndex) ? <Eye size={14} className="mr-2 h-4 w-4" /> : <EyeOff size={14} className="mr-2 h-4 w-4" />}
-                            {contextMenu.item.visible !== false && !contextMenu.item.hiddenPages?.includes(pageIndex) ? "Hide Item" : "Show Item"}
+                            {contextMenu.item.visible !== false && !contextMenu.item.hiddenPages?.includes(contextMenu.pageIndex) ? <Eye size={14} className="mr-2 h-4 w-4" /> : <EyeOff size={14} className="mr-2 h-4 w-4" />}
+                            {contextMenu.item.visible !== false && !contextMenu.item.hiddenPages?.includes(contextMenu.pageIndex) ? "Hide Item" : "Show Item"}
                         </div>
                         <Separator className="my-1" />
                         <div

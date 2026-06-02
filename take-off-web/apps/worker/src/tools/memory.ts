@@ -242,11 +242,15 @@ export async function buildQuote(env: Env, projectId: string): Promise<QuoteDraf
 
     // Sub-items: the Properties/Estimates UI lets users break an item down
     // into material/labour sub-lines, each with its own formula and price.
-    // The browser estimate sums these; the server quote must too, otherwise
-    // items priced entirely via subItems (parent price = 0/undefined) get
-    // dropped from /api/memory/quote and Xero pushes silently. Each sub-item
-    // gets its own quote line so the customer sees the breakdown.
-    if (item.subItems && item.subItems.length > 0) {
+    // Two cases:
+    //   (a) parent price is unset: sub-items ARE the line items — emit each.
+    //   (b) parent has a price already (emitted above): the in-app Estimates
+    //       view treats sub-items as informational only and does NOT add
+    //       their lineTotals to the project total. Match that behaviour
+    //       server-side, otherwise quotes would double-charge: once for the
+    //       parent's `qty × price` and again for each sub-item line.
+    const parentHasPrice = !item.assemblyId && item.price !== undefined;
+    if (!parentHasPrice && item.subItems && item.subItems.length > 0) {
       // Mirror the canvas Estimates view: each sub-item formula can reference
       // every PRIOR sub-item by its variable-safe label. Without this context
       // a chain like `Membrane = Qty`, `Adhesive = Membrane * 0.2` would

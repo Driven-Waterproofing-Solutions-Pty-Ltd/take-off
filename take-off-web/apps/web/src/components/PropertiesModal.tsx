@@ -443,6 +443,9 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
             price: price ? parseFloat(price) : undefined,
             formula: sanitizeFormula(withVars),
             group: group.trim() || 'General',
+            // VOLUME templates need depth too, otherwise items spawned from
+            // the template fall back to area-only totals.
+            depth: item.depth,
             createdAt: Date.now()
         };
         await saveTemplate(template);

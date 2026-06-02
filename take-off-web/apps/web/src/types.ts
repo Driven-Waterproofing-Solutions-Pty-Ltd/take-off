@@ -133,6 +133,8 @@ export interface ItemTemplate {
   formula?: string;
   group?: string;
   tags?: string[];
+  /** For VOLUME templates: depth in the page's linear unit (matches Item.depth). */
+  depth?: number;
   createdAt: number;
 }
 

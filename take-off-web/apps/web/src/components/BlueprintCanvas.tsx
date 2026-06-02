@@ -710,11 +710,20 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     // Load Document into MuPDF
     useEffect(() => {
         if (!file) return;
+        // Cancellation guard for rapid file switches. mupdfController is a
+        // singleton, so two concurrent loadDocument() calls overlap — the
+        // earlier .arrayBuffer + .loadDocument can still resolve AFTER the
+        // newer one finishes and stomp dimensions / cached vectors / image
+        // back to the previous PDF's data. We track per-effect "cancelled"
+        // and bail out of every state setter on stale resolves.
+        let cancelled = false;
 
         const loadDoc = async () => {
             try {
                 const buffer = await file.arrayBuffer();
+                if (cancelled) return;
                 const pageCount = await mupdfController.loadDocument(new Uint8Array(buffer));
+                if (cancelled) return;
                 setNumPages(pageCount);
                 setMuPdfLoaded(true);
                 console.log("MuPDF loaded document, pages:", pageCount);
@@ -724,6 +733,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 // page 2 of a freshly opened PDF). A separate effect keyed on
                 // [localPageIndex, muPdfLoaded] re-reads when the user pages.
                 const dims = mupdfController.getPageDimensions(localPageIndex);
+                if (cancelled) return;
                 const initialWidth = dims.width * RENDER_SCALE; // Render at high res
 
                 setContentWidth(initialWidth);
@@ -733,6 +743,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 
                 // Extract vector data and render image
                 const vectorData = await extractVectorPaths(file);
+                if (cancelled) return;
                 setCachedVectors(vectorData);
 
                 // Vector cache uploads are handled by a dedicated effect that
@@ -740,19 +751,24 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 // effect below.
 
                 const imageData = await renderPdfAsImage(file);
+                if (cancelled) return;
                 setPdfImage(imageData);
 
                 if (onPageLoaded) onPageLoaded();
                 setIsCurrentPageLoaded(true); // Mark as ready
 
             } catch (e) {
+                if (cancelled) return;
                 console.error("MuPDF Load Error", e);
                 addToast("Failed to load PDF with MuPDF engine", "error");
             }
         };
         loadDoc();
 
-        return () => { setMuPdfLoaded(false); };
+        return () => {
+            cancelled = true;
+            setMuPdfLoaded(false);
+        };
     }, [file]);
 
     // Re-read dimensions when the user navigates to a different page WITHIN
@@ -2164,6 +2180,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                                         if ((i.type === ToolType.AREA || i.type === ToolType.VOLUME || i.type === ToolType.FILL) && !s.deduction) {
                                                             const childCutouts = i.shapes.filter(other =>
                                                                 other.deduction &&
+                                                                other.pageIndex === s.pageIndex && // SAME PAGE only
                                                                 !processedIds.has(other.id) &&
                                                                 other.points.length > 0 &&
                                                                 isPointInPolygon(other.points[0], s.points)
@@ -2564,7 +2581,12 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                         </div>
                         <div className="flex gap-2 mb-4">
                             <input autoFocus className="border p-2 flex-1 rounded bg-white text-slate-900" placeholder="Length (e.g. 50')" value={scaleInputStr} onChange={e => setScaleInputStr(e.target.value)} />
-                            <select className="border p-2 rounded bg-white text-slate-900" title="Unit of measurement" aria-label="Unit of measurement" value={scaleUnit} onChange={e => setScaleUnit(e.target.value as Unit)}>{Object.values(Unit).map(u => <option key={u} value={u}>{u}</option>)}</select>
+                            <select className="border p-2 rounded bg-white text-slate-900" title="Unit of measurement" aria-label="Unit of measurement" value={scaleUnit} onChange={e => setScaleUnit(e.target.value as Unit)}>
+                                {/* Calibration scale is pixels-per-LINEAR-unit. Picking sq ft / cu yd /
+                                    hrs would make scaleInfo.unit non-linear and corrupt every downstream
+                                    area/volume label derived from it via getAreaUnitFromLinear etc. */}
+                                {[Unit.FEET, Unit.INCHES, Unit.YARDS, Unit.MILES, Unit.METERS, Unit.CENTIMETERS, Unit.MILLIMETERS, Unit.KILOMETERS].map(u => <option key={u} value={u}>{u}</option>)}
+                            </select>
                         </div>
                         <div className="flex justify-end gap-2">
                             <button onClick={() => { setShowScaleModal(false); setDrawingPoints([]); }} className="text-slate-500 px-4">Cancel</button>
