@@ -6,8 +6,17 @@ import { mupdfController } from '../utils/mupdfController';
 // Upload newly-added PlanSet PDFs to R2 + register them in D1.
 // First render after a projectId change primes snapshots without uploading
 // (hydration path: those planSets already live on the server).
+//
+// `onR2KeyResolved` lets the caller stamp the registered file_key back onto
+// the PlanSet in app state (via the Immer-backed history `set` API), so the
+// "Save Project" ZIP exporter — which reads each plan set's __r2_key to
+// serialize r2_key into the snapshot — sees newly uploaded plans.
 
-export function usePlanSetSync(projectId: string | null, planSets: PlanSet[]): void {
+export function usePlanSetSync(
+  projectId: string | null,
+  planSets: PlanSet[],
+  onR2KeyResolved?: (planSetId: string, fileKey: string) => void,
+): void {
   const lastProjectId = useRef<string | null>(null);
   // Per-project dedup state. `seen` covers planSets we don't need to (re)upload;
   // `r2Keys` remembers the R2 file_key we got back for each upload so we don't
@@ -15,6 +24,10 @@ export function usePlanSetSync(projectId: string | null, planSets: PlanSet[]): v
   const seen = useRef<Set<string>>(new Set());
   const inflight = useRef<Set<string>>(new Set());
   const r2Keys = useRef<Map<string, string>>(new Map());
+  // Stash the latest callback so callers can pass an inline function without
+  // having to memoise it — we don't want it to trigger an effect re-run.
+  const onR2KeyResolvedRef = useRef(onR2KeyResolved);
+  onR2KeyResolvedRef.current = onR2KeyResolved;
   // Same retry-loop pattern as useScaleSync / useShapeSync. A transient R2
   // upload or /api/projects/:id/pdfs failure should not strand the PDF in
   // local-only state; bumping tick on every inflight completion wakes the
@@ -76,6 +89,10 @@ export function usePlanSetSync(projectId: string | null, planSets: PlanSet[]): v
 
           r2Keys.current.set(set.id, file_key);
           seen.current.add(set.id);
+          // Propagate into app state so exportProjectToZip can serialize
+          // r2_key on plan sets that were uploaded mid-session, not only
+          // those rehydrated from the server.
+          onR2KeyResolvedRef.current?.(set.id, file_key);
         } catch (e) {
           console.error('sync: planSet upload failed', set.id, e);
         } finally {
