@@ -91,4 +91,13 @@ app.put('/pages/:projectId/:pageIndex/vector-cache', async (c) => {
   return c.json({ ok: true });
 });
 
+// Client persists per-page legend settings (position, scale, visibility).
+app.put('/pages/:projectId/:pageIndex/legend', async (c) => {
+  const projectId = c.req.param('projectId');
+  const pageIndex = parseInt(c.req.param('pageIndex'), 10);
+  const legend = await c.req.json();
+  await upsertPage(c.env.DB, projectId, pageIndex, { legend });
+  return c.json({ ok: true });
+});
+
 export default app;

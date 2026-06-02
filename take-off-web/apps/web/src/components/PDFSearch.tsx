@@ -93,8 +93,18 @@ const PDFSearch: React.FC<PDFSearchProps> = ({
             const currentPageHits = searchResults.pages.find(p => p.pageIndex === currentPageIndex)?.hits || [];
             onHighlightsChange?.(currentPageHits);
             onCurrentHitChange?.(0);
+
+            // Navigate to the first result immediately. setSelectedResultIndex(0)
+            // is a no-op when it's already 0, so the watching effect doesn't
+            // fire on the first search of a session and the canvas wouldn't
+            // jump to the match. Drive the navigation here so a new search
+            // always lands on its first hit regardless of prior selection.
+            const firstHitPage = searchResults.pages[0]?.pageIndex;
+            if (firstHitPage !== undefined && firstHitPage !== currentPageIndex) {
+                onNavigateToPage(firstHitPage);
+            }
         }, 300);
-    }, [activePlanStartPageIndex]);
+    }, [activePlanStartPageIndex, currentPageIndex, onNavigateToPage, onHighlightsChange, onCurrentHitChange]);
 
     // Handle input change
     const handleQueryChange = (e: React.ChangeEvent<HTMLInputElement>) => {

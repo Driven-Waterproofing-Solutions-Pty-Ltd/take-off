@@ -18,6 +18,8 @@ export async function createItem(
     visible?: boolean;
     depth?: number;
     assembly_id?: string;
+    sub_items?: unknown;
+    hidden_pages?: number[];
   }
 ): Promise<TakeoffItem> {
   const id = args.id ?? crypto.randomUUID();
@@ -25,9 +27,9 @@ export async function createItem(
   await env.DB.prepare(
     `INSERT INTO items
        (id, project_id, label, type, color, unit, total_value, group_name,
-        properties_json, price, formula, visible, depth, assembly_id,
-        created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        properties_json, price, formula, sub_items_json, visible, depth,
+        hidden_pages_json, assembly_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
@@ -40,8 +42,10 @@ export async function createItem(
       args.properties ? JSON.stringify(args.properties) : null,
       args.price ?? null,
       args.formula ?? null,
+      args.sub_items ? JSON.stringify(args.sub_items) : null,
       args.visible === false ? 0 : 1,
       args.depth ?? null,
+      args.hidden_pages ? JSON.stringify(args.hidden_pages) : null,
       args.assembly_id ?? null,
       now,
       now

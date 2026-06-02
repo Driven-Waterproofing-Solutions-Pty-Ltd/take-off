@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { PlanSet } from '../types';
 import { api } from '../lib/api';
 import { mupdfController } from '../utils/mupdfController';
@@ -18,6 +18,12 @@ export function usePlanSetSync(projectId: string | null, planSets: PlanSet[]): v
   const lastProjectId = useRef<string | null>(null);
   const seen = useRef<Set<string>>(new Set());
   const inflight = useRef<Set<string>>(new Set());
+  // Same retry-loop pattern as useScaleSync / useShapeSync. A transient R2
+  // upload or /api/projects/:id/pdfs failure should not strand the PDF in
+  // local-only state; bumping tick on every inflight completion wakes the
+  // effect for another pass against the same plan set.
+  const [tick, setTick] = useState(0);
+  const retry = () => setTick((t) => t + 1);
 
   useEffect(() => {
     if (!projectId) return;
@@ -76,8 +82,9 @@ export function usePlanSetSync(projectId: string | null, planSets: PlanSet[]): v
           console.error('sync: planSet upload failed', set.id, e);
         } finally {
           inflight.current.delete(set.id);
+          retry();
         }
       })();
     }
-  }, [projectId, planSets]);
+  }, [projectId, planSets, tick]);
 }

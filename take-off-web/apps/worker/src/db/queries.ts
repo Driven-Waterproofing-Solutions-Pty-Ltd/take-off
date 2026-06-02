@@ -22,6 +22,7 @@ export interface PageRow {
   scale_json: string;
   vector_cache_json: string | null;
   name: string | null;
+  legend_json: string | null;
 }
 
 export interface ItemRow {
@@ -65,7 +66,12 @@ export async function upsertPage(
   db: D1Database,
   projectId: string,
   pageIndex: number,
-  fields: Partial<{ scale: ScaleCalibration; vectorCache: unknown; name: string }>
+  fields: Partial<{
+    scale: ScaleCalibration;
+    vectorCache: unknown;
+    name: string;
+    legend: unknown;
+  }>
 ): Promise<PageRow> {
   const existing = await getPage(db, projectId, pageIndex);
   const scale_json = fields.scale ? JSON.stringify(fields.scale) : existing?.scale_json ?? null;
@@ -74,29 +80,35 @@ export async function upsertPage(
       ? JSON.stringify(fields.vectorCache)
       : existing?.vector_cache_json ?? null;
   const name = fields.name ?? existing?.name ?? null;
+  const legend_json =
+    fields.legend !== undefined
+      ? JSON.stringify(fields.legend)
+      : existing?.legend_json ?? null;
 
   if (existing) {
     await db
       .prepare(
         `UPDATE pages SET scale_json = COALESCE(?, scale_json),
                           vector_cache_json = ?,
-                          name = ?
+                          name = ?,
+                          legend_json = ?
          WHERE project_id = ? AND page_index = ?`
       )
-      .bind(scale_json, vector_cache_json, name, projectId, pageIndex)
+      .bind(scale_json, vector_cache_json, name, legend_json, projectId, pageIndex)
       .run();
   } else {
     await db
       .prepare(
-        `INSERT INTO pages (project_id, page_index, scale_json, vector_cache_json, name)
-         VALUES (?, ?, ?, ?, ?)`
+        `INSERT INTO pages (project_id, page_index, scale_json, vector_cache_json, name, legend_json)
+         VALUES (?, ?, ?, ?, ?, ?)`
       )
       .bind(
         projectId,
         pageIndex,
         scale_json ?? '{"isSet":false,"pixelsPerUnit":0,"unit":"m"}',
         vector_cache_json,
-        name
+        name,
+        legend_json
       )
       .run();
   }

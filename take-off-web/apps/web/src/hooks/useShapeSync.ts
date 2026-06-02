@@ -169,7 +169,9 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
             group: item.group,
             visible: item.visible,
             depth: item.depth,
-            assembly_id: item.assemblyId, // P1 fix: preserve assembly link
+            assembly_id: item.assemblyId,   // preserve assembly link
+            sub_items: item.subItems,       // preserve sub-item breakdown
+            hidden_pages: item.hiddenPages, // preserve per-page hides on copy/paste
           })
           .catch((e) => {
             // If create fails, drop the snapshot so the next pass retries.

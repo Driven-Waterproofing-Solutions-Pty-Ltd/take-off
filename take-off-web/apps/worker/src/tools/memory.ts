@@ -230,6 +230,31 @@ export async function buildQuote(env: Env, projectId: string): Promise<QuoteDraf
         itemId: item.id,
       });
     }
+
+    // Sub-items: the Properties/Estimates UI lets users break an item down
+    // into material/labour sub-lines, each with its own formula and price.
+    // The browser estimate sums these; the server quote must too, otherwise
+    // items priced entirely via subItems (parent price = 0/undefined) get
+    // dropped from /api/memory/quote and Xero pushes silently. Each sub-item
+    // gets its own quote line so the customer sees the breakdown.
+    if (item.subItems && item.subItems.length > 0) {
+      for (const sub of item.subItems) {
+        // Sub-item formulas can reference Qty (item totalValue) and other
+        // item properties; reuse evaluateFormula with the sub-item's formula
+        // override so the calculation matches what the UI shows.
+        const subQty = evaluateFormula(item, undefined, sub.formula);
+        const lineTotal = subQty * sub.price;
+        if (lineTotal === 0) continue; // skip zero-cost lines to keep quotes clean
+        lines.push({
+          description: `${item.label} — ${sub.label}`,
+          qty: subQty,
+          unit: String(sub.unit),
+          unitPrice: sub.price,
+          lineTotal,
+          itemId: item.id,
+        });
+      }
+    }
   }
 
   const subtotal = lines.reduce((s, l) => s + l.lineTotal, 0);

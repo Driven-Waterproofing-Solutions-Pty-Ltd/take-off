@@ -69,7 +69,10 @@ export const exportProjectToZip = async (
   projectName: string
 ): Promise<Blob> => {
   // "Zip" is a misnomer on web — we emit a plain JSON snapshot.
-  // PDFs are referenced by R2 key, not embedded.
+  // PDFs themselves stay in R2; the snapshot carries the r2_key so
+  // useProjectManagerWeb can fetch the blob back after import. Stamping the
+  // key (and the stable plan-set id) means a reimported snapshot reopens
+  // with renderable plans instead of empty placeholders.
   const snapshot = {
     items,
     projectData,
@@ -79,6 +82,7 @@ export const exportProjectToZip = async (
       pageCount: p.pageCount,
       startPageIndex: p.startPageIndex,
       pages: p.pages,
+      r2_key: (p as { __r2_key?: string }).__r2_key,
     })),
     totalPages,
     projectName,
@@ -93,10 +97,18 @@ export const importProjectFromZip = async (data: File | Uint8Array): Promise<Pro
       ? await data.text()
       : new TextDecoder().decode(data);
   const parsed = JSON.parse(text);
+  // Restore __r2_key on each plan set so usePlanSetSync doesn't try to
+  // re-upload PDFs that are already on the server.
+  const planSets = (parsed.planSets ?? []).map((p: PlanSet & { r2_key?: string }) => {
+    if (p.r2_key) {
+      return { ...p, __r2_key: p.r2_key };
+    }
+    return p;
+  });
   return {
     items: parsed.items ?? [],
     projectData: parsed.projectData ?? {},
-    planSets: parsed.planSets ?? [],
+    planSets,
     totalPages: parsed.totalPages ?? 0,
     projectName: parsed.projectName ?? 'Imported Project',
   };

@@ -204,6 +204,8 @@ export const api = {
       visible?: boolean;
       depth?: number;
       assembly_id?: string;
+      sub_items?: unknown;
+      hidden_pages?: number[];
     }) =>
       req<TakeoffItem>('/api/measure/items', {
         method: 'POST',
@@ -240,6 +242,14 @@ export const api = {
       req(`/api/measure/pages/${projectId}/${pageIndex}/vector-cache`, {
         method: 'PUT',
         body: JSON.stringify(cache),
+      }),
+  },
+
+  legend: {
+    set: (projectId: string, pageIndex: number, legend: unknown) =>
+      req(`/api/measure/pages/${projectId}/${pageIndex}/legend`, {
+        method: 'PUT',
+        body: JSON.stringify(legend),
       }),
   },
 

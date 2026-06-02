@@ -30,7 +30,12 @@ async function fetchProject(projectId: string): Promise<ProjectSnapshot | null> 
     const items = await api.items.list(projectId);
     const meta = (await api.projects.get(projectId)) as {
       project: { name: string };
-      pages: Array<{ page_index: number; scale_json: string; name: string | null }>;
+      pages: Array<{
+        page_index: number;
+        scale_json: string;
+        name: string | null;
+        legend_json: string | null;
+      }>;
       pdfs: Array<{
         id: string;
         name: string | null;
@@ -45,6 +50,7 @@ async function fetchProject(projectId: string): Promise<ProjectSnapshot | null> 
       projectData[p.page_index] = {
         scale: JSON.parse(p.scale_json),
         name: p.name ?? undefined,
+        legend: p.legend_json ? JSON.parse(p.legend_json) : undefined,
       };
     }
     // Fetch each PDF blob and reconstruct File objects so MuPDF can render.
