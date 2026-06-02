@@ -29,12 +29,10 @@ app.onError((err, c) => {
   return c.json({ error: message }, isUserFacing ? 400 : 500);
 });
 
-app.get('/', (c) =>
-  c.json({
-    name: 'takeoff-worker',
-    version: '0.0.1',
-    docs: 'https://takeoff.drivenwp.com/docs',
-  })
+// Root path is served by Workers Assets (index.html) — no JSON debug here.
+// Use /__worker for a worker-only ping if you ever need to bypass the SPA.
+app.get('/__worker', (c) =>
+  c.json({ name: 'takeoff-worker', version: '0.0.1' })
 );
 
 app.get('/health', async (c) => {

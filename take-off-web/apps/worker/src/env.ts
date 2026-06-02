@@ -1,8 +1,11 @@
-import type { D1Database, R2Bucket } from '@cloudflare/workers-types';
+import type { D1Database, Fetcher, R2Bucket } from '@cloudflare/workers-types';
 
 export interface Env {
   DB: D1Database;
   PDFS: R2Bucket;
+  // Workers Assets binding — runtime serves static SPA files automatically
+  // (we don't call .fetch() on this; declared for type completeness).
+  ASSETS: Fetcher;
 
   APP_BASE_URL: string;
 

@@ -3,6 +3,20 @@ main = "src/index.ts"
 compatibility_date = "2026-05-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Workers Builds runs this BEFORE bundling the worker. The Vite SPA build
+# emits to apps/web/dist; the [assets] block below picks it up so a single
+# Worker serves both the API (Hono routes) and the SPA (static fall-through).
+[build]
+command = "cd ../.. && pnpm install --frozen-lockfile && pnpm --filter @takeoff/web build"
+
+# Static SPA — Workers Assets serves these on cache hit; misses fall to the
+# worker's fetch handler (Hono). SPA fallback rewrites unknown paths to
+# index.html so client-side routes like /login work on direct navigation.
+[assets]
+directory = "../web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
 # D1 database
 [[d1_databases]]
 binding = "DB"
@@ -19,7 +33,7 @@ bucket_name = "takeoff-pdfs"
 [triggers]
 crons = ["0 16 * * *"] # 16:00 UTC = 02:00 AEST
 
-# Vars set via `wrangler secret put` (never commit values):
+# Vars set via the Workers dashboard (Settings → Variables and Secrets):
 # - XERO_CLIENT_ID
 # - XERO_CLIENT_SECRET
 # - XERO_REDIRECT_URI
