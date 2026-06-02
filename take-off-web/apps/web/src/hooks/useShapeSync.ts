@@ -29,6 +29,8 @@ interface ItemSnapshot {
   depth?: number;
   assemblyId?: string;
   hiddenPages?: number[];
+  propertiesHash: string;
+  subItemsHash: string;
   shapeIds: Set<string>;
 }
 
@@ -38,6 +40,7 @@ interface ShapeSnapshot {
   pointsHash: string;
   value: number;
   deduction: boolean;
+  text?: string;
 }
 
 function hashPoints(shape: Shape): string {
@@ -59,6 +62,8 @@ function snapshotItem(item: TakeoffItem): ItemSnapshot {
     depth: item.depth,
     assemblyId: item.assemblyId,
     hiddenPages: item.hiddenPages,
+    propertiesHash: JSON.stringify(item.properties ?? []),
+    subItemsHash: JSON.stringify(item.subItems ?? []),
     shapeIds: new Set(item.shapes.map((s) => s.id)),
   };
 }
@@ -70,6 +75,7 @@ function snapshotShape(item: TakeoffItem, shape: Shape): ShapeSnapshot {
     pointsHash: hashPoints(shape),
     value: shape.value,
     deduction: !!shape.deduction,
+    text: shape.text,
   };
 }
 
@@ -84,6 +90,8 @@ function itemChanged(a: ItemSnapshot, b: ItemSnapshot): boolean {
     a.visible !== b.visible ||
     a.depth !== b.depth ||
     a.assemblyId !== b.assemblyId ||
+    a.propertiesHash !== b.propertiesHash ||
+    a.subItemsHash !== b.subItemsHash ||
     JSON.stringify(a.hiddenPages ?? []) !== JSON.stringify(b.hiddenPages ?? [])
   );
 }
@@ -100,6 +108,8 @@ function pickItemPatch(item: TakeoffItem): Parameters<typeof api.items.update>[1
     depth: item.depth ?? null,
     assembly_id: item.assemblyId ?? null,
     hidden_pages: item.hiddenPages,
+    properties: item.properties ?? [],
+    sub_items: item.subItems ?? [],
   };
 }
 
@@ -151,10 +161,10 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
       if (inflight.current.has(`item:${itemId}`)) continue;
       const prev = itemSnapshots.current.get(itemId);
       if (!prev) {
-        // New item — POST it.
+        // New item — POST it. Snapshot is set ONLY on success so a transient
+        // failure leaves no "marked synced" state and the next diff retries.
         inflight.current.set(`item:${itemId}`, 'creating');
         const snap = snapshotItem(item);
-        itemSnapshots.current.set(itemId, snap);
         api.items
           .create({
             project_id: projectId,
@@ -173,22 +183,19 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
             sub_items: item.subItems,       // preserve sub-item breakdown
             hidden_pages: item.hiddenPages, // preserve per-page hides on copy/paste
           })
-          .catch((e) => {
-            // If create fails, drop the snapshot so the next pass retries.
-            itemSnapshots.current.delete(itemId);
-            console.error('sync: create item failed', itemId, e);
-          })
+          .then(() => itemSnapshots.current.set(itemId, snap))
+          .catch((e) => console.error('sync: create item failed', itemId, e))
           .finally(() => {
             inflight.current.delete(`item:${itemId}`);
             retry(); // wake the effect so child shapes deferred for this item run
           });
       } else if (itemChanged(prev, snapshotItem(item))) {
-        // Mutated item — PUT it.
+        // Mutated item — PUT it. Same snapshot-on-success rule.
         inflight.current.set(`item:${itemId}`, 'updating');
         const newSnap = snapshotItem(item);
-        itemSnapshots.current.set(itemId, newSnap);
         api.items
           .update(itemId, pickItemPatch(item))
+          .then(() => itemSnapshots.current.set(itemId, newSnap))
           .catch((e) => console.error('sync: update item failed', itemId, e))
           .finally(() => {
             inflight.current.delete(`item:${itemId}`);
@@ -201,9 +208,9 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
       if (nextItems.has(itemId)) continue;
       if (inflight.current.has(`item:${itemId}`)) continue;
       inflight.current.set(`item:${itemId}`, 'deleting');
-      itemSnapshots.current.delete(itemId);
       api.items
         .delete(itemId)
+        .then(() => itemSnapshots.current.delete(itemId))
         .catch((e) => console.error('sync: delete item failed', itemId, e))
         .finally(() => {
           inflight.current.delete(`item:${itemId}`);
@@ -224,69 +231,85 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
         if (inflight.current.has(`item:${item.id}`)) continue;
 
         inflight.current.set(`shape:${shapeId}`, 'creating');
-        shapeSnapshots.current.set(shapeId, nextSnap);
+        const dedupe = !!shape.deduction;
         const promise =
-          item.type === ToolType.AREA || item.type === ToolType.FILL
-            ? api.shapes.area({
+          item.type === ToolType.NOTE
+            ? api.shapes.note({
                 project_id: projectId,
                 page_index: shape.pageIndex,
                 points: shape.points,
+                text: shape.text ?? '',
                 item_id: item.id,
                 shape_id: shape.id,
-                snap: false,
               })
-            : item.type === ToolType.LINEAR ||
-                item.type === ToolType.DIMENSION ||
-                item.type === ToolType.SEGMENT
-              ? api.shapes.linear({
+            : item.type === ToolType.AREA || item.type === ToolType.FILL
+              ? api.shapes.area({
                   project_id: projectId,
                   page_index: shape.pageIndex,
                   points: shape.points,
                   item_id: item.id,
                   shape_id: shape.id,
+                  deduction: dedupe,
                   snap: false,
                 })
-              : item.type === ToolType.COUNT
-                ? api.shapes.count({
+              : item.type === ToolType.LINEAR ||
+                  item.type === ToolType.DIMENSION ||
+                  item.type === ToolType.SEGMENT
+                ? api.shapes.linear({
                     project_id: projectId,
                     page_index: shape.pageIndex,
                     points: shape.points,
                     item_id: item.id,
                     shape_id: shape.id,
+                    deduction: dedupe,
+                    snap: false,
                   })
-                : item.type === ToolType.ARC && shape.points.length >= 2 && shape.bulges?.length
-                  ? api.shapes.arc({
+                : item.type === ToolType.COUNT
+                  ? api.shapes.count({
                       project_id: projectId,
                       page_index: shape.pageIndex,
-                      start: shape.points[0],
-                      end: shape.points[1],
-                      bulge: shape.bulges[0],
+                      points: shape.points,
                       item_id: item.id,
                       shape_id: shape.id,
+                      deduction: dedupe,
                     })
-                  : Promise.resolve(null);
+                  : item.type === ToolType.ARC && shape.points.length >= 2 && shape.bulges?.length
+                    ? api.shapes.arc({
+                        project_id: projectId,
+                        page_index: shape.pageIndex,
+                        start: shape.points[0],
+                        end: shape.points[1],
+                        bulge: shape.bulges[0],
+                        item_id: item.id,
+                        shape_id: shape.id,
+                        deduction: dedupe,
+                      })
+                    : Promise.resolve(null);
         promise
-          .catch((e) => {
-            // Drop the snapshot so the next pass retries. A failed create
-            // here is usually a transient "scale isn't synced yet" race —
-            // useScaleSync POSTs the calibration in parallel; the retry()
-            // below wakes the effect once any inflight op completes, by
-            // which point the scale POST may have landed.
-            shapeSnapshots.current.delete(shapeId);
-            console.error('sync: create shape failed', shapeId, e);
-          })
+          .then(() => shapeSnapshots.current.set(shapeId, nextSnap))
+          .catch((e) => console.error('sync: create shape failed', shapeId, e))
           .finally(() => {
             inflight.current.delete(`shape:${shapeId}`);
             retry();
           });
       } else if (
+        prev.itemId !== nextSnap.itemId ||
         prev.pointsHash !== nextSnap.pointsHash ||
-        prev.deduction !== nextSnap.deduction
+        prev.deduction !== nextSnap.deduction ||
+        prev.value !== nextSnap.value
       ) {
+        // Reparenting (itemId changed), geometry edit (pointsHash, value),
+        // or deduction toggle. Send all fields the worker accepts; on a
+        // reparent the worker recalcs both old and new item totals.
         inflight.current.set(`shape:${shapeId}`, 'updating');
-        shapeSnapshots.current.set(shapeId, nextSnap);
         api.shapes
-          .update(shapeId, { points: shape.points, deduction: shape.deduction })
+          .update(shapeId, {
+            points: shape.points,
+            deduction: shape.deduction,
+            value: shape.value,
+            item_id: prev.itemId !== nextSnap.itemId ? nextSnap.itemId : undefined,
+          })
+          .then(() => shapeSnapshots.current.set(shapeId, nextSnap))
           .catch((e) => console.error('sync: update shape failed', shapeId, e))
           .finally(() => {
             inflight.current.delete(`shape:${shapeId}`);
@@ -306,9 +329,9 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
         continue;
       }
       inflight.current.set(`shape:${shapeId}`, 'deleting');
-      shapeSnapshots.current.delete(shapeId);
       api.shapes
         .delete(shapeId)
+        .then(() => shapeSnapshots.current.delete(shapeId))
         .catch((e) => console.error('sync: delete shape failed', shapeId, e))
         .finally(() => {
           inflight.current.delete(`shape:${shapeId}`);

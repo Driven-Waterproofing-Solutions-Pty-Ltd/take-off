@@ -241,8 +241,18 @@ export const useProjectManager = (_isLicensed = true) => {
     setLoadingMessage('Importing project…');
     try {
       const snap = await importProjectFromZip(pendingImportFile);
-      // Import currently fills the in-memory state only.
-      // To persist, the user should "Save to cloud" — TODO when we wire it.
+      // CRITICAL: detach from any currently-open cloud project FIRST. If we
+      // leave projectId pointing at the cloud project while clearHistory()
+      // replaces local state with the imported snapshot, useShapeSync sees
+      // every item in the old cloud project as "removed" and DELETEs them,
+      // then POSTs the imported items into the open cloud project. Clearing
+      // projectId before the state swap makes the sync hooks treat the
+      // imported state as a brand-new local-only project that doesn't sync.
+      setProjectId(null);
+      const url = new URL(window.location.href);
+      url.searchParams.delete('project');
+      window.history.replaceState({}, '', url.toString());
+
       clearHistory({
         items: snap.items,
         projectData: snap.projectData,

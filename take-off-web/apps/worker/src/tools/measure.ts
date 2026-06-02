@@ -43,6 +43,7 @@ interface AddCommon {
   shape_id?: string;
   name?: string;
   color?: string;
+  deduction?: boolean;
 }
 
 export async function addArea(
@@ -76,6 +77,7 @@ export async function addArea(
     pageIndex: args.page_index,
     points,
     value,
+    deduction: args.deduction,
   };
   await insertShape(env.DB, shape);
   await recalcItemTotal(env.DB, item.id);
@@ -109,6 +111,7 @@ export async function addLinear(
     pageIndex: args.page_index,
     points,
     value,
+    deduction: args.deduction,
   };
   await insertShape(env.DB, shape);
   await recalcItemTotal(env.DB, item.id);
@@ -134,6 +137,36 @@ export async function addCount(
     pageIndex: args.page_index,
     points: args.points,
     value: args.points.length,
+    deduction: args.deduction,
+  };
+  await insertShape(env.DB, shape);
+  await recalcItemTotal(env.DB, item.id);
+  const { itemId: _itemId, ...result } = shape;
+  return result;
+}
+
+export async function addNote(
+  env: Env,
+  args: AddCommon & { points: Point[]; text: string }
+): Promise<Shape> {
+  // Notes are annotations: no scale required, value carries the character
+  // count for a stable non-zero "did this exist" hint in the DB.
+  const item = await getOrCreateItem(env.DB, args.project_id, {
+    id: args.item_id,
+    label: args.name ?? 'Note',
+    type: ToolType.NOTE,
+    unit: Unit.EACH,
+    color: args.color ?? '#6366f1',
+  });
+
+  const shape: Shape & { itemId: string } = {
+    id: args.shape_id ?? crypto.randomUUID(),
+    itemId: item.id,
+    pageIndex: args.page_index,
+    points: args.points,
+    value: args.text.length,
+    text: args.text,
+    deduction: args.deduction,
   };
   await insertShape(env.DB, shape);
   await recalcItemTotal(env.DB, item.id);
@@ -167,6 +200,7 @@ export async function addArc(
     points: [args.start, args.end],
     bulges: [args.bulge],
     value,
+    deduction: args.deduction,
   };
   await insertShape(env.DB, shape);
   await recalcItemTotal(env.DB, item.id);

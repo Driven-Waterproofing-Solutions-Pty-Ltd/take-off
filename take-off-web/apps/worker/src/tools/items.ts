@@ -72,6 +72,7 @@ export async function updateItem(
     depth?: number | null;
     assembly_id?: string | null;
     hidden_pages?: number[];
+    sub_items?: unknown;
   }
 ): Promise<TakeoffItem> {
   const sets: string[] = [];
@@ -92,6 +93,10 @@ export async function updateItem(
   if (patch.hidden_pages !== undefined) {
     sets.push('hidden_pages_json = ?');
     binds.push(JSON.stringify(patch.hidden_pages));
+  }
+  if (patch.sub_items !== undefined) {
+    sets.push('sub_items_json = ?');
+    binds.push(JSON.stringify(patch.sub_items));
   }
   if (sets.length === 0) {
     const existing = (await env.DB.prepare('SELECT * FROM items WHERE id = ?')
@@ -138,22 +143,36 @@ export async function deleteShape(
 export async function updateShape(
   env: Env,
   shapeId: string,
-  patch: { points?: unknown; deduction?: boolean; value?: number }
-): Promise<{ updated: boolean; item_id: string | null }> {
+  patch: { points?: unknown; deduction?: boolean; value?: number; item_id?: string }
+): Promise<{ updated: boolean; item_id: string | null; previous_item_id?: string }> {
   const row = (await env.DB.prepare('SELECT item_id FROM shapes WHERE id = ?')
     .bind(shapeId)
     .first()) as { item_id: string } | null;
   if (!row) return { updated: false, item_id: null };
+  const previousItemId = row.item_id;
   const sets: string[] = [];
   const binds: unknown[] = [];
   if (patch.points !== undefined) { sets.push('points_json = ?'); binds.push(JSON.stringify(patch.points)); }
   if (patch.deduction !== undefined) { sets.push('deduction = ?'); binds.push(patch.deduction ? 1 : 0); }
   if (patch.value !== undefined) { sets.push('value = ?'); binds.push(patch.value); }
-  if (sets.length === 0) return { updated: true, item_id: row.item_id };
+  if (patch.item_id !== undefined && patch.item_id !== previousItemId) {
+    sets.push('item_id = ?');
+    binds.push(patch.item_id);
+  }
+  if (sets.length === 0) return { updated: true, item_id: previousItemId };
   binds.push(shapeId);
   await env.DB.prepare(`UPDATE shapes SET ${sets.join(', ')} WHERE id = ?`)
     .bind(...binds)
     .run();
-  await recalcItemTotal(env.DB, row.item_id);
-  return { updated: true, item_id: row.item_id };
+  const newItemId = patch.item_id ?? previousItemId;
+  await recalcItemTotal(env.DB, newItemId);
+  // On reparent, the old item's total must also be recomputed.
+  if (newItemId !== previousItemId) {
+    await recalcItemTotal(env.DB, previousItemId);
+  }
+  return {
+    updated: true,
+    item_id: newItemId,
+    previous_item_id: newItemId !== previousItemId ? previousItemId : undefined,
+  };
 }

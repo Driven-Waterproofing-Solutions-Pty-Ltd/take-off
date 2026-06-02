@@ -126,6 +126,7 @@ export const api = {
       shape_id?: string;
       name?: string;
       color?: string;
+      deduction?: boolean;
       snap?: boolean;
     }) =>
       req<Shape>('/api/measure/shapes/area', {
@@ -140,6 +141,7 @@ export const api = {
       shape_id?: string;
       name?: string;
       color?: string;
+      deduction?: boolean;
       snap?: boolean;
     }) =>
       req<Shape>('/api/measure/shapes/linear', {
@@ -154,6 +156,7 @@ export const api = {
       shape_id?: string;
       name?: string;
       color?: string;
+      deduction?: boolean;
     }) =>
       req<Shape>('/api/measure/shapes/count', {
         method: 'POST',
@@ -169,6 +172,7 @@ export const api = {
       shape_id?: string;
       name?: string;
       color?: string;
+      deduction?: boolean;
     }) =>
       req<Shape>('/api/measure/shapes/arc', {
         method: 'POST',
@@ -178,14 +182,28 @@ export const api = {
       req<{ deleted: boolean; item_id: string | null }>(`/api/measure/shapes/${id}`, {
         method: 'DELETE',
       }),
+    note: (body: {
+      project_id: string;
+      page_index: number;
+      points: Point[];
+      text: string;
+      item_id?: string;
+      shape_id?: string;
+      name?: string;
+      color?: string;
+    }) =>
+      req<Shape>('/api/measure/shapes/note', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
     update: (
       id: string,
-      patch: { points?: Point[]; deduction?: boolean; value?: number }
+      patch: { points?: Point[]; deduction?: boolean; value?: number; item_id?: string }
     ) =>
-      req<{ updated: boolean; item_id: string | null }>(`/api/measure/shapes/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(patch),
-      }),
+      req<{ updated: boolean; item_id: string | null; previous_item_id?: string }>(
+        `/api/measure/shapes/${id}`,
+        { method: 'PUT', body: JSON.stringify(patch) }
+      ),
   },
 
   items: {
@@ -225,6 +243,7 @@ export const api = {
         depth: number | null;
         assembly_id: string | null;
         hidden_pages: number[];
+        sub_items: unknown;
       }>
     ) =>
       req<TakeoffItem>(`/api/measure/items/${id}`, {

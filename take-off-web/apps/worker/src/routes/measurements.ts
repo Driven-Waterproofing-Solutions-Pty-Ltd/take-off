@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Env } from '../env';
 import { tools } from '@takeoff/shared';
 import { setScalePreset, setScaleManual } from '../tools/scale';
-import { addArea, addLinear, addCount, addArc } from '../tools/measure';
+import { addArea, addLinear, addCount, addArc, addNote } from '../tools/measure';
 import { snapToVector } from '../tools/snap';
 import { listItems } from '../tools/memory';
 import { createItem, updateItem, deleteItem, deleteShape, updateShape } from '../tools/items';
@@ -47,6 +47,20 @@ app.post('/shapes/arc', async (c) => {
   const body = await c.req.json();
   const input = tools.add_arc.input.parse(body);
   return c.json(await addArc(c.env, input));
+});
+
+app.post('/shapes/note', async (c) => {
+  const body = await c.req.json<{
+    project_id: string;
+    page_index: number;
+    points: { x: number; y: number }[];
+    text: string;
+    item_id?: string;
+    shape_id?: string;
+    name?: string;
+    color?: string;
+  }>();
+  return c.json(await addNote(c.env, body));
 });
 
 app.post('/snap', async (c) => {
