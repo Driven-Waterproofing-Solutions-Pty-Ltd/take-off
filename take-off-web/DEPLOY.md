@@ -66,7 +66,7 @@ After this connection, every push to the chosen branch triggers a new build auto
 
 ## 4. Set secrets (one time, in the dashboard)
 
-After the first deploy succeeds, go to **Workers & Pages → `takeoff-worker` → Settings → Variables and Secrets** and add these six secrets (all "Encrypt"):
+After the first deploy succeeds, go to **Workers & Pages → `takeoff-worker` → Settings → Variables and Secrets** and add these seven secrets (all "Encrypt"):
 
 | Name | Value |
 |---|---|
@@ -76,8 +76,7 @@ After the first deploy succeeds, go to **Workers & Pages → `takeoff-worker` �
 | `XERO_TOKEN_KEY` | `openssl rand -base64 32` — AES-GCM key encrypting Xero tokens at rest |
 | `MCP_BOOTSTRAP_TOKEN` | `openssl rand -base64 32` — **save a copy locally**; mints MCP tokens AND HMAC-signs OAuth state. Rotating it invalidates every session and every MCP token. |
 | `APP_BASE_URL` | e.g. `https://takeoff.drivenwp.com` |
-
-`ANTHROPIC_API_KEY` is **not** needed yet — Phase 5 only.
+| `ANTHROPIC_API_KEY` | from console.anthropic.com — powers the in-app takeoff agent (`/api/ai/turn`). Omit and the agent panel 503s with a clear message; everything else still works. |
 
 Hit **Deploy** again from the dashboard so the worker picks up the secrets, or push any commit to trigger a redeploy.
 
