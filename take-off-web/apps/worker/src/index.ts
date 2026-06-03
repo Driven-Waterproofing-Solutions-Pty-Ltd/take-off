@@ -6,6 +6,7 @@ import measurements from './routes/measurements';
 import memory from './routes/memory';
 import xero from './routes/xero';
 import auth, { adminApp as adminUsers } from './routes/auth';
+import ai from './routes/ai';
 import { handleMcp, mintMcpClientToken } from './mcp/server';
 import { syncXeroContacts } from './tools/xero';
 import { pruneExpiredSessions } from './lib/sessions';
@@ -45,6 +46,7 @@ app.route('/admin/users', adminUsers);
 app.route('/api/projects', projects);
 app.route('/api/measure', measurements);
 app.route('/api/memory', memory);
+app.route('/api/ai', ai);
 app.route('/xero', xero);
 
 // MCP endpoint — JSON-RPC over HTTP (matches MCP 2025-06-18 transport)
