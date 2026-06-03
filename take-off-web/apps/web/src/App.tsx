@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import Sidebar from './components/Sidebar';
+import AgentPanel from './components/AgentPanel';
 import BlueprintCanvas, { BlueprintCanvasRef } from './components/BlueprintCanvas';
 import Tools from './components/Tools';
 import HelpModal from './components/HelpModal';
@@ -29,7 +30,7 @@ import {
 } from './utils/geometry';
 import { useToast } from './contexts/ToastContext';
 import { generateMarkupPDF } from './utils/pdfExport';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Bot } from 'lucide-react';
 import { useProjectManager } from './hooks/useProjectManagerWeb';
 import { useShapeSync } from './hooks/useShapeSync';
 import { useScaleSync } from './hooks/useScaleSync';
@@ -49,6 +50,7 @@ const AppContent: React.FC = () => {
   const { addToast } = useToast();
   const { isLicensed } = useLicense();
   const [viewMode, setViewMode] = useState<'canvas' | 'estimates' | '3d'>('canvas');
+  const [showAgent, setShowAgent] = useState(false);
 
   const {
     projectName,
@@ -965,6 +967,21 @@ const AppContent: React.FC = () => {
           </>
         )}
       </main>
+      {showAgent && (
+        <AgentPanel projectId={projectId} planSets={planSets} onClose={() => setShowAgent(false)} />
+      )}
+      {/* Agent toggle — floating, unobtrusive; opens the conversational
+          takeoff agent panel. Only meaningful with a project + plans loaded. */}
+      {!showAgent && (
+        <button
+          onClick={() => setShowAgent(true)}
+          title="Takeoff Agent"
+          className="fixed bottom-5 right-5 z-40 flex items-center gap-2 rounded-full bg-blue-600 text-white px-4 py-3 shadow-lg hover:bg-blue-700"
+        >
+          <Bot className="w-5 h-5" />
+          <span className="text-sm font-medium">Agent</span>
+        </button>
+      )}
       {showUploadModal && <UploadModal onUpload={handleUpload} onCancel={() => setShowUploadModal(false)} isFirstUpload={planSets.length === 0} />}
       {showNewItemModal && pendingTool && <NewItemModal toolType={pendingTool} existingCount={items.length} scaleUnit={currentScale.unit} onCreate={handleCreateTakeoffItem} onCancel={() => { setShowNewItemModal(false); setPendingTool(null); }} />}
       {editingItem && <PropertiesModal item={editingItem} items={items} onSave={handleUpdateItem} onClose={() => setEditingItem(null)} />}

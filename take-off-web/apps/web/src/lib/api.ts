@@ -321,4 +321,33 @@ export const api = {
         }),
       }),
   },
+
+  // Snap proposed points to nearest PDF vector geometry for a page. Same
+  // server-side implementation the canvas + MCP use; the agent calls this
+  // after the model proposes approximate polygon vertices from vision.
+  snap: (body: { project_id: string; page_index: number; points: Point[]; tolerance_px?: number }) =>
+    req<{ snapped: Point[] }>('/api/measure/snap', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  // Anthropic proxy — one model turn. The agent/chat owns the running
+  // transcript; the worker holds the API key and never persists messages.
+  ai: {
+    turn: (body: {
+      messages: unknown[];
+      system?: string;
+      model?: string;
+      maxTokens?: number;
+      toolNames?: string[];
+    }) =>
+      req<{
+        content: Array<Record<string, unknown>>;
+        stopReason: string;
+        usage: { input_tokens: number; output_tokens: number } | null;
+      }>('/api/ai/turn', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+  },
 };
