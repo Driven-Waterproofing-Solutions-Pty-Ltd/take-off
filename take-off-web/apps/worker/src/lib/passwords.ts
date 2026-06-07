@@ -1,8 +1,11 @@
 // PBKDF2-SHA256 password hashing via Web Crypto.
-// 600k iterations matches OWASP 2023 minimum for SHA-256.
+// 100k iterations: Cloudflare Workers' free plan hard-caps PBKDF2 deriveBits
+// at 100,000 iterations (600k throws, breaking user creation/login with a 500).
+// password_iter is stored per-user, so raising this later only affects new
+// hashes; existing users keep verifying with their stored count.
 // 16-byte salt, 32-byte derived key, both base64-encoded for D1 storage.
 
-const ITERATIONS = 600_000;
+const ITERATIONS = 100_000;
 const KEY_LEN_BYTES = 32;
 const SALT_LEN_BYTES = 16;
 
