@@ -7,7 +7,11 @@ import { encryptString, signOauthState, verifyOauthState } from '../lib/crypto';
 
 const app = new Hono<{ Bindings: Env }>();
 
-const XERO_SCOPES = 'accounting.transactions accounting.contacts offline_access';
+// Granular scopes: Xero apps created after 2 Mar 2026 cannot request the old
+// broad scopes (accounting.transactions → invalid_scope). Quotes + invoices
+// are covered by accounting.invoices in the granular model; settings.read is
+// needed to resolve org defaults (tax rates / account codes) when pushing.
+const XERO_SCOPES = 'accounting.invoices accounting.contacts accounting.settings.read offline_access';
 const OAUTH_STATE_COOKIE = 'xero_oauth_state';
 
 function getOauthSecret(env: Env): string {

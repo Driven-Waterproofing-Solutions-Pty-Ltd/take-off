@@ -16,6 +16,10 @@ command = "cd ../.. && pnpm install --frozen-lockfile && pnpm --filter @takeoff/
 directory = "../web/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+# Browser navigations to API/OAuth routes must hit the Hono worker, not the
+# SPA fallback (fixes /xero/oauth/start rendering the app shell instead of
+# redirecting to Xero).
+run_worker_first = ["/xero/*", "/auth/*", "/admin/*", "/api/*", "/mcp", "/health"]
 
 # D1 database
 [[d1_databases]]
