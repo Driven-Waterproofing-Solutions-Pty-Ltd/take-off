@@ -1,0 +1,88 @@
+name: take-off-web deploy
+
+# Auto-deploy the takeoff worker to Cloudflare on every push to the working
+# branch. Sidesteps Workers Builds entirely — needs only one repo secret
+# (CLOUDFLARE_API_TOKEN) instead of the Cloudflare↔GitHub OAuth dance.
+#
+# Token scopes required (create at dash.cloudflare.com → My Profile →
+# API Tokens → Create Token → Custom):
+#   - Account › Workers Scripts: Edit
+#   - Account › D1: Edit
+#   - Account › Workers R2 Storage: Edit
+#   - Account › Account Settings: Read
+#   - Account Resources: include Office@drivenwp.com's Account
+#
+# After the first green run, the worker is live at the URL printed in the
+# action log (search for "Published" in the wrangler step output).
+
+on:
+  push:
+    branches:
+      - claude/ai-measurement-invoice-app-2s7bP
+      - main
+    paths:
+      - 'take-off-web/**'
+      - '.github/workflows/take-off-deploy.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: take-off-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: build + deploy worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: take-off-web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: take-off-web/pnpm-lock.yaml
+
+      - name: install
+        run: pnpm install --frozen-lockfile
+
+      - name: typecheck (shared + worker + web)
+        run: pnpm -r typecheck
+
+      - name: build web SPA
+        run: pnpm --filter @takeoff/web build
+
+      - name: verify MuPDF WASM is in sync
+        # Same guard as CI — prevents shipping a blank canvas if the WASM
+        # in apps/web/public diverges from the installed mupdf package.
+        run: |
+          PUB=apps/web/public/mupdf-wasm.wasm
+          INSTALLED=$(find node_modules -name 'mupdf-wasm.wasm' -path '*mupdf/dist*' | head -1)
+          if [ -z "$INSTALLED" ]; then
+            echo "::error::no mupdf-wasm.wasm in node_modules"; exit 1
+          fi
+          if ! cmp -s "$PUB" "$INSTALLED"; then
+            echo "::error::public/mupdf-wasm.wasm is out of sync — run: cp $INSTALLED $PUB"
+            exit 1
+          fi
+
+      - name: deploy worker (SPA + API + MCP + Agent)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # wrangler reads the account from the configured token if there's
+          # only one matching account. We're scoped to one CF account.
+          workingDirectory: take-off-web/apps/worker
+          # wrangler.toml already declares [assets] + [build] + bindings.
+          command: deploy
