@@ -12,7 +12,7 @@ import {
   applyAssembly,
   buildQuote,
 } from '../tools/memory';
-import { pushToXero } from '../tools/xero';
+import { pushToXero, pullXeroInvoice } from '../tools/xero';
 import { sha256Hex } from '../lib/crypto';
 
 type Handler = (env: Env, input: unknown) => Promise<unknown>;
@@ -36,6 +36,7 @@ const MCP_TOOLS: ToolName[] = [
   'apply_assembly',
   'build_quote',
   'push_to_xero',
+  'pull_xero_invoice',
 ];
 
 const handlers: Partial<Record<ToolName, Handler>> = {
@@ -53,6 +54,8 @@ const handlers: Partial<Record<ToolName, Handler>> = {
   apply_assembly: (env, i) => applyAssembly(env, i as Parameters<typeof applyAssembly>[1]),
   build_quote: (env, i) => buildQuote(env, (i as { project_id: string }).project_id),
   push_to_xero: (env, i) => pushToXero(env, i as Parameters<typeof pushToXero>[1]),
+  pull_xero_invoice: (env, i) =>
+    pullXeroInvoice(env, i as Parameters<typeof pullXeroInvoice>[1]),
 };
 
 async function verifyMcpToken(env: Env, authHeader: string | undefined): Promise<boolean> {

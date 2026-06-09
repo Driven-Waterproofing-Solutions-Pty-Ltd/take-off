@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../env';
 import { tools } from '@takeoff/shared';
-import { pushToXero, syncXeroContacts } from '../tools/xero';
+import { pushToXero, syncXeroContacts, pullXeroInvoice } from '../tools/xero';
 import { requireAuth, requireAdmin } from '../lib/auth';
 import { encryptString, signOauthState, verifyOauthState } from '../lib/crypto';
 
@@ -153,6 +153,14 @@ app.post('/push', requireAuth, async (c) => {
 
 app.post('/sync', requireAuth, async (c) => {
   return c.json(await syncXeroContacts(c.env));
+});
+
+// Read-only invoice fetch — used to reverse-engineer assemblies/pricing
+// from past quoted work, or to look up a similar prior job at quote time.
+app.post('/invoices/pull', requireAuth, async (c) => {
+  const body = await c.req.json();
+  const input = tools.pull_xero_invoice.input.parse(body);
+  return c.json(await pullXeroInvoice(c.env, input));
 });
 
 export default app;

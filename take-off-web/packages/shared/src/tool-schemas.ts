@@ -272,6 +272,41 @@ export const tools = {
       deep_link: z.string().url(),
     }),
   },
+  pull_xero_invoice: {
+    description:
+      'Fetch a past Xero invoice with its full line items (description, qty, unit price, account code, tracking). Use it to reverse-engineer real assemblies / pricing from prior work, or to look up how a similar job was previously quoted. Read-only. Pass invoice_id (Xero UUID) OR invoice_number (e.g. "INV-1814").',
+    input: z.object({
+      invoice_id: z.string().optional(),
+      invoice_number: z.string().optional(),
+    }),
+    output: z.object({
+      invoice_id: z.string(),
+      invoice_number: z.string(),
+      status: z.string(),
+      contact_name: z.string().nullable(),
+      contact_xero_id: z.string().nullable(),
+      date: z.string().nullable(),
+      due_date: z.string().nullable(),
+      total: z.number(),
+      subtotal: z.number(),
+      total_tax: z.number(),
+      currency: z.string(),
+      reference: z.string().nullable(),
+      line_items: z.array(
+        z.object({
+          description: z.string().nullable(),
+          quantity: z.number().nullable(),
+          unit_amount: z.number().nullable(),
+          line_amount: z.number().nullable(),
+          account_code: z.string().nullable(),
+          tax_type: z.string().nullable(),
+          item_code: z.string().nullable(),
+          tracking: z.array(z.object({ name: z.string(), option: z.string() })),
+        })
+      ),
+      deep_link: z.string().url(),
+    }),
+  },
 } as const;
 
 export type ToolName = keyof typeof tools;

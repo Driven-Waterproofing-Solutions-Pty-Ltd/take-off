@@ -239,3 +239,110 @@ export async function syncXeroContacts(env: Env): Promise<{ synced: number }> {
   }
   return { synced };
 }
+
+// Pull a single Xero invoice (or quote) with its full line items so the agent
+// (and the memory layer) can reverse-engineer real assemblies / unit pricing
+// from past work. Read-only — uses accounting.invoices.read /
+// accounting.transactions.read scopes already on the existing OAuth token.
+//
+// Accepts EITHER a Xero invoice UUID (InvoiceID) OR a human invoice number
+// (e.g. "INV-1814"). One must be set.
+export async function pullXeroInvoice(
+  env: Env,
+  args: { invoice_id?: string; invoice_number?: string }
+): Promise<{
+  invoice_id: string;
+  invoice_number: string;
+  status: string;
+  contact_name: string | null;
+  contact_xero_id: string | null;
+  date: string | null;
+  due_date: string | null;
+  total: number;
+  subtotal: number;
+  total_tax: number;
+  currency: string;
+  reference: string | null;
+  line_items: Array<{
+    description: string | null;
+    quantity: number | null;
+    unit_amount: number | null;
+    line_amount: number | null;
+    account_code: string | null;
+    tax_type: string | null;
+    item_code: string | null;
+    tracking: Array<{ name: string; option: string }>;
+  }>;
+  deep_link: string;
+}> {
+  if (!args.invoice_id && !args.invoice_number) {
+    throw new Error('invoice_id or invoice_number required');
+  }
+  const token = await getActiveXeroToken(env);
+  const url = args.invoice_id
+    ? `https://api.xero.com/api.xro/2.0/Invoices/${encodeURIComponent(args.invoice_id)}`
+    : `https://api.xero.com/api.xro/2.0/Invoices?InvoiceNumbers=${encodeURIComponent(args.invoice_number!)}`;
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token.access_token}`,
+      'xero-tenant-id': token.tenant_id,
+      Accept: 'application/json',
+    },
+  });
+  if (!res.ok) throw new Error(`Xero Invoice fetch failed: ${res.status} ${await res.text()}`);
+  const json = (await res.json()) as {
+    Invoices: Array<{
+      InvoiceID: string;
+      InvoiceNumber: string;
+      Status: string;
+      Type: string;
+      Contact?: { ContactID?: string; Name?: string };
+      DateString?: string;
+      DueDateString?: string;
+      Total?: number;
+      SubTotal?: number;
+      TotalTax?: number;
+      CurrencyCode?: string;
+      Reference?: string;
+      LineItems?: Array<{
+        Description?: string;
+        Quantity?: number;
+        UnitAmount?: number;
+        LineAmount?: number;
+        AccountCode?: string;
+        TaxType?: string;
+        ItemCode?: string;
+        Tracking?: Array<{ Name?: string; Option?: string }>;
+      }>;
+    }>;
+  };
+  const inv = json.Invoices?.[0];
+  if (!inv) throw new Error('Invoice not found');
+  return {
+    invoice_id: inv.InvoiceID,
+    invoice_number: inv.InvoiceNumber,
+    status: inv.Status,
+    contact_name: inv.Contact?.Name ?? null,
+    contact_xero_id: inv.Contact?.ContactID ?? null,
+    date: inv.DateString?.split('T')[0] ?? null,
+    due_date: inv.DueDateString?.split('T')[0] ?? null,
+    total: inv.Total ?? 0,
+    subtotal: inv.SubTotal ?? 0,
+    total_tax: inv.TotalTax ?? 0,
+    currency: inv.CurrencyCode ?? 'AUD',
+    reference: inv.Reference ?? null,
+    line_items: (inv.LineItems ?? []).map((l) => ({
+      description: l.Description ?? null,
+      quantity: l.Quantity ?? null,
+      unit_amount: l.UnitAmount ?? null,
+      line_amount: l.LineAmount ?? null,
+      account_code: l.AccountCode ?? null,
+      tax_type: l.TaxType ?? null,
+      item_code: l.ItemCode ?? null,
+      tracking: (l.Tracking ?? []).flatMap((t) =>
+        t.Name && t.Option ? [{ name: t.Name, option: t.Option }] : []
+      ),
+    })),
+    deep_link: `https://go.xero.com/AccountsReceivable/Edit.aspx?InvoiceID=${inv.InvoiceID}`,
+  };
+}

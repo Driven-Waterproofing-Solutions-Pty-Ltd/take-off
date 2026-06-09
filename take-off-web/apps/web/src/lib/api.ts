@@ -320,6 +320,32 @@ export const api = {
           reference,
         }),
       }),
+    pullInvoice: (body: { invoice_id?: string; invoice_number?: string }) =>
+      req<{
+        invoice_id: string;
+        invoice_number: string;
+        status: string;
+        contact_name: string | null;
+        contact_xero_id: string | null;
+        date: string | null;
+        due_date: string | null;
+        total: number;
+        subtotal: number;
+        total_tax: number;
+        currency: string;
+        reference: string | null;
+        line_items: Array<{
+          description: string | null;
+          quantity: number | null;
+          unit_amount: number | null;
+          line_amount: number | null;
+          account_code: string | null;
+          tax_type: string | null;
+          item_code: string | null;
+          tracking: Array<{ name: string; option: string }>;
+        }>;
+        deep_link: string;
+      }>('/xero/invoices/pull', { method: 'POST', body: JSON.stringify(body) }),
   },
 
   // Snap proposed points to nearest PDF vector geometry for a page. Same

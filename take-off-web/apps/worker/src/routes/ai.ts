@@ -41,6 +41,9 @@ const AGENT_TOOLS: ToolName[] = [
   'list_assemblies',
   'apply_assembly',
   'build_quote',
+  // Read-only — lets the agent reference a past similar job's pricing
+  // before proposing a new quote. push_to_xero stays excluded.
+  'pull_xero_invoice',
 ];
 
 interface AnthropicTool {

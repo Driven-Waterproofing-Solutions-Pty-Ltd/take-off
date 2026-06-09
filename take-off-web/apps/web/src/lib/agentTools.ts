@@ -213,6 +213,14 @@ export async function executeAgentTool(
         return textResult(id, out);
       }
 
+      case 'pull_xero_invoice': {
+        const out = await api.xero.pullInvoice({
+          invoice_id: input.invoice_id as string | undefined,
+          invoice_number: input.invoice_number as string | undefined,
+        });
+        return textResult(id, out);
+      }
+
       default:
         // push_to_xero is intentionally absent — it's gated behind the human
         // review panel, never the model.
