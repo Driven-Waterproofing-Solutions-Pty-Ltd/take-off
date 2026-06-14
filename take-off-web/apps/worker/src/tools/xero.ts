@@ -104,6 +104,21 @@ export async function pushToXero(
     TaxType: 'OUTPUT',
   }));
 
+  // Refuse to push to a ContactID that belongs to a different Xero tenant
+  // than the one the OAuth token is currently bound to — otherwise a stale
+  // recall (after an admin reconnected to a new tenant) would silently
+  // bounce off the Xero API or, worse, hit a coincidentally-shaped ID.
+  const contactRow = (await env.DB.prepare(
+    'SELECT xero_tenant_id FROM customers WHERE xero_contact_id = ?'
+  )
+    .bind(args.customer_xero_id)
+    .first()) as { xero_tenant_id: string | null } | null;
+  if (contactRow?.xero_tenant_id && contactRow.xero_tenant_id !== token.tenant_id) {
+    throw new Error(
+      'Xero contact belongs to a different tenant than the active connection — re-sync contacts before pushing.'
+    );
+  }
+
   if (args.kind === 'QUOTE') {
     const body = {
       Quotes: [
@@ -195,7 +210,7 @@ export async function pushToXero(
   }
 }
 
-export async function syncXeroContacts(env: Env): Promise<{ synced: number }> {
+export async function syncXeroContacts(env: Env): Promise<{ synced: number; tenant_id: string }> {
   const token = await getActiveXeroToken(env);
   const res = await fetch('https://api.xero.com/api.xro/2.0/Contacts?summaryOnly=true', {
     headers: {
@@ -217,10 +232,15 @@ export async function syncXeroContacts(env: Env): Promise<{ synced: number }> {
   let synced = 0;
   for (const c of json.Contacts) {
     const id = crypto.randomUUID();
+    // Stamp xero_tenant_id on every synced row so a future tenant switch
+    // doesn't leave stale ContactIDs in `customers` that would push to the
+    // wrong tenant via /xero/push. recallCustomer / pushToXero filter by
+    // the currently-active token's tenant.
     await env.DB.prepare(
-      `INSERT INTO customers (id, xero_contact_id, name, email, phone, last_synced_at)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO customers (id, xero_contact_id, xero_tenant_id, name, email, phone, last_synced_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(xero_contact_id) DO UPDATE SET
+         xero_tenant_id = excluded.xero_tenant_id,
          name = excluded.name,
          email = excluded.email,
          phone = excluded.phone,
@@ -229,6 +249,7 @@ export async function syncXeroContacts(env: Env): Promise<{ synced: number }> {
       .bind(
         id,
         c.ContactID,
+        token.tenant_id,
         c.Name,
         c.EmailAddress ?? null,
         c.Phones?.find((p) => p.PhoneNumber)?.PhoneNumber ?? null,
@@ -237,7 +258,7 @@ export async function syncXeroContacts(env: Env): Promise<{ synced: number }> {
       .run();
     synced++;
   }
-  return { synced };
+  return { synced, tenant_id: token.tenant_id };
 }
 
 // Pull a single Xero invoice (or quote) with its full line items so the agent

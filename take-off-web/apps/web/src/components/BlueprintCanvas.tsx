@@ -3,7 +3,7 @@ import { Stage, Layer, Rect, Circle, Line as KonvaLine, Path, Group, Label, Tag,
 import Konva from 'konva';
 // import { Document, Page, pdfjs } from 'react-pdf'; // Removed for MuPDF
 import { Point, ToolType, TakeoffItem, Shape, Unit, LegendSettings } from '../types';
-import { calculateDistance, calculatePolylineLength, calculatePolygonArea, getScaledValue, getScaledArea, parseDimensionInput, PresetScale, isPointInPolygon, PRESET_SCALES } from '../utils/geometry';
+import { calculateDistance, calculatePolylineLength, calculatePolygonArea, getScaledValue, getScaledArea, getAreaUnitFromLinear, getVolumeUnitFromLinear, parseDimensionInput, PresetScale, isPointInPolygon, PRESET_SCALES } from '../utils/geometry';
 import { AlertCircle, Trash2, Scissors, Plus, Eraser, MessageSquare, Ruler, Edit2, Loader2 } from 'lucide-react';
 // import '../utils/pdfWorker'; // Removed for MuPDF
 import { useToast } from '../contexts/ToastContext';
@@ -257,21 +257,35 @@ const copySelectedItems = (
 // from the same points. Without this, a measurement copied between pages
 // with different calibrations briefly shows the source page's quantity in
 // the estimate/legend until the next refresh.
-// Returns null when the destination page is uncalibrated AND the shape's
-// type is scale-dependent — the caller must drop the paste in that case.
-// Keeping the source value would show a believable but stale quantity that
-// also fails the worker create endpoint (rejects scaled shapes on
-// uncalibrated pages), leaving a phantom local row that never syncs.
+// Returns null when the destination page can't represent the shape's
+// measurement faithfully — either the page is uncalibrated for a
+// scale-dependent shape, OR the destination page's linear unit
+// disagrees with the source item's unit (paste would yield a metres
+// value labelled as feet etc.). Callers drop nulls and toast.
+// COUNT/NOTE bypass unit checks (no scale unit on the value).
 const recomputePastedValue = (
     sourceShape: Shape,
     sourceItem: TakeoffItem,
     destPpu: number,
+    destUnit: Unit | undefined,
     destPoints: Point[]
 ): number | null => {
     if (sourceItem.type === ToolType.COUNT || sourceItem.type === ToolType.NOTE) {
         return sourceShape.value;
     }
     if (!destPpu || destPpu <= 0) return null;
+    if (!destUnit) return null;
+    // The source item's unit was set at creation time on its source page;
+    // pasting onto a page in a different linear unit produces a value in the
+    // destination's scale that doesn't compose with the item's existing
+    // shape sums. Reject — caller can offer "paste as new item" workflow.
+    const expectedUnit =
+        sourceItem.type === ToolType.AREA || sourceItem.type === ToolType.FILL
+            ? getAreaUnitFromLinear(destUnit)
+            : sourceItem.type === ToolType.VOLUME
+                ? getVolumeUnitFromLinear(destUnit)
+                : destUnit;
+    if (expectedUnit !== sourceItem.unit) return null;
     if (
         sourceItem.type === ToolType.AREA ||
         sourceItem.type === ToolType.FILL ||
@@ -289,6 +303,7 @@ const pasteToOriginalItems = (
     clipboardItems: { itemId: string, shapeId: string, offset: Point }[],
     globalPageIndex: number,
     destPpu: number,
+    destUnit: Unit | undefined,
     onBatchAddShapes: (shapes: { itemId: string, shape: Shape }[]) => void,
     setPendingSelection: (selection: { itemId: string, shapeId: string }[]) => void
 ) => {
@@ -312,7 +327,7 @@ const pasteToOriginalItems = (
                 y: point.y + clipboardItem.offset.y
             }));
 
-            const nextValue = recomputePastedValue(originalShape, originalItem, destPpu, newPoints);
+            const nextValue = recomputePastedValue(originalShape, originalItem, destPpu, destUnit, newPoints);
             if (nextValue === null) { skipped++; return; }
 
             const newShape: Shape = {
@@ -341,10 +356,11 @@ const getPasteAsNewItemsPayload = (
     items: TakeoffItem[],
     clipboardItems: { itemId: string, shapeId: string, offset: Point }[],
     globalPageIndex: number,
-    destPpu: number
-): { payload: { newItemId: string, sourceItemId: string, shapes: Shape[] }[], newSelectedItems: { itemId: string, shapeId: string }[] } => {
+    destPpu: number,
+    destUnit: Unit | undefined
+): { payload: { newItemId: string, sourceItemId: string, shapes: Shape[] }[], newSelectedItems: { itemId: string, shapeId: string }[], skipped: number } => {
     if (clipboardItems.length === 0) {
-        return { payload: [], newSelectedItems: [] };
+        return { payload: [], newSelectedItems: [], skipped: 0 };
     }
 
     // Group clipboard items by their source item ID
@@ -358,6 +374,7 @@ const getPasteAsNewItemsPayload = (
 
     const payload: { newItemId: string, sourceItemId: string, shapes: Shape[] }[] = [];
     const newSelectedItems: { itemId: string, shapeId: string }[] = [];
+    let skipped = 0;
 
     // Process each source group
     Object.entries(itemsBySource).forEach(([sourceItemId, groupItems]) => {
@@ -376,8 +393,8 @@ const getPasteAsNewItemsPayload = (
                     y: point.y + clipboardItem.offset.y
                 }));
 
-                const nextValue = recomputePastedValue(originalShape, sourceItem, destPpu, newPoints);
-                if (nextValue === null) return; // dest page uncalibrated for a scaled shape
+                const nextValue = recomputePastedValue(originalShape, sourceItem, destPpu, destUnit, newPoints);
+                if (nextValue === null) { skipped++; return; } // dest page uncalibrated, OR unit mismatch with source item
 
                 const newShape: Shape = {
                     id: crypto.randomUUID(),
@@ -397,7 +414,7 @@ const getPasteAsNewItemsPayload = (
         }
     });
 
-    return { payload, newSelectedItems };
+    return { payload, newSelectedItems, skipped };
 };
 
 const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
@@ -1227,18 +1244,19 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         // Also consider extracted PDF vector vertices on the current page —
         // without this, a freshly-uploaded plan with zero user measurements
         // gives no snap targets at all, and manual clicks land unsnapped
-        // beside real linework. Vector points are already in content-pixel
-        // space (RENDER_SCALE) so they compose with shapeRenderScale the same
-        // way as shape.points do.
+        // beside real linework. cachedVectors are ALREADY in content-pixel
+        // space (RENDER_SCALE × PDF points) — same coordinate frame the
+        // cursor is in — so DO NOT multiply by shapeRenderScale here.
+        // shape.points get that multiplication because they're stored in
+        // PDF-point space; vector cache points are not.
         const pageVectors = cachedVectors.find(v => v.pageIndex === localPageIndex);
         if (pageVectors) {
             for (const path of pageVectors.paths) {
                 for (const pt of path.points) {
-                    const scaledPt = { x: pt.x * shapeRenderScale, y: pt.y * shapeRenderScale };
-                    const d = calculateDistance(cursor, scaledPt);
+                    const d = calculateDistance(cursor, pt);
                     if (d < threshold && d < minDist) {
                         minDist = d;
-                        closest = scaledPt;
+                        closest = pt;
                     }
                 }
             }
@@ -2475,7 +2493,18 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                     {contextMenu.shapeId && (
                         <button
                             onClick={() => {
-                                if (contextMenu.shapeId) onDeleteShape(contextMenu.itemId, contextMenu.shapeId);
+                                if (!contextMenu.shapeId) { setContextMenu(null); return; }
+                                // Route through the batch path so App's cutout
+                                // cascade runs (parent polygon → contained
+                                // deduction shapes go with it). The singular
+                                // onDeleteShape doesn't cascade, leaving
+                                // orphan negative shapes that undercount
+                                // totals and quotes after sync/reload.
+                                if (onDeleteShapes) {
+                                    onDeleteShapes([{ itemId: contextMenu.itemId, shapeId: contextMenu.shapeId }]);
+                                } else {
+                                    onDeleteShape(contextMenu.itemId, contextMenu.shapeId);
+                                }
                                 setContextMenu(null);
                             }}
                             className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
@@ -2633,9 +2662,10 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 onPasteToOriginal={() => {
                     setShowPasteOptions(false);
                     if (onBatchAddShapes) {
-                        const r = pasteToOriginalItems(items, clipboardItems, globalPageIndex, scaleInfo.ppu, onBatchAddShapes, setPendingSelection);
+                        const destUnit = scaleInfo.isSet ? scaleInfo.unit : undefined;
+                        const r = pasteToOriginalItems(items, clipboardItems, globalPageIndex, scaleInfo.ppu, destUnit, onBatchAddShapes, setPendingSelection);
                         if (r && r.skipped > 0) {
-                            addToast(`${r.skipped} scaled shape(s) skipped — calibrate this page first`, 'error');
+                            addToast(`${r.skipped} shape(s) skipped — calibrate this page or check unit match`, 'error');
                         }
                     } else {
                         addToast('Paste to original items is not supported', 'error');
@@ -2644,9 +2674,13 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 onPasteAsNewItems={() => {
                     setShowPasteOptions(false);
                     if (onBatchCreateItems) {
-                        const { payload, newSelectedItems } = getPasteAsNewItemsPayload(items, clipboardItems, globalPageIndex, scaleInfo.ppu);
+                        const destUnit = scaleInfo.isSet ? scaleInfo.unit : undefined;
+                        const { payload, newSelectedItems, skipped } = getPasteAsNewItemsPayload(items, clipboardItems, globalPageIndex, scaleInfo.ppu, destUnit);
                         onBatchCreateItems(payload);
                         setPendingSelection(newSelectedItems);
+                        if (skipped > 0) {
+                            addToast(`${skipped} shape(s) skipped — calibrate this page or check unit match`, 'error');
+                        }
                     } else {
                         addToast('Paste as new items is not supported in this version', 'error');
                     }

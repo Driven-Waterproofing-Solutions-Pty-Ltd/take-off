@@ -54,6 +54,8 @@ const AgentPanel: React.FC<AgentPanelProps> = ({ projectId, planSets, onClose })
     if (!ctx || !instruction.trim()) return;
     setQuote(null);
     setPushed(null);
+    setCustomers([]);
+    setSelectedXeroId(null);
     await run({ instruction: instruction.trim(), ctx });
     // Pull the resulting draft for review (the agent built items server-side).
     try {
@@ -69,6 +71,11 @@ const AgentPanel: React.FC<AgentPanelProps> = ({ projectId, planSets, onClose })
     try {
       const rows = await api.memory.searchCustomers(customerQuery.trim());
       setCustomers(rows);
+      // Reset the selected Xero contact when the option list changes —
+      // otherwise a stale selectedXeroId from a previous search can sneak
+      // through Push DRAFT and send the quote to the wrong contact when
+      // the new results don't include the old one.
+      setSelectedXeroId(null);
     } catch (e) {
       addToast('Customer search failed', 'error');
     }

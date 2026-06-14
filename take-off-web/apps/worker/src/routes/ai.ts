@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Env } from '../env';
 import { tools, type ToolName } from '@takeoff/shared';
 import { zodToJsonSchema } from 'zod-to-json-schema';
-import { requireAuth } from '../lib/auth';
+import { authenticate } from '../lib/auth';
 
 // Anthropic proxy. The browser-side agent (and the in-app chat panel) drive
 // the tool-use loop; this endpoint runs a single model turn server-side so
@@ -20,6 +20,15 @@ const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_MAX_TOKENS = 4096;
+// Hard server-side cap so a caller can't pass `maxTokens: 200_000` and burn
+// the configured ANTHROPIC_API_KEY in a single request.
+const MAX_OUTPUT_TOKENS = 16_000;
+// Allowlist — anything outside this set falls back to DEFAULT_MODEL.
+const ALLOWED_MODELS = new Set<string>([
+  'claude-sonnet-4-6',
+  'claude-opus-4-7',
+  'claude-haiku-4-5-20251001',
+]);
 
 // Tools the agent/chat may call. push_to_xero is deliberately EXCLUDED — the
 // model proposes a quote via build_quote and stops; a human pushes the DRAFT
@@ -85,9 +94,21 @@ interface TurnBody {
   toolNames?: ToolName[];
 }
 
-app.use('*', requireAuth);
-
+// Session-only — NOT requireAuth (which also accepts MCP bearer tokens). An
+// MCP token shouldn't be able to spend the ANTHROPIC_API_KEY uncapped from
+// outside the browser; the in-app agent runs through a user session and that
+// session is what gates this proxy. MCP-driven AI workflows use the calling
+// client's own Anthropic billing instead.
 app.post('/turn', async (c) => {
+  const auth = await authenticate(c);
+  if (!auth) return c.json({ error: 'unauthorized' }, 401);
+  if (auth.via !== 'session') {
+    return c.json(
+      { error: 'session required — MCP tokens cannot call /api/ai/turn (use the calling client\'s own Anthropic key)' },
+      403
+    );
+  }
+
   if (!c.env.ANTHROPIC_API_KEY) {
     return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 503);
   }
@@ -99,6 +120,12 @@ app.post('/turn', async (c) => {
 
   const allow = (body.toolNames ?? AGENT_TOOLS).filter((n) => AGENT_TOOLS.includes(n));
   const toolDefs = buildToolDefs(allow.length ? allow : AGENT_TOOLS);
+
+  // Server-side caps — clamp maxTokens and reject unknown models.
+  const requestedTokens = body.maxTokens ?? DEFAULT_MAX_TOKENS;
+  const maxTokens = Math.max(1, Math.min(requestedTokens, MAX_OUTPUT_TOKENS));
+  const requestedModel = body.model ?? DEFAULT_MODEL;
+  const model = ALLOWED_MODELS.has(requestedModel) ? requestedModel : DEFAULT_MODEL;
 
   const system = [
     {
@@ -116,8 +143,8 @@ app.post('/turn', async (c) => {
   ];
 
   const payload = {
-    model: body.model ?? DEFAULT_MODEL,
-    max_tokens: body.maxTokens ?? DEFAULT_MAX_TOKENS,
+    model,
+    max_tokens: maxTokens,
     system,
     tools: toolDefs,
     messages: body.messages,

@@ -127,15 +127,19 @@ export async function executeAgentTool(
       }
 
       case 'add_area': {
-        // Forward `deduction` — the shared tool schema, the REST endpoint, and
-        // the worker shape row all accept it. Dropping it here silently turned
-        // agent-supplied cutouts into positive areas that ADD to totals.
+        // Forward `name`/`color`/`deduction` — the shared tool schema, REST,
+        // and worker shape row all accept them. When no item_id is provided,
+        // the server creates a new item using `name` as the label and `color`
+        // for legends. Dropping these turned agent-named scopes ("Parapet
+        // flashing") into generic auto-labels in quotes; dropping `deduction`
+        // turned cutouts into positive areas.
         const out = await api.shapes.area({
           project_id: pid,
           page_index: Number(input.page_index),
           points: input.points as Point[],
           item_id: input.item_id as string | undefined,
           name: input.name as string | undefined,
+          color: input.color as string | undefined,
           snap: input.snap as boolean | undefined,
           deduction: input.deduction as boolean | undefined,
         });
@@ -148,6 +152,8 @@ export async function executeAgentTool(
           page_index: Number(input.page_index),
           points: input.points as Point[],
           item_id: input.item_id as string | undefined,
+          name: input.name as string | undefined,
+          color: input.color as string | undefined,
           snap: input.snap as boolean | undefined,
           deduction: input.deduction as boolean | undefined,
         });
@@ -160,6 +166,8 @@ export async function executeAgentTool(
           page_index: Number(input.page_index),
           points: input.points as Point[],
           item_id: input.item_id as string | undefined,
+          name: input.name as string | undefined,
+          color: input.color as string | undefined,
           deduction: input.deduction as boolean | undefined,
         });
         return textResult(id, out);
@@ -173,6 +181,8 @@ export async function executeAgentTool(
           end: input.end as Point,
           bulge: Number(input.bulge),
           item_id: input.item_id as string | undefined,
+          name: input.name as string | undefined,
+          color: input.color as string | undefined,
           deduction: input.deduction as boolean | undefined,
         });
         return textResult(id, out);

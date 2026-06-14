@@ -97,12 +97,22 @@ export async function recallCustomer(
   }>
 > {
   const q = `%${args.query}%`;
+  // Filter to the currently-active Xero tenant so a tenant switch can't
+  // surface stale contacts (which would push DRAFT quotes to ContactIDs
+  // the active OAuth token doesn't own). Customers with no
+  // xero_tenant_id (e.g. manually-created rows or pre-tenant-scoping
+  // seed data) stay visible.
+  const activeTenant = (await env.DB.prepare(
+    'SELECT tenant_id FROM xero_tokens ORDER BY updated_at DESC LIMIT 1'
+  ).first()) as { tenant_id: string } | null;
+  const tenant = activeTenant?.tenant_id ?? null;
   const rows = await env.DB.prepare(
     `SELECT id, xero_contact_id, name, email, phone FROM customers
-     WHERE name LIKE ? OR email LIKE ? OR phone LIKE ?
+     WHERE (name LIKE ? OR email LIKE ? OR phone LIKE ?)
+       AND (xero_tenant_id IS NULL OR xero_tenant_id = ?)
      ORDER BY name LIMIT 20`
   )
-    .bind(q, q, q)
+    .bind(q, q, q, tenant)
     .all();
   return rows.results.map((r) => ({
     id: r.id as string,
