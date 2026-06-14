@@ -441,11 +441,34 @@ const AppContent: React.FC = () => {
   const handleShapeCreated = (shape: Shape) => {
     if (!activeTakeoffId) return;
     if (isDeductionMode) shape.deduction = true;
+    // Unit-mismatch guard: shape.value is in the CURRENT page's scale unit
+    // (e.g. metres for an m-calibrated page). The active item was created
+    // against another page whose linear unit may differ (e.g. ft). Summing
+    // a metre-valued shape into a ft-typed item silently mislabels the total
+    // in legends/estimates/quotes. Refuse the shape rather than corrupt the
+    // running total — COUNT/NOTE bypass since they don't carry a scale unit.
+    const item = items.find(i => i.id === activeTakeoffId);
+    if (item && shape.value !== 0 && item.type !== ToolType.COUNT && item.type !== ToolType.NOTE) {
+      const pageLinearUnit = currentScale.unit;
+      const expectedUnit =
+        item.type === ToolType.AREA || item.type === ToolType.FILL
+          ? getAreaUnitFromLinear(pageLinearUnit)
+          : item.type === ToolType.VOLUME
+            ? getVolumeUnitFromLinear(pageLinearUnit)
+            : pageLinearUnit;
+      if (expectedUnit !== item.unit) {
+        addToast(
+          `This page measures in "${expectedUnit}" but "${item.label}" is in "${item.unit}". Create a separate item on this page, or recalibrate.`,
+          'error'
+        );
+        return;
+      }
+    }
     setHistory(draft => {
-      const item = draft.items.find(i => i.id === activeTakeoffId);
-      if (item) {
-        item.shapes.push(shape);
-        item.totalValue = calculateTotalValue(item.shapes, item);
+      const draftItem = draft.items.find(i => i.id === activeTakeoffId);
+      if (draftItem) {
+        draftItem.shapes.push(shape);
+        draftItem.totalValue = calculateTotalValue(draftItem.shapes, draftItem);
       }
     });
     if (isDeductionMode) {

@@ -168,11 +168,31 @@ export async function updateShape(
     text?: string;
   }
 ): Promise<{ updated: boolean; item_id: string | null; previous_item_id?: string }> {
-  const row = (await env.DB.prepare('SELECT item_id FROM shapes WHERE id = ?')
+  const row = (await env.DB.prepare(
+    `SELECT s.item_id, i.project_id FROM shapes s
+       JOIN items i ON i.id = s.item_id
+      WHERE s.id = ?`
+  )
     .bind(shapeId)
-    .first()) as { item_id: string } | null;
+    .first()) as { item_id: string; project_id: string } | null;
   if (!row) return { updated: false, item_id: null };
   const previousItemId = row.item_id;
+  const projectId = row.project_id;
+  // Cross-project reparent is a real authz hole — without this check, any
+  // authenticated caller who knows a shape id + an item id from a different
+  // project can hijack the shape into that project (and silently change both
+  // items' totals). Restrict reparent targets to the SAME project.
+  if (patch.item_id !== undefined && patch.item_id !== previousItemId) {
+    const target = (await env.DB.prepare(
+      'SELECT project_id FROM items WHERE id = ?'
+    )
+      .bind(patch.item_id)
+      .first()) as { project_id: string } | null;
+    if (!target) throw new Error(`Target item ${patch.item_id} not found`);
+    if (target.project_id !== projectId) {
+      throw new Error('Cannot move shape into an item from a different project');
+    }
+  }
   const sets: string[] = [];
   const binds: unknown[] = [];
   if (patch.points !== undefined) { sets.push('points_json = ?'); binds.push(JSON.stringify(patch.points)); }

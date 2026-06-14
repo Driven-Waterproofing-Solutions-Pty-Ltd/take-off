@@ -637,12 +637,19 @@ const Sidebar: React.FC<SidebarProps> = ({
                     setSourceItemIdForChange(null);
                 }}
                 onChangeItem={(targetItemId) => {
+                    // Move the shapes that were captured when the modal opened
+                    // (scoped to the right-clicked sidebar row's page via
+                    // selectedShapeIdsForChange). Re-filtering by the active
+                    // canvas pageIndex here was the bug — when the user
+                    // expanded multiple sidebar pages and acted on a non-active
+                    // one, the wrong sheet's shapes got moved (or nothing
+                    // moved when there were no shapes on the active page).
                     if (onMoveShapesToItem && sourceItemIdForChange) {
-                        const sourceItem = items.find(i => i.id === sourceItemIdForChange);
-                        if (sourceItem) {
-                            const shapesToMove = sourceItem.shapes
-                                .filter(s => s.pageIndex === pageIndex)
-                                .map(s => ({ itemId: sourceItemIdForChange, shapeId: s.id }));
+                        const shapesToMove = selectedShapeIdsForChange.map(shapeId => ({
+                            itemId: sourceItemIdForChange,
+                            shapeId,
+                        }));
+                        if (shapesToMove.length > 0) {
                             onMoveShapesToItem(shapesToMove, targetItemId);
                         }
                     }

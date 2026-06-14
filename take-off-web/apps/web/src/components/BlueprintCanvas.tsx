@@ -257,16 +257,21 @@ const copySelectedItems = (
 // from the same points. Without this, a measurement copied between pages
 // with different calibrations briefly shows the source page's quantity in
 // the estimate/legend until the next refresh.
+// Returns null when the destination page is uncalibrated AND the shape's
+// type is scale-dependent — the caller must drop the paste in that case.
+// Keeping the source value would show a believable but stale quantity that
+// also fails the worker create endpoint (rejects scaled shapes on
+// uncalibrated pages), leaving a phantom local row that never syncs.
 const recomputePastedValue = (
     sourceShape: Shape,
     sourceItem: TakeoffItem,
     destPpu: number,
     destPoints: Point[]
-): number => {
-    if (!destPpu || destPpu <= 0) return sourceShape.value;
+): number | null => {
     if (sourceItem.type === ToolType.COUNT || sourceItem.type === ToolType.NOTE) {
         return sourceShape.value;
     }
+    if (!destPpu || destPpu <= 0) return null;
     if (
         sourceItem.type === ToolType.AREA ||
         sourceItem.type === ToolType.FILL ||
@@ -293,6 +298,7 @@ const pasteToOriginalItems = (
 
     const shapesToAdd: { itemId: string, shape: Shape }[] = [];
     const newShapeIds: { itemId: string, shapeId: string }[] = [];
+    let skipped = 0;
 
     // Find the original items to get their properties
     clipboardItems.forEach(clipboardItem => {
@@ -306,11 +312,14 @@ const pasteToOriginalItems = (
                 y: point.y + clipboardItem.offset.y
             }));
 
+            const nextValue = recomputePastedValue(originalShape, originalItem, destPpu, newPoints);
+            if (nextValue === null) { skipped++; return; }
+
             const newShape: Shape = {
                 id: crypto.randomUUID(),
                 pageIndex: globalPageIndex,
                 points: newPoints,
-                value: recomputePastedValue(originalShape, originalItem, destPpu, newPoints),
+                value: nextValue,
                 deduction: originalShape.deduction,
                 text: originalShape.text
             };
@@ -324,6 +333,7 @@ const pasteToOriginalItems = (
         onBatchAddShapes(shapesToAdd);
         setPendingSelection(newShapeIds);
     }
+    return { skipped };
 };
 
 // Helper function to prepare payload for pasting as new items
@@ -366,11 +376,14 @@ const getPasteAsNewItemsPayload = (
                     y: point.y + clipboardItem.offset.y
                 }));
 
+                const nextValue = recomputePastedValue(originalShape, sourceItem, destPpu, newPoints);
+                if (nextValue === null) return; // dest page uncalibrated for a scaled shape
+
                 const newShape: Shape = {
                     id: crypto.randomUUID(),
                     pageIndex: globalPageIndex,
                     points: newPoints,
-                    value: recomputePastedValue(originalShape, sourceItem, destPpu, newPoints),
+                    value: nextValue,
                     deduction: originalShape.deduction,
                     text: originalShape.text
                 };
@@ -1210,6 +1223,26 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 });
             });
         });
+
+        // Also consider extracted PDF vector vertices on the current page —
+        // without this, a freshly-uploaded plan with zero user measurements
+        // gives no snap targets at all, and manual clicks land unsnapped
+        // beside real linework. Vector points are already in content-pixel
+        // space (RENDER_SCALE) so they compose with shapeRenderScale the same
+        // way as shape.points do.
+        const pageVectors = cachedVectors.find(v => v.pageIndex === localPageIndex);
+        if (pageVectors) {
+            for (const path of pageVectors.paths) {
+                for (const pt of path.points) {
+                    const scaledPt = { x: pt.x * shapeRenderScale, y: pt.y * shapeRenderScale };
+                    const d = calculateDistance(cursor, scaledPt);
+                    if (d < threshold && d < minDist) {
+                        minDist = d;
+                        closest = scaledPt;
+                    }
+                }
+            }
+        }
 
         return closest;
     };
@@ -2600,7 +2633,10 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 onPasteToOriginal={() => {
                     setShowPasteOptions(false);
                     if (onBatchAddShapes) {
-                        pasteToOriginalItems(items, clipboardItems, globalPageIndex, scaleInfo.ppu, onBatchAddShapes, setPendingSelection);
+                        const r = pasteToOriginalItems(items, clipboardItems, globalPageIndex, scaleInfo.ppu, onBatchAddShapes, setPendingSelection);
+                        if (r && r.skipped > 0) {
+                            addToast(`${r.skipped} scaled shape(s) skipped — calibrate this page first`, 'error');
+                        }
                     } else {
                         addToast('Paste to original items is not supported', 'error');
                     }

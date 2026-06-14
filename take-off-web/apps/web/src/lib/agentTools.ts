@@ -127,6 +127,9 @@ export async function executeAgentTool(
       }
 
       case 'add_area': {
+        // Forward `deduction` — the shared tool schema, the REST endpoint, and
+        // the worker shape row all accept it. Dropping it here silently turned
+        // agent-supplied cutouts into positive areas that ADD to totals.
         const out = await api.shapes.area({
           project_id: pid,
           page_index: Number(input.page_index),
@@ -134,6 +137,7 @@ export async function executeAgentTool(
           item_id: input.item_id as string | undefined,
           name: input.name as string | undefined,
           snap: input.snap as boolean | undefined,
+          deduction: input.deduction as boolean | undefined,
         });
         return textResult(id, out);
       }
@@ -145,6 +149,7 @@ export async function executeAgentTool(
           points: input.points as Point[],
           item_id: input.item_id as string | undefined,
           snap: input.snap as boolean | undefined,
+          deduction: input.deduction as boolean | undefined,
         });
         return textResult(id, out);
       }
@@ -155,6 +160,7 @@ export async function executeAgentTool(
           page_index: Number(input.page_index),
           points: input.points as Point[],
           item_id: input.item_id as string | undefined,
+          deduction: input.deduction as boolean | undefined,
         });
         return textResult(id, out);
       }
@@ -167,6 +173,7 @@ export async function executeAgentTool(
           end: input.end as Point,
           bulge: Number(input.bulge),
           item_id: input.item_id as string | undefined,
+          deduction: input.deduction as boolean | undefined,
         });
         return textResult(id, out);
       }

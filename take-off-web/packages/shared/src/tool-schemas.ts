@@ -5,6 +5,21 @@ export const PointZ = z.object({ x: z.number(), y: z.number() });
 
 export const UnitZ = z.nativeEnum(Unit);
 
+// Page scale is pixels per LINEAR distance — area, volume, time, or
+// count-style units are meaningless here. Restricting this keeps a stray
+// "sq ft" or "hrs" out of pages.scale_json (which would cascade into wrong
+// area/volume unit derivation and mislabelled measurements).
+export const LinearUnitZ = z.enum([
+  Unit.FEET,
+  Unit.INCHES,
+  Unit.YARDS,
+  Unit.MILES,
+  Unit.METERS,
+  Unit.CENTIMETERS,
+  Unit.MILLIMETERS,
+  Unit.KILOMETERS,
+]);
+
 export const ScaleCalibrationZ = z.object({
   isSet: z.boolean(),
   pixelsPerUnit: z.number(),
@@ -125,7 +140,7 @@ export const tools = {
       p1: PointZ,
       p2: PointZ,
       real_distance: z.number().positive(),
-      unit: UnitZ,
+      unit: LinearUnitZ,
     }),
     output: ScaleCalibrationZ,
   },
