@@ -135,9 +135,17 @@ export async function insertShape(
   db: D1Database,
   shape: Shape & { itemId: string }
 ): Promise<void> {
+  // INSERT OR IGNORE makes the create idempotent across useShapeSync
+  // retries. The hook supplies client-side UUIDs and only snapshots a
+  // shape as "synced" on a successful POST; if the original POST committed
+  // but the response was lost, the retry sent the same id and a plain
+  // INSERT hit the PK constraint with a 500. The hook then never
+  // snapshotted, and future edits/deletes either re-ran the create or
+  // were skipped — the row was stuck until the user reloaded the project.
+  // Same id + same caller = "already saved", return success.
   await db
     .prepare(
-      `INSERT INTO shapes (id, item_id, page_index, points_json, bulges_json, value, deduction, text, created_at)
+      `INSERT OR IGNORE INTO shapes (id, item_id, page_index, points_json, bulges_json, value, deduction, text, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
@@ -162,7 +170,7 @@ export async function insertShape(
 //   COUNT, NOTE        -> distinct families of their own
 // Mixing families silently labels e.g. an area-valued polygon as metres,
 // so refuse to reuse an existing row whose type is in a different family.
-function itemFamily(type: ToolType): string {
+export function itemFamily(type: ToolType): string {
   switch (type) {
     case ToolType.AREA:
     case ToolType.FILL:
@@ -199,6 +207,15 @@ export async function getOrCreateItem(
       if (existingFamily !== requestedFamily) {
         throw new Error(
           `Item ${hint.id} is ${existing.type} (${existingFamily}-family); a ${hint.type} shape (${requestedFamily}-family) can't land on it — totals/quotes would label the value with the wrong unit.`
+        );
+      }
+      // Family match isn't enough: an AREA item with unit "sq_m" still can't
+      // host a shape measured on an ft-calibrated page (hint.unit "sq_ft"),
+      // because the raw destination m² value would be summed into the
+      // item's total under the "sq_m" label and corrupt legends/quotes.
+      if (existing.unit !== hint.unit) {
+        throw new Error(
+          `Item ${hint.id} has unit "${existing.unit}"; the destination page measures in "${hint.unit}". Recalibrate the page or use a separate item — mixing units silently corrupts totals.`
         );
       }
       return existing;

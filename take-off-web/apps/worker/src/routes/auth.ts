@@ -44,11 +44,17 @@ app.post('/login', async (c) => {
 
   const fakeSalt = 'AAAAAAAAAAAAAAAAAAAAAA=='; // 16 zero bytes b64
   const fakeHash = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='; // 32 zero bytes b64
+  // 100_000 matches lib/passwords.ts (Workers' free plan rejects 600k via
+  // PBKDF2 deriveBits). The fake-hash branch was throwing for missing users,
+  // so login on a nonexistent email returned 500 while a wrong password on
+  // an existing email returned 401 — a side-channel that leaked account
+  // existence by status. Same iteration count keeps timing comparable and
+  // the catch returns the same 401.
   const ok = await verifyPassword(
     body.password,
     row?.password_hash ?? fakeHash,
     row?.password_salt ?? fakeSalt,
-    row?.password_iter ?? 600_000
+    row?.password_iter ?? 100_000
   );
 
   if (!row || !ok) {

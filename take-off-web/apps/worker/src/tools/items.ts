@@ -1,6 +1,13 @@
 import type { Env } from '../env';
-import type { TakeoffItem } from '@takeoff/shared';
-import { recalcItemTotal, rowToShape, rowToTakeoffItem, ItemRow, ShapeRow } from '../db/queries';
+import { type TakeoffItem, ToolType } from '@takeoff/shared';
+import {
+  itemFamily,
+  recalcItemTotal,
+  rowToShape,
+  rowToTakeoffItem,
+  ItemRow,
+  ShapeRow,
+} from '../db/queries';
 
 export async function createItem(
   env: Env,
@@ -184,13 +191,36 @@ export async function updateShape(
   // items' totals). Restrict reparent targets to the SAME project.
   if (patch.item_id !== undefined && patch.item_id !== previousItemId) {
     const target = (await env.DB.prepare(
-      'SELECT project_id FROM items WHERE id = ?'
+      'SELECT project_id, type, unit FROM items WHERE id = ?'
     )
       .bind(patch.item_id)
-      .first()) as { project_id: string } | null;
+      .first()) as { project_id: string; type: string; unit: string } | null;
     if (!target) throw new Error(`Target item ${patch.item_id} not found`);
     if (target.project_id !== projectId) {
       throw new Error('Cannot move shape into an item from a different project');
+    }
+    // Family + unit compatibility, same rule as getOrCreateItem. Without it
+    // a REST/MCP caller could move an area polygon or a metre line into a
+    // count item or a feet item; recalcItemTotal then sums the raw value
+    // under the wrong type/unit and quietly corrupts legends/quotes.
+    const source = (await env.DB.prepare(
+      'SELECT type, unit FROM items WHERE id = ?'
+    )
+      .bind(previousItemId)
+      .first()) as { type: string; unit: string } | null;
+    if (source) {
+      const sourceFamily = itemFamily(source.type as ToolType);
+      const targetFamily = itemFamily(target.type as ToolType);
+      if (sourceFamily !== targetFamily) {
+        throw new Error(
+          `Cannot move shape into ${target.type} item — it's in the ${targetFamily}-family but the shape lives in a ${sourceFamily}-family item; totals/quotes would label the value with the wrong unit.`
+        );
+      }
+      if (source.unit !== target.unit) {
+        throw new Error(
+          `Cannot move shape into item with unit "${target.unit}" — shape is measured in "${source.unit}". Use a same-unit target or recalibrate first.`
+        );
+      }
     }
   }
   const sets: string[] = [];
