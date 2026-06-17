@@ -207,6 +207,31 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
     for (const itemId of [...itemSnapshots.current.keys()]) {
       if (nextItems.has(itemId)) continue;
       if (inflight.current.has(`item:${itemId}`)) continue;
+
+      // Change Item moves every shape out of a source item, then App removes
+      // the empty source item from local state. If we DELETE the source row
+      // before the shape reparent PUTs land, the items table's ON DELETE
+      // CASCADE wipes the shape rows; the subsequent PUT returns
+      // updated:false but useShapeSync still snapshots it as success, so the
+      // moved measurements survive in-memory and silently vanish on reload.
+      // Defer the item DELETE while any of its child shapes is mid-reparent
+      // — either the snapshot still points here but the next state moved it
+      // elsewhere, or there's an in-flight shape PUT we haven't confirmed.
+      let hasPendingReparent = false;
+      for (const [shapeId, snap] of shapeSnapshots.current) {
+        if (snap.itemId !== itemId) continue;
+        const next = nextShapes.get(shapeId);
+        if (next && next.item.id !== itemId) {
+          hasPendingReparent = true;
+          break;
+        }
+        if (inflight.current.get(`shape:${shapeId}`) === 'updating') {
+          hasPendingReparent = true;
+          break;
+        }
+      }
+      if (hasPendingReparent) continue;
+
       inflight.current.set(`item:${itemId}`, 'deleting');
       api.items
         .delete(itemId)

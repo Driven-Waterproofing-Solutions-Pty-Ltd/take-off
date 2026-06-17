@@ -31,7 +31,13 @@ app.get('/:id', async (c) => {
   const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(id).first();
   if (!project) return c.json({ error: 'not found' }, 404);
   const pdfs = await c.env.DB.prepare('SELECT * FROM pdfs WHERE project_id = ?').bind(id).all();
-  const pages = await c.env.DB.prepare('SELECT * FROM pages WHERE project_id = ?').bind(id).all();
+  // Skip vector_cache_json on hydration — useProjectManagerWeb only reads
+  // scale_json/name/legend_json, and a CAD-heavy multi-page set carries
+  // tens of MB of cache JSON that the client never touches before snap
+  // (which lazily loads it page-by-page via the measure routes).
+  const pages = await c.env.DB.prepare(
+    'SELECT page_index, scale_json, name, legend_json FROM pages WHERE project_id = ?'
+  ).bind(id).all();
   return c.json({ project, pdfs: pdfs.results, pages: pages.results });
 });
 

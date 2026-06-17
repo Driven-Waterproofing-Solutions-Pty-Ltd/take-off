@@ -9,16 +9,26 @@ import type { Point } from '../types';
 
 export interface AgentToolContext {
   projectId: string;
-  // Map a project-wide page index → the local page index within the loaded
-  // PDF (so get_page_image renders the right page). Mirrors
-  // getActivePlanDetails in App.tsx.
-  resolveLocalPageIndex: (globalPageIndex: number) => number | null;
+  // Map a project-wide page index → the plan set + local PDF page index
+  // (mirrors getActivePlanDetails in App.tsx). Returns null when the global
+  // index lies outside every uploaded plan set.
+  resolveLocalPageIndex: (globalPageIndex: number) => { planSetId: string; localIndex: number } | null;
+  // Plan set currently loaded into the shared mupdfController. get_page_image
+  // can only render pages from that set; a request for a page in any other
+  // uploaded plan set would otherwise render the wrong PDF entirely.
+  activePlanSetId: string | null;
 }
 
 // Claude vision works best with the longest edge ≤ ~1568px. AutoCAD A3 sheets
 // render much larger; downscale before sending so we don't waste tokens or
 // trip the model's image-resize.
 const MAX_IMAGE_EDGE = 1568;
+
+// Vector cache (used by snap_to_vector) lives in 2× content-pixel space —
+// see vectorExtractor.ts and the canvas's shapeRenderScale. The agent works
+// in PDF-point space (matches add_*/set_scale_*); scale points across that
+// boundary when calling snap so the agent never sees the discrepancy.
+const VECTOR_CACHE_SCALE = 2;
 
 interface ToolUseBlock {
   type: 'tool_use';
@@ -91,10 +101,32 @@ export async function executeAgentTool(
     switch (name) {
       case 'get_page_image': {
         const pageIndex = Number(input.page_index ?? 0);
-        const local = ctx.resolveLocalPageIndex(pageIndex);
-        if (local == null) return textResult(id, `No PDF page for index ${pageIndex}`, true);
-        const renderScale = Number(input.render_scale ?? 2.0);
-        const { pixels, width, height } = mupdfController.renderPageToImageData(local, renderScale);
+        const resolved = ctx.resolveLocalPageIndex(pageIndex);
+        if (!resolved) return textResult(id, `No PDF page for index ${pageIndex}`, true);
+        // mupdfController only holds ONE document at a time (the canvas's
+        // currently-loaded plan set). If the agent asks for a page in a
+        // different uploaded set, rendering would silently use whichever PDF
+        // is already loaded and return the wrong drawing — every measurement
+        // off that image would then be wrong. Refuse and tell the agent to
+        // switch the active page first.
+        if (ctx.activePlanSetId && resolved.planSetId !== ctx.activePlanSetId) {
+          return textResult(
+            id,
+            `Page ${pageIndex} belongs to a different plan set than the one currently loaded on the canvas. Ask the user to switch to that plan set / page first, then call get_page_image again.`,
+            true
+          );
+        }
+        // Default to 1× = PDF-point space, which matches the coordinate
+        // space the worker expects for add_area / add_linear / add_count /
+        // add_arc / set_scale_manual. Rendering at 2× and forwarding raw
+        // pixel coords (the previous default) overstated quantities 4× on
+        // preset scales and double-sized the saved geometry on reload
+        // (the canvas multiplies stored points by shapeRenderScale=2).
+        const renderScale = Number(input.render_scale ?? 1.0);
+        const { pixels, width, height } = mupdfController.renderPageToImageData(
+          resolved.localIndex,
+          renderScale
+        );
         const data = pixelsToPngBase64(pixels, width, height);
         return {
           type: 'tool_result',
@@ -102,7 +134,7 @@ export async function executeAgentTool(
           content: [
             {
               type: 'text',
-              text: `Page ${pageIndex} rendered at ${width}x${height}px (content-pixel space, RENDER_SCALE=${renderScale}). Coordinates you propose should be in this pixel space.`,
+              text: `Page ${pageIndex} rendered at ${width}x${height}px. Coordinates you propose should be in PDF-point space — i.e. divide image-pixel coordinates by ${renderScale} before passing them to add_area / add_linear / add_count / add_arc / set_scale_manual.`,
             },
             { type: 'image', source: { type: 'base64', media_type: 'image/png', data } },
           ],
@@ -189,13 +221,28 @@ export async function executeAgentTool(
       }
 
       case 'snap_to_vector': {
+        // Agent works in PDF-point space; vector cache lives in 2× space.
+        // Scale across the boundary so the snap is meaningful — otherwise
+        // every PDF-point coord lands ~8 px from the nearest cache vertex
+        // and snap silently returns the input untouched.
+        const requested = (input.points as Point[]) ?? [];
+        const scaled = requested.map((p) => ({
+          x: p.x * VECTOR_CACHE_SCALE,
+          y: p.y * VECTOR_CACHE_SCALE,
+        }));
         const out = await api.snap({
           project_id: pid,
           page_index: Number(input.page_index),
-          points: input.points as Point[],
+          points: scaled,
           tolerance_px: input.tolerance_px as number | undefined,
         });
-        return textResult(id, out);
+        return textResult(id, {
+          ...out,
+          snapped: out.snapped.map((p) => ({
+            x: p.x / VECTOR_CACHE_SCALE,
+            y: p.y / VECTOR_CACHE_SCALE,
+          })),
+        });
       }
 
       case 'list_items': {
@@ -219,7 +266,15 @@ export async function executeAgentTool(
       }
 
       case 'apply_assembly': {
-        const out = await api.items.update(String(input.item_id), {
+        // Route through the validated /api/memory/apply-assembly endpoint —
+        // it checks the assembly row exists before stamping its id on the
+        // item. The raw api.items.update path writes the id without checking;
+        // a stale or hallucinated assembly_id then makes buildQuote skip the
+        // item (no assembly lines + no price/sub-item fallback) so the item
+        // silently vanishes from the draft quote.
+        const out = await api.memory.applyAssembly({
+          project_id: pid,
+          item_id: String(input.item_id),
           assembly_id: String(input.assembly_id),
         });
         return textResult(id, out);

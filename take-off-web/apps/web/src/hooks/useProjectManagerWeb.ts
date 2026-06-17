@@ -180,6 +180,31 @@ export const useProjectManager = (_isLicensed = true) => {
     []
   );
 
+  // Re-hydrate items + per-page scale/legend from the server while preserving
+  // local plan-set blobs (avoids re-fetching tens of MB of PDFs from R2 on
+  // every refresh). The agent panel calls this after a run so canvas, markup
+  // export and saved snapshot all see the server-side writes the agent made.
+  const refreshProject = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      const snap = await fetchProject(projectId);
+      if (!snap) return;
+      const patched = snap.items.map((item) => {
+        if (item.type === ToolType.AREA) {
+          const correctedUnit = getAreaUnitFromLinear(item.unit as Unit);
+          if (correctedUnit !== item.unit) return { ...item, unit: correctedUnit };
+        }
+        return item;
+      });
+      setHistory(draft => {
+        draft.items = patched;
+        draft.projectData = snap.projectData;
+      });
+    } catch (e) {
+      console.error('refreshProject failed', e);
+    }
+  }, [projectId, setHistory]);
+
   const handleNewProjectRequest = () => setShowNewProjectPrompt(true);
 
   const handleNewProjectConfirmed = async (name: string) => {
@@ -340,5 +365,6 @@ export const useProjectManager = (_isLicensed = true) => {
     handleSaveProject,
     handleLoadProjectClick,
     handleImportConfirmed,
+    refreshProject,
   };
 };

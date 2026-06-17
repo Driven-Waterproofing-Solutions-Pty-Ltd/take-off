@@ -81,6 +81,7 @@ const AppContent: React.FC = () => {
     setShowImportConfirm,
     setPendingImportPath,
     currentFilePath: projectId,
+    refreshProject,
   } = useProjectManager(isLicensed);
 
   // Persist every local state change back to D1 + R2.
@@ -991,7 +992,13 @@ const AppContent: React.FC = () => {
         )}
       </main>
       {showAgent && (
-        <AgentPanel projectId={projectId} planSets={planSets} onClose={() => setShowAgent(false)} />
+        <AgentPanel
+          projectId={projectId}
+          planSets={planSets}
+          activePlanSetId={activePlan?.id ?? null}
+          onAgentDone={refreshProject}
+          onClose={() => setShowAgent(false)}
+        />
       )}
       {/* Agent toggle — floating, unobtrusive; opens the conversational
           takeoff agent panel. Only meaningful with a project + plans loaded. */}

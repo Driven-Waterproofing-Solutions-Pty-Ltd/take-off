@@ -12,26 +12,37 @@ import type { QuoteDraft } from '@takeoff/shared';
 interface AgentPanelProps {
   projectId: string | null;
   planSets: PlanSet[];
+  // Plan set id that the canvas currently has loaded into mupdfController —
+  // get_page_image can only render from that set, so the agent context
+  // gates page requests against it.
+  activePlanSetId: string | null;
+  // Called after the agent loop completes so App can re-fetch items /
+  // projectData from the server. Agent writes go through REST and never
+  // flow back through useShapeSync (which only pushes outward), so without
+  // this the canvas, markup export, and saved snapshot would miss the
+  // agent-created shapes even though the review quote includes them.
+  onAgentDone: () => void | Promise<void>;
   onClose: () => void;
 }
 
-// Resolve a project-wide page index to the local index within its PDF —
-// mirrors getActivePlanDetails in App.tsx so get_page_image renders the
-// correct page.
+// Resolve a project-wide page index to its plan set + local index within
+// that PDF — mirrors getActivePlanDetails in App.tsx. Returning the
+// planSetId lets get_page_image refuse pages outside the currently-loaded
+// set instead of silently rendering the wrong PDF.
 function makeResolveLocalPageIndex(planSets: PlanSet[]) {
-  return (globalPageIndex: number): number | null => {
+  return (globalPageIndex: number): { planSetId: string; localIndex: number } | null => {
     for (const set of planSets) {
       if (globalPageIndex >= set.startPageIndex && globalPageIndex < set.startPageIndex + set.pageCount) {
         const local = globalPageIndex - set.startPageIndex;
-        if (set.pages && set.pages[local] !== undefined) return set.pages[local];
-        return local;
+        const localIndex = set.pages && set.pages[local] !== undefined ? set.pages[local] : local;
+        return { planSetId: set.id, localIndex };
       }
     }
     return null;
   };
 }
 
-const AgentPanel: React.FC<AgentPanelProps> = ({ projectId, planSets, onClose }) => {
+const AgentPanel: React.FC<AgentPanelProps> = ({ projectId, planSets, activePlanSetId, onAgentDone, onClose }) => {
   const { addToast } = useToast();
   const { state, run, abort } = useTakeoffAgent();
   const [instruction, setInstruction] = useState('');
@@ -46,8 +57,15 @@ const AgentPanel: React.FC<AgentPanelProps> = ({ projectId, planSets, onClose })
   const [pushed, setPushed] = useState<{ deep_link: string } | null>(null);
 
   const ctx: AgentToolContext | null = useMemo(
-    () => (projectId ? { projectId, resolveLocalPageIndex: makeResolveLocalPageIndex(planSets) } : null),
-    [projectId, planSets]
+    () =>
+      projectId
+        ? {
+            projectId,
+            resolveLocalPageIndex: makeResolveLocalPageIndex(planSets),
+            activePlanSetId,
+          }
+        : null,
+    [projectId, planSets, activePlanSetId]
   );
 
   const start = async () => {
@@ -63,6 +81,14 @@ const AgentPanel: React.FC<AgentPanelProps> = ({ projectId, planSets, onClose })
       setQuote(q);
     } catch {
       /* no quote yet — that's fine */
+    }
+    // Re-hydrate App's local items/projectData so the canvas, markup export
+    // and saved snapshot see the agent-created shapes. Runs after the quote
+    // fetch so we never block the review gate on this.
+    try {
+      await onAgentDone();
+    } catch (e) {
+      console.error('agent refresh failed', e);
     }
   };
 

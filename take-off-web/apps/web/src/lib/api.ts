@@ -296,6 +296,16 @@ export const api = {
         `/api/memory/customers/search?q=${encodeURIComponent(q)}`
       ),
     listAssemblies: () => req('/api/memory/assemblies'),
+    // Validated apply-assembly path — the server checks the assembly exists
+    // before stamping its id onto the item. The agent must NOT route this
+    // through api.items.update({ assembly_id }), which writes the id raw and
+    // makes the item silently disappear from buildQuote if the assembly was
+    // stale or hallucinated.
+    applyAssembly: (body: { project_id: string; item_id: string; assembly_id: string }) =>
+      req<TakeoffItem>('/api/memory/apply-assembly', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
     quote: (projectId: string) => req<QuoteDraft>(`/api/memory/quote/${projectId}`),
   },
 

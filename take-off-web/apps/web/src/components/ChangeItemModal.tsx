@@ -57,11 +57,16 @@ const ChangeItemModal: React.FC<ChangeItemModalProps> = ({
         return Array.from(sourceItemIds).map(id => items.find(i => i.id === id)).filter(Boolean) as TakeoffItem[];
     }, [items, shapeIds]);
 
-    // Filter items to only show compatible items (same tool type, different from source)
+    // Filter items to only show compatible items (same tool type AND same
+    // calibrated unit, different from source). Same-type-only let users move,
+    // for example, metre-valued LINEAR shapes into a feet-based LINEAR item:
+    // handleMoveShapesToItem appends shape.value raw without conversion, so
+    // legends, totals, sync, and quotes then report the moved metres as feet.
     const sourceItem = items.find(item => item.id === sourceItemId);
     const compatibleItems = items.filter(item =>
         item.id !== sourceItemId &&
-        item.type === sourceItem?.type
+        item.type === sourceItem?.type &&
+        item.unit === sourceItem?.unit
     );
 
     const filteredItems = compatibleItems.sort((a, b) => a.label.localeCompare(b.label));
