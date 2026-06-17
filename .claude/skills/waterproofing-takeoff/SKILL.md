@@ -99,6 +99,20 @@ labour baked into the meterage). Full numbers and provenance in
 - "Lay-for-gold" single angle rate: **OPEN — confirm the number with Andy before
   using it.** Do not invent it.
 
+**Builder ≠ Leading Edge?** The simplified card is LE-specific. For DJ Roberts
+(DJR), Hallmark, Hastie, AHC and others, the card doesn't apply — get the
+builder's rate sheet first, or price on the legacy granular card with a clear
+"builder rate pending" flag. Don't silently default to LE rates on a non-LE plan.
+
+### 6a. Check the colour / PC item selections separately
+Architectural plans don't carry **floor waste finishes** (chrome / brushed gold /
+matte black / Plastec Smart). Those come from the **builder's PC item list or
+colour selections sheet**, which is a separate file. Quote at the default
+$55/ea (chrome / standard stainless) unless the colour selections are in hand;
+flag the line for confirmation. Per cost-data-memo §4, Plastec Smart bills at
+$65/ea cost-side; gold/black wastes bill higher again. Same caveat applies to
+**angles** (Streamline gunmetal / bright gold) and **tapware finishes**.
+
 Material cost side (for GP%, "what to buy") lives in
 `take-off-web/dispatches/cost-data-memo.md` — the GCP Silcor system at real Tilers
 Warehouse buy prices, with TDS coverage rates and cost recipes per assembly.
