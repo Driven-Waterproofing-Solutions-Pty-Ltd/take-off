@@ -159,7 +159,13 @@ const NewItemModal: React.FC<NewItemModalProps> = ({ toolType, existingCount, sc
                                 mode="select"
                                 filterToolType={toolType}
                                 onSelect={(template) => {
-                                    // Map template to item data
+                                    // Map template to item data. Carry through
+                                    // template.depth for VOLUME templates — without
+                                    // it new items land with depth=undefined, the
+                                    // polygon is totaled as area while the unit
+                                    // stays cubic, and legends/quotes undercount
+                                    // every volume takeoff until the user re-enters
+                                    // the depth manually.
                                     onCreate({
                                         label: template.label,
                                         color: template.color,
@@ -168,7 +174,8 @@ const NewItemModal: React.FC<NewItemModalProps> = ({ toolType, existingCount, sc
                                         formula: template.formula,
                                         price: template.price,
                                         group: template.group,
-                                        subItems: template.subItems
+                                        subItems: template.subItems,
+                                        depth: template.depth,
                                     });
                                 }}
                             />

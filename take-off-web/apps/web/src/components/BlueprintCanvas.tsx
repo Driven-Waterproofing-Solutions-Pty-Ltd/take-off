@@ -3,7 +3,7 @@ import { Stage, Layer, Rect, Circle, Line as KonvaLine, Path, Group, Label, Tag,
 import Konva from 'konva';
 // import { Document, Page, pdfjs } from 'react-pdf'; // Removed for MuPDF
 import { Point, ToolType, TakeoffItem, Shape, Unit, LegendSettings } from '../types';
-import { calculateDistance, calculatePolylineLength, calculatePolygonArea, getScaledValue, getScaledArea, getAreaUnitFromLinear, getVolumeUnitFromLinear, parseDimensionInput, PresetScale, isPointInPolygon, PRESET_SCALES } from '../utils/geometry';
+import { calculateArcLength, calculateDistance, calculatePolylineLength, calculatePolygonArea, getScaledValue, getScaledArea, getAreaUnitFromLinear, getVolumeUnitFromLinear, parseDimensionInput, PresetScale, isPointInPolygon, PRESET_SCALES } from '../utils/geometry';
 import { AlertCircle, Trash2, Scissors, Plus, Eraser, MessageSquare, Ruler, Edit2, Loader2 } from 'lucide-react';
 // import '../utils/pdfWorker'; // Removed for MuPDF
 import { useToast } from '../contexts/ToastContext';
@@ -293,7 +293,21 @@ const recomputePastedValue = (
     ) {
         return getScaledArea(calculatePolygonArea(destPoints), destPpu);
     }
-    // LINEAR / DIMENSION / SEGMENT / ARC: polyline length.
+    // Two-point ARC shapes carry curvature in bulges[0]; polylineLength
+    // collapses that to the straight chord and undercounts. Multi-vertex
+    // ARCs are stored as polylines of straight chords (same convention as
+    // the create + recalibration paths), so they keep polyline length.
+    if (
+        sourceItem.type === ToolType.ARC &&
+        sourceShape.points.length === 2 &&
+        destPoints.length === 2
+    ) {
+        return getScaledValue(
+            calculateArcLength(destPoints[0], destPoints[1], sourceShape.bulges?.[0] ?? 0),
+            destPpu
+        );
+    }
+    // LINEAR / DIMENSION / SEGMENT / multi-vertex ARC: polyline length.
     return getScaledValue(calculatePolylineLength(destPoints), destPpu);
 };
 
@@ -334,6 +348,11 @@ const pasteToOriginalItems = (
                 id: crypto.randomUUID(),
                 pageIndex: globalPageIndex,
                 points: newPoints,
+                // Preserve bulges so two-point ARC shapes don't degrade into a
+                // straight chord on paste. recomputePastedValue uses bulges[0]
+                // for two-point arcs; without copying it here the new shape's
+                // geometry shrinks to a line and reload shows a chord.
+                bulges: originalShape.bulges ? [...originalShape.bulges] : undefined,
                 value: nextValue,
                 deduction: originalShape.deduction,
                 text: originalShape.text
@@ -400,6 +419,9 @@ const getPasteAsNewItemsPayload = (
                     id: crypto.randomUUID(),
                     pageIndex: globalPageIndex,
                     points: newPoints,
+                    // Same bulge-preservation as pasteToOriginalItems — two-point
+                    // ARCs lose their curvature otherwise.
+                    bulges: originalShape.bulges ? [...originalShape.bulges] : undefined,
                     value: nextValue,
                     deduction: originalShape.deduction,
                     text: originalShape.text
@@ -1811,15 +1833,23 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             }
         }
         
-        // Fallback to existing shape-based detection
+        // Fallback to existing shape-based detection. `point` arrives in
+        // rendered content-pixel space (shapeRenderScale × PDF), but stored
+        // shape coordinates are in PDF-point space — comparing them directly
+        // missed every click inside a real loop on the standard 2× render,
+        // and any rare small-loop match passed PDF-space coords through to
+        // finalizeMeasurement (which expects content-pixel space, so the
+        // saved polygon was half-size). Convert the click to PDF space for
+        // the containment test, then scale the matched loop back up before
+        // handing it off to finalizeMeasurement.
         const allSegments: Array<{ start: Point, end: Point }> = [];
-        
+
         items.forEach(item => {
             if (item.visible === false || item.hiddenPages?.includes(globalPageIndex)) return;
-            
+
             item.shapes.forEach(shape => {
                 if (shape.pageIndex !== globalPageIndex) return;
-                
+
                 // Only consider linear shapes (lines, arcs, segments, dimensions)
                 if ([ToolType.LINEAR, ToolType.ARC, ToolType.SEGMENT, ToolType.DIMENSION].includes(item.type)) {
                     for (let i = 0; i < shape.points.length - 1; i++) {
@@ -1832,13 +1862,20 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             });
         });
 
+        const ppdScale = shapeRenderScale > 0 ? shapeRenderScale : 1;
+        const pointInPdf: Point = { x: point.x / ppdScale, y: point.y / ppdScale };
+
         // Try to find closed loops and check if point is inside
         const closedLoops = findClosedLoops(allSegments);
-        
+
         for (const loop of closedLoops) {
-            if (isPointInPolygon(point, loop)) {
-                // Found a containing loop, create filled area
-                finalizeMeasurement(loop);
+            if (isPointInPolygon(pointInPdf, loop)) {
+                // Found a containing loop, create filled area. Scale back to
+                // content-pixel space so finalizeMeasurement (and the new
+                // shape's saved geometry, via its own re-conversion) lands
+                // at the right size.
+                const loopInRender = loop.map((p) => ({ x: p.x * ppdScale, y: p.y * ppdScale }));
+                finalizeMeasurement(loopInRender);
                 return;
             }
         }

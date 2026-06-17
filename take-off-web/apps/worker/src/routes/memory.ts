@@ -50,6 +50,15 @@ app.post('/assemblies', requireAdmin, async (c) => {
   }>();
   const lines = body.lines ?? [];
 
+  // An assembly with no lines is queryable via list_assemblies and can be
+  // applied to an item, but buildQuote then takes the item.assemblyId branch
+  // and emits no material/labour lines AND skips the price/sub-item
+  // fallback — the measured item silently disappears from the draft quote.
+  // Reject the input here so the admin sees the cause immediately.
+  if (lines.length === 0) {
+    return c.json({ error: 'assembly must have at least one material/labour line' }, 400);
+  }
+
   // Pre-validate every referenced material before we touch the assemblies
   // table. Without this, the assembly row commits and a later
   // assembly_lines insert can fail (typo'd material_id, dup key) leaving

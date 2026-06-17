@@ -771,30 +771,57 @@ const AppContent: React.FC = () => {
       const volumeUnit = getVolumeUnitFromLinear(unit);
       for (const item of draft.items) {
         let touched = false;
+        let hasShapesOnOtherPages = false;
         for (const shape of item.shapes) {
-          if (shape.pageIndex !== pageIndex) continue;
+          if (shape.pageIndex !== pageIndex) {
+            hasShapesOnOtherPages = true;
+            continue;
+          }
           touched = true;
           if (item.type === ToolType.AREA || item.type === ToolType.FILL || item.type === ToolType.VOLUME) {
             shape.value = getScaledArea(calculatePolygonArea(shape.points), ppu);
           } else if (item.type === ToolType.ARC && shape.points.length >= 2) {
-            shape.value = getScaledValue(
-              calculateArcLength(shape.points[0], shape.points[1], shape.bulges?.[0] ?? 0),
-              ppu
-            );
+            // Multi-vertex ARCs are polylines of straight chords (the
+            // useShapeSync create branch makes the same call). Without the
+            // length branch we only measured the first chord and the item
+            // silently undercounted on every recalibration.
+            shape.value =
+              shape.points.length > 2
+                ? getScaledValue(calculatePolylineLength(shape.points), ppu)
+                : getScaledValue(
+                    calculateArcLength(shape.points[0], shape.points[1], shape.bulges?.[0] ?? 0),
+                    ppu
+                  );
           } else if (item.type === ToolType.LINEAR || item.type === ToolType.SEGMENT || item.type === ToolType.DIMENSION) {
             shape.value = getScaledValue(calculatePolylineLength(shape.points), ppu);
           }
           // NOTE / COUNT shapes carry annotation/count semantics independent of scale.
         }
         if (touched) {
-          if (item.type === ToolType.AREA || item.type === ToolType.FILL) item.unit = areaUnit;
-          else if (item.type === ToolType.VOLUME) item.unit = volumeUnit;
-          else if (item.type === ToolType.LINEAR || item.type === ToolType.ARC || item.type === ToolType.SEGMENT || item.type === ToolType.DIMENSION) item.unit = unit;
-          // Convert VOLUME depth into the new linear unit before folding it
-          // into totalValue; otherwise an item depth of "1" silently changes
-          // meaning (1 ft → 1 m) and over/under-states the cubic quantity.
-          if (item.type === ToolType.VOLUME && item.depth != null && prevUnit && prevUnit !== unit) {
-            item.depth = convertLinearUnit(item.depth, prevUnit, unit);
+          // Multi-page items hold one global unit but each shape was measured
+          // against its own page's calibration. If only THIS page changed and
+          // others stay on the old (or a different) linear unit, retagging
+          // item.unit silently relabels metres on page B as feet. Only
+          // retune the global unit when every other page already shares the
+          // new linear unit — otherwise leave the unit alone (totals/quotes
+          // stay self-consistent with the existing label until the user
+          // recalibrates the other pages or splits the item).
+          const otherPagesShareNewUnit = !hasShapesOnOtherPages ||
+            item.shapes.every((s) => {
+              if (s.pageIndex === pageIndex) return true;
+              const pageScale = draft.projectData[s.pageIndex]?.scale;
+              return pageScale?.isSet && pageScale.unit === unit;
+            });
+          if (otherPagesShareNewUnit) {
+            if (item.type === ToolType.AREA || item.type === ToolType.FILL) item.unit = areaUnit;
+            else if (item.type === ToolType.VOLUME) item.unit = volumeUnit;
+            else if (item.type === ToolType.LINEAR || item.type === ToolType.ARC || item.type === ToolType.SEGMENT || item.type === ToolType.DIMENSION) item.unit = unit;
+            // Convert VOLUME depth into the new linear unit before folding it
+            // into totalValue; otherwise an item depth of "1" silently changes
+            // meaning (1 ft → 1 m) and over/under-states the cubic quantity.
+            if (item.type === ToolType.VOLUME && item.depth != null && prevUnit && prevUnit !== unit) {
+              item.depth = convertLinearUnit(item.depth, prevUnit, unit);
+            }
           }
           // totalValue mirrors calculateTotalValue: shape sum, with depth fold for VOLUME.
           const baseValue = item.shapes.reduce(

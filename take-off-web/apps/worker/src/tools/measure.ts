@@ -20,6 +20,15 @@ import {
 } from '../db/queries';
 import { snapToVector } from './snap';
 
+// Vector cache is uploaded from the canvas in RENDER_SCALE × PDF-point space
+// (see apps/web/src/utils/vectorExtractor.ts), but shapes round-trip through
+// the REST/MCP surface in PDF-point space. Without this conversion the snap
+// compares a point near PDF (100, 100) against cache geometry near (200, 200),
+// so either no snap fires or it snaps to cache coords that then get stored as
+// shape points = double-sized geometry. Mirrors the agentTools snap_to_vector
+// executor — keep both in lockstep.
+const VECTOR_CACHE_SCALE = 2;
+
 async function maybeSnap(
   env: Env,
   projectId: string,
@@ -28,12 +37,19 @@ async function maybeSnap(
   snap: boolean | undefined
 ): Promise<Point[]> {
   if (snap === false) return points;
+  const scaled = points.map((p) => ({
+    x: p.x * VECTOR_CACHE_SCALE,
+    y: p.y * VECTOR_CACHE_SCALE,
+  }));
   const { snapped } = await snapToVector(env, {
     project_id: projectId,
     page_index: pageIndex,
-    points,
+    points: scaled,
   });
-  return snapped;
+  return snapped.map((p) => ({
+    x: p.x / VECTOR_CACHE_SCALE,
+    y: p.y / VECTOR_CACHE_SCALE,
+  }));
 }
 
 interface AddCommon {

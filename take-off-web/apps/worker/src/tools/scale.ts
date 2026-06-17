@@ -4,6 +4,7 @@ import {
   calculatePolylineLength,
   calculatePolygonArea,
   calculateArcLength,
+  convertLinearUnit,
   getScaledArea,
   getScaledValue,
   getAreaUnitFromLinear,
@@ -14,7 +15,7 @@ import {
   Point,
 } from '@takeoff/shared';
 import type { Env } from '../env';
-import { upsertPage, recalcItemTotal } from '../db/queries';
+import { getPage, parseScale, upsertPage, recalcItemTotal } from '../db/queries';
 
 interface ShapeRowMin {
   id: string;
@@ -29,6 +30,7 @@ interface ItemRowMin {
   id: string;
   type: string;
   unit: string;
+  depth: number | null;
 }
 
 /**
@@ -42,7 +44,8 @@ async function recomputeShapesForPage(
   env: Env,
   projectId: string,
   pageIndex: number,
-  scale: ScaleCalibration
+  scale: ScaleCalibration,
+  prevUnit: Unit | null
 ): Promise<void> {
   const ppu = scale.pixelsPerUnit;
   if (!Number.isFinite(ppu) || ppu <= 0) return;
@@ -62,7 +65,7 @@ async function recomputeShapesForPage(
   const itemIds = Array.from(new Set(shapeRows.map((r) => r.item_id)));
   const itemRows = (
     await env.DB.prepare(
-      `SELECT id, type, unit FROM items WHERE id IN (${itemIds.map(() => '?').join(',')})`
+      `SELECT id, type, unit, depth FROM items WHERE id IN (${itemIds.map(() => '?').join(',')})`
     )
       .bind(...itemIds)
       .all()
@@ -83,7 +86,17 @@ async function recomputeShapesForPage(
     } else if (type === ToolType.LINEAR || type === ToolType.SEGMENT || type === ToolType.DIMENSION) {
       nextValue = getScaledValue(calculatePolylineLength(points), ppu);
     } else if (type === ToolType.ARC && points.length >= 2) {
-      nextValue = getScaledValue(calculateArcLength(points[0], points[1], bulges?.[0] ?? 0), ppu);
+      // Multi-vertex ARCs are stored as polylines of straight chords (the
+      // canvas + useShapeSync share this convention — see the comment in
+      // useShapeSync.ts around the ARC create branch). Recomputing the
+      // value from points[0]→points[1] alone truncated every chord past
+      // the first on recalibration and the item silently undercounted
+      // until the shape was redrawn.
+      const pixelLen =
+        points.length > 2
+          ? calculatePolylineLength(points)
+          : calculateArcLength(points[0], points[1], bulges?.[0] ?? 0);
+      nextValue = getScaledValue(pixelLen, ppu);
     } else {
       continue; // COUNT / NOTE carry annotation/count semantics independent of scale
     }
@@ -104,12 +117,44 @@ async function recomputeShapesForPage(
       nextUnit = scale.unit;
     }
     if (nextUnit && nextUnit !== row.unit) {
-      await env.DB.prepare('UPDATE items SET unit = ?, updated_at = ? WHERE id = ?')
-        .bind(nextUnit, Date.now(), row.id)
-        .run();
+      // VOLUME items carry a depth in the page's linear unit. The browser
+      // recalibration path converts it before folding into totalValue so a
+      // 1 ft depth becomes 0.3048 m on a ft→m switch — without the same
+      // conversion here, a server/MCP recalibration kept the raw "1" and
+      // overstated the cubic quantity by ~3.28×.
+      if (
+        row.type === ToolType.VOLUME &&
+        row.depth != null &&
+        prevUnit &&
+        prevUnit !== scale.unit
+      ) {
+        const nextDepth = convertLinearUnit(row.depth, prevUnit, scale.unit);
+        await env.DB.prepare(
+          'UPDATE items SET unit = ?, depth = ?, updated_at = ? WHERE id = ?'
+        )
+          .bind(nextUnit, nextDepth, Date.now(), row.id)
+          .run();
+      } else {
+        await env.DB.prepare('UPDATE items SET unit = ?, updated_at = ? WHERE id = ?')
+          .bind(nextUnit, Date.now(), row.id)
+          .run();
+      }
     }
     await recalcItemTotal(env.DB, row.id);
   }
+}
+
+async function capturePrevUnit(
+  env: Env,
+  projectId: string,
+  pageIndex: number
+): Promise<Unit | null> {
+  // Capture the OLD linear unit before upsertPage overwrites it; used to
+  // convert VOLUME depth when a page's unit changes (ft → m, etc.).
+  const existing = await getPage(env.DB, projectId, pageIndex);
+  if (!existing) return null;
+  const prev = parseScale(existing);
+  return prev.isSet ? prev.unit : null;
 }
 
 export async function setScalePreset(
@@ -122,13 +167,14 @@ export async function setScalePreset(
       `Unknown preset "${args.preset_label}". Available: ${PRESET_SCALES.map((p) => p.label).join(', ')}`
     );
   }
+  const prevUnit = await capturePrevUnit(env, args.project_id, args.page_index);
   const scale: ScaleCalibration = {
     isSet: true,
     pixelsPerUnit: preset.pointsPerUnit,
     unit: preset.unit,
   };
   await upsertPage(env.DB, args.project_id, args.page_index, { scale });
-  await recomputeShapesForPage(env, args.project_id, args.page_index, scale);
+  await recomputeShapesForPage(env, args.project_id, args.page_index, scale, prevUnit);
   return scale;
 }
 
@@ -147,12 +193,13 @@ export async function setScaleManual(
   if (pixelDistance <= 0) throw new Error('Calibration points are identical');
   if (args.real_distance <= 0) throw new Error('Real distance must be > 0');
 
+  const prevUnit = await capturePrevUnit(env, args.project_id, args.page_index);
   const scale: ScaleCalibration = {
     isSet: true,
     pixelsPerUnit: pixelDistance / args.real_distance,
     unit: args.unit,
   };
   await upsertPage(env.DB, args.project_id, args.page_index, { scale });
-  await recomputeShapesForPage(env, args.project_id, args.page_index, scale);
+  await recomputeShapesForPage(env, args.project_id, args.page_index, scale, prevUnit);
   return scale;
 }

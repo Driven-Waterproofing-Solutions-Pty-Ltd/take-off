@@ -60,6 +60,11 @@ const Shape3D: React.FC<{ shape: Shape; itemType: ToolType; color: string; depth
 const PDFPlane: React.FC<{ planSets?: PlanSet[]; pageIndex?: number }> = ({ planSets, pageIndex }) => {
   const meshRef = useRef<THREE.Mesh>(null);
   const [texture, setTexture] = useState<THREE.Texture | null>(null);
+  // Plane is sized to the page's actual bounds so the texture lines up with
+  // measurement solids (which use absolute PDF coordinates). A fixed 4000×4000
+  // plane at (2000, 2000) only happened to align with letter-ish portrait
+  // sheets — landscape or A1/A0 sheets had solids floating off the page.
+  const [pageBounds, setPageBounds] = useState<{ width: number; height: number } | null>(null);
 
   useEffect(() => {
     const loadPDFTexture = async () => {
@@ -69,7 +74,7 @@ const PDFPlane: React.FC<{ planSets?: PlanSet[]; pageIndex?: number }> = ({ plan
         // Find the plan set for this page
         let planSet = null;
         let localPageIndex = pageIndex;
-        
+
         for (const ps of planSets) {
           if (pageIndex >= ps.startPageIndex && pageIndex < ps.startPageIndex + ps.pageCount) {
             planSet = ps;
@@ -85,12 +90,19 @@ const PDFPlane: React.FC<{ planSets?: PlanSet[]; pageIndex?: number }> = ({ plan
 
         // Render PDF page to canvas
         const canvas = document.createElement('canvas');
-        
+
         const arrayBuffer = await planSet.file.arrayBuffer();
-        const pageCount = await mupdfController.loadDocument(new Uint8Array(arrayBuffer));
-        
+        await mupdfController.loadDocument(new Uint8Array(arrayBuffer));
+
         // Render with appropriate scale
         await mupdfController.renderPageToCanvas(localPageIndex, canvas, 2.0);
+
+        // Page bounds (PDF points) — the texture is rendered at 2× resolution
+        // but represents this same coordinate space. Sizing the plane to
+        // these points puts the texture in lockstep with Shape3D, which
+        // places meshes at their absolute PDF centroids.
+        const dims = mupdfController.getPageDimensions(localPageIndex);
+        setPageBounds(dims);
 
         // Create texture from canvas
         const canvasTexture = new THREE.CanvasTexture(canvas);
@@ -104,14 +116,17 @@ const PDFPlane: React.FC<{ planSets?: PlanSet[]; pageIndex?: number }> = ({ plan
     loadPDFTexture();
   }, [planSets, pageIndex]);
 
+  const width = pageBounds?.width ?? 4000;
+  const height = pageBounds?.height ?? 4000;
+
   return (
     // PDF plane sits in the same X/Y plane as the extruded shape geometry
     // (Shape3D builds its polygons from PDF X/Y and extrudes along Z).
     // Earlier this plane was rotated into X/Z, leaving the texture
     // perpendicular to every measurement solid. Now both share X/Y; the
     // plane sits just below z=0 so solids extruded into +Z appear on top.
-    <mesh ref={meshRef} position={[2000, 2000, -0.05]}>
-      <planeGeometry args={[4000, 4000]} />
+    <mesh ref={meshRef} position={[width / 2, height / 2, -0.05]}>
+      <planeGeometry args={[width, height]} />
       {texture ? (
         <meshStandardMaterial map={texture} />
       ) : (

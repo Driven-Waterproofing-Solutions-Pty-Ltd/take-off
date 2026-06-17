@@ -154,6 +154,35 @@ export async function insertShape(
     .run();
 }
 
+// Measurement families that share a value unit and can land shapes on the
+// same item without re-labeling totals/quotes:
+//   AREA/FILL/VOLUME   -> polygon area in m² (VOLUME folds in item.depth)
+//   LINEAR/SEGMENT/DIMENSION -> polyline length in linear units
+//   ARC                -> arc length (bulge-aware) in linear units
+//   COUNT, NOTE        -> distinct families of their own
+// Mixing families silently labels e.g. an area-valued polygon as metres,
+// so refuse to reuse an existing row whose type is in a different family.
+function itemFamily(type: ToolType): string {
+  switch (type) {
+    case ToolType.AREA:
+    case ToolType.FILL:
+    case ToolType.VOLUME:
+      return 'area';
+    case ToolType.LINEAR:
+    case ToolType.SEGMENT:
+    case ToolType.DIMENSION:
+      return 'linear';
+    case ToolType.ARC:
+      return 'arc';
+    case ToolType.COUNT:
+      return 'count';
+    case ToolType.NOTE:
+      return 'note';
+    default:
+      return 'unknown';
+  }
+}
+
 export async function getOrCreateItem(
   db: D1Database,
   projectId: string,
@@ -164,7 +193,16 @@ export async function getOrCreateItem(
       .prepare('SELECT * FROM items WHERE id = ? AND project_id = ?')
       .bind(hint.id, projectId)
       .first()) as ItemRow | null;
-    if (existing) return existing;
+    if (existing) {
+      const existingFamily = itemFamily(existing.type as ToolType);
+      const requestedFamily = itemFamily(hint.type);
+      if (existingFamily !== requestedFamily) {
+        throw new Error(
+          `Item ${hint.id} is ${existing.type} (${existingFamily}-family); a ${hint.type} shape (${requestedFamily}-family) can't land on it — totals/quotes would label the value with the wrong unit.`
+        );
+      }
+      return existing;
+    }
   }
   const id = hint.id ?? crypto.randomUUID();
   const now = Date.now();
