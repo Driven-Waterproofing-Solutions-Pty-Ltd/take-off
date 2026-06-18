@@ -238,9 +238,21 @@ cowork/sessions/<live-session-uuid>/
 }
 ```
 
-### 5.1 Hermes section (pending — see §8)
+### 5.1 Hermes subtree
 
-Hermes will get its own subtree under the live session. Until I know what Hermes is (messaging? signing? agent host? frame for the wider system?), I can only reserve the slot.
+```
+hermes/
+├── manifest.json              ← pointer to hermes-db D1 + hermes-blobs R2 + Vectorize index
+├── skills-export.jsonl        ← snapshot of active skills (regenerated nightly)
+├── user-profile.json          ← snapshot of user_profile_facts for the active user
+├── deliveries-last-30d.jsonl  ← outbound message log slice
+└── threads-active.jsonl       ← live thread index (for cowork UI)
+```
+
+These are projections from the live `hermes-db` D1 into the cowork session,
+not authoritative copies. Source of truth stays in D1 / Vectorize / R2.
+Cowork session reads these projections for display; writes go back through
+the Hermes API.
 
 ---
 
@@ -265,15 +277,269 @@ Anything in `unknown` after auto-assignment goes into a triage queue the user cl
 
 ---
 
-## 7. Hermes — placeholder
+## 7. Hermes — locked spec
 
-Cannot draft until §8 question is answered. Reserving the slot in the live session schema (§5) and an integration-surface file (`hermes/integration.md`) once spec lands.
+**Definition (user, 2026-06-18):**
+> "When I say Hermes I just mean a version of Claude wrapped in my own UI with
+> all the tools we've built but constant learning and memory and all the shit
+> like aqua has on CF but better. Channels: SMS, M365 / Copilot, email."
 
-What I'd want to know to plan it (in order of importance):
-1. Is Hermes an existing repo / deployed system, or is this build-from-scratch?
-2. What's the primary verb (send messages? sign certs? route AI requests? something else)?
-3. Where does it live in the topology — frontend of cowork, sidecar to Aqua, or own service?
-4. What data does it own / produce / consume?
+So Hermes is **not** Nous Research's Hermes-LLM family — that name shows up in
+the research dispatch as prior art only. Hermes here = our internal codename
+for "Driven's own Claude". Public branding (if ever) can rename.
+
+### 7.1 Identity stack
+
+| Layer | Choice | Why |
+|---|---|---|
+| LLM | Anthropic Claude (Opus 4.8 / Sonnet 4.6 router by task) | User asked for Claude specifically. Router lets simple turns use Sonnet, hard turns escalate. |
+| Memory | CF Durable Object per user (working) + Vectorize (episodic recall) + D1 (structured events) + R2 (artefact blobs) | "Constant learning" = persistent + searchable across sessions. CF-native to match the "like aqua but better" rule. |
+| Skills | Cookbook table in D1: each skill = name, prompt, tool bindings, success metrics; promoted/demoted by usage | Mirrors the Nous hermes-agent skill-creation loop without depending on their codebase. |
+| Tool fleet | Every existing Driven tool exposed as MCP server + registered as Claude tool definition | "All the tools we've built." Inventory pass W1/W3 surfaces them; Hermes pulls them all in. |
+| UI | Extension of `take-off-web` (existing Next.js / web app already in repo) — NOT a new app | Cheapest path. Reuses auth, layout, deploy pipeline. Hermes becomes a chat surface inside take-off-web. |
+| Channels | Twilio (SMS), Microsoft Graph (Outlook email + Teams + Copilot), Outlook calendar — all via existing MCP servers in this session | We already have Twilio MCP + Outlook MCP + Calendar MCP wired up. Adapters are thin. |
+| Deploy | CF Workers + Workers AI binding + Durable Objects + Vectorize + D1 + R2 + KV | "On CF but better." Same primitives as aqua, fixed sprawl. |
+
+### 7.2 Cloudflare topology
+
+```
+                        ┌─────────────────────────────┐
+                        │  hermes.drivenwp.com  (UI)  │
+                        │  Workers Static Assets +    │
+                        │  take-off-web app shell     │
+                        └──────────────┬──────────────┘
+                                       │
+                                       ▼
+                        ┌─────────────────────────────┐
+                        │  hermes-edge Worker         │
+                        │  - session auth (CF Access) │
+                        │  - per-user routing         │
+                        └──────────────┬──────────────┘
+                                       │
+                  ┌────────────────────┼────────────────────┐
+                  ▼                    ▼                    ▼
+        ┌──────────────────┐  ┌─────────────────┐  ┌──────────────────┐
+        │ hermes-core      │  │ HermesUserDO    │  │ hermes-tools     │
+        │ Worker           │  │ (Durable Object │  │ Worker           │
+        │ - Claude API     │  │  per user)      │  │ - tool dispatch  │
+        │   call           │  │ - working ctx   │  │ - MCP fan-out    │
+        │ - tool loop      │◄─┤ - identity     ─►│ - takeoff /       │
+        │ - skill select   │  │   profile       │  │   aqua / m365 /  │
+        │ - memory recall  │  │ - active thread │  │   twilio / etc   │
+        └─────┬──────┬─────┘  └─────────────────┘  └──────────────────┘
+              │      │
+              │      ▼
+              │   ┌──────────────────┐
+              │   │ Vectorize        │  episodic recall
+              │   │ hermes-episodic  │  (past convos, chunked + embedded)
+              │   └──────────────────┘
+              ▼
+        ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+        │ D1: hermes-db    │  │ R2: hermes-blobs │  │ KV: hermes-cache │
+        │ - users          │  │ - PDFs, screens, │  │ - session tokens │
+        │ - threads        │  │   plans, audio   │  │ - rate limit     │
+        │ - messages       │  │ - generated      │  │ - hot facts      │
+        │ - skills         │  │   artefacts      │  │                  │
+        │ - tool_calls     │  └──────────────────┘  └──────────────────┘
+        │ - delivery_log   │
+        │ - user_profile   │
+        └──────────────────┘
+                  ▲
+                  │ inbound triggers (cron + webhook)
+                  │
+        ┌─────────┴────────┐
+        │ Channel adapters │ — each a thin Worker / queue consumer
+        │ - hermes-sms     │ Twilio webhook → normalise → enqueue to core
+        │ - hermes-email   │ M365 Graph subscription → enqueue
+        │ - hermes-teams   │ Teams webhook / Copilot bot → enqueue
+        │ - hermes-cron    │ scheduled triggers → wake core
+        └──────────────────┘
+```
+
+### 7.3 D1 schema (initial draft)
+
+```sql
+CREATE TABLE users (
+  id TEXT PRIMARY KEY,             -- user UUID
+  email TEXT NOT NULL UNIQUE,
+  display_name TEXT,
+  phone_e164 TEXT,
+  m365_upn TEXT,
+  created_at INTEGER NOT NULL,
+  preferences_json TEXT            -- channel prefs, response style, etc.
+);
+
+CREATE TABLE threads (
+  id TEXT PRIMARY KEY,             -- thread UUID (per channel x conversation)
+  user_id TEXT NOT NULL REFERENCES users(id),
+  channel TEXT NOT NULL,           -- 'web' | 'sms' | 'email' | 'teams' | 'cron'
+  external_id TEXT,                -- Twilio convo SID, Outlook conversationId, etc.
+  title TEXT,
+  state TEXT NOT NULL,             -- 'active' | 'idle' | 'closed'
+  last_message_at INTEGER,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE messages (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES threads(id),
+  role TEXT NOT NULL,              -- 'user' | 'assistant' | 'tool' | 'system'
+  content_json TEXT NOT NULL,      -- full structured content (text + tool_use + tool_result blocks)
+  tokens_in INTEGER,
+  tokens_out INTEGER,
+  model TEXT,                      -- which Claude variant served this turn
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE skills (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT NOT NULL,
+  prompt TEXT NOT NULL,            -- the skill's playbook
+  tool_bindings_json TEXT,         -- which tools this skill expects
+  origin TEXT NOT NULL,            -- 'seeded' | 'learned' | 'user-authored'
+  success_count INTEGER DEFAULT 0,
+  failure_count INTEGER DEFAULT 0,
+  last_used_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE skill_invocations (
+  id TEXT PRIMARY KEY,
+  skill_id TEXT NOT NULL REFERENCES skills(id),
+  thread_id TEXT NOT NULL REFERENCES threads(id),
+  outcome TEXT NOT NULL,           -- 'success' | 'failure' | 'abandoned'
+  duration_ms INTEGER,
+  notes TEXT,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE tool_calls (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES threads(id),
+  message_id TEXT REFERENCES messages(id),
+  tool_name TEXT NOT NULL,
+  input_json TEXT NOT NULL,
+  output_json TEXT,
+  error TEXT,
+  duration_ms INTEGER,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE deliveries (
+  id TEXT PRIMARY KEY,             -- outbound delivery record
+  thread_id TEXT NOT NULL REFERENCES threads(id),
+  channel TEXT NOT NULL,
+  external_id TEXT,                -- Twilio SID, Graph message id, etc.
+  status TEXT NOT NULL,            -- 'queued' | 'sent' | 'delivered' | 'failed'
+  attempts INTEGER DEFAULT 0,
+  last_error TEXT,
+  sent_at INTEGER,
+  delivered_at INTEGER
+);
+
+CREATE TABLE user_profile_facts (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  fact TEXT NOT NULL,              -- a single fact Hermes has learned
+  source_message_id TEXT REFERENCES messages(id),
+  confidence REAL NOT NULL,        -- 0.0-1.0
+  last_confirmed_at INTEGER,
+  superseded_by TEXT,              -- self-ref if updated
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE memory_index (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES threads(id),
+  chunk TEXT NOT NULL,
+  vectorize_id TEXT,               -- pointer into Vectorize index
+  created_at INTEGER NOT NULL
+);
+```
+
+### 7.4 Skill / learning loop
+
+After each turn, Hermes runs a post-turn reflection (cheap Sonnet call):
+1. **Did a skill fire?** If yes, record outcome in `skill_invocations`.
+2. **Should this turn become a skill?** If the user gave positive signal and
+   the work was novel, propose a new skill. Stash as draft in `skills` with
+   `origin='learned'`, low confidence. Promotes to active after N successful
+   re-uses.
+3. **Did we learn a fact about the user?** Append to `user_profile_facts`
+   with confidence + source.
+4. **Episodic memory:** chunk the turn, embed, push to Vectorize. Index row
+   in `memory_index`.
+
+Pre-turn:
+1. Hermes recalls top-K episodic chunks from Vectorize for the user query.
+2. Loads any candidate skills where `tool_bindings` match the apparent intent.
+3. Injects `user_profile_facts` for the active user as a system memo.
+4. Calls Claude with the assembled context + the standard tool list.
+
+### 7.5 Tool fleet — sourced from the inventory pass
+
+W1 (Aqua) + W3 (local) outputs feed directly into Hermes's tool registry.
+Every aqua-* worker that exposes a useful endpoint becomes a Hermes tool;
+every ProTakeoff measurement primitive becomes one too. The inventory's
+`category=route` rows are the candidate set.
+
+Bootstrap registration script (Phase 5 of §4) reads
+`/tmp/cowork-inventory/aqua/routes.jsonl` and emits Claude tool definitions
+matching each useful route. Manual triage filters out the noise.
+
+### 7.6 Channel adapters
+
+| Channel | Inbound | Outbound | Auth |
+|---|---|---|---|
+| Web (UI) | direct fetch from take-off-web | streaming SSE back | CF Access |
+| SMS | Twilio inbound webhook → hermes-sms Worker | Twilio Messages API | Twilio signature verify + CF Access for admin UI |
+| Email | M365 Graph change-notification subscription → hermes-email Worker | Graph `sendMail` | M365 app registration (existing in aqua) |
+| Teams / Copilot | Teams bot framework webhook OR Copilot agent manifest → hermes-teams Worker | Graph `chats/{id}/messages` | M365 app registration |
+| Cron | CF Cron Triggers fire `hermes-cron` Worker | (no outbound, wakes core) | n/a |
+
+### 7.7 Comparison: aqua's existing pattern vs. Hermes's improvements
+
+| Aqua today (observed in inventory pass) | Hermes target |
+|---|---|
+| Tool sprawl across multiple workers, unclear ownership | Single core + thin channel adapters |
+| No first-class memory (no Vectorize, no episodic recall) | Vectorize + Durable Object working memory + episodic |
+| Workers Builds failing repeatedly on aqua-m365-mcp | Smaller worker surface, simpler builds, observability gates merges |
+| No skill loop — every turn is fresh prompt | Skill creation + promotion loop, learned playbooks compound |
+| Aqua-cron has 29 paths with unclear last-success status | All cron triggers logged with deliveries / outcomes in D1 |
+| No unified UI | take-off-web becomes Hermes's UI; one URL |
+| Hardcoded URLs / secrets risk (flagged in W3) | All secrets via CF Secrets Manager + Wrangler bindings, audited |
+
+### 7.8 Build sequence (replaces old §7 placeholder)
+
+| # | Step | Output | Depends on |
+|---|---|---|---|
+| H0 | Confirm naming — keep "Hermes" internally, decide public name later | one-liner | user nod |
+| H1 | Provision CF resources: `hermes-db` D1, `hermes-blobs` R2, `hermes-cache` KV, `hermes-episodic` Vectorize, `HermesUserDO` Durable Object class | wrangler.toml | inventory pass done (so we know what bindings collide with aqua) |
+| H2 | Land D1 schema (§7.3) + seed users row for `office@drivenwp.com` | migration 0001 | H1 |
+| H3 | `hermes-core` Worker scaffold: Claude API call + tool loop + memory recall + post-turn reflection | deployable worker | H2 |
+| H4 | take-off-web UI shell for Hermes chat (streaming SSE, message list, tool-call display) | UI route `/hermes` | H3 |
+| H5 | Tool registry bootstrap from inventory JSONL → Claude tool definitions | tool registration module | W1 + W3 done |
+| H6 | SMS adapter (Twilio webhook + send) | `hermes-sms` Worker | H3 |
+| H7 | Email adapter (Graph subscription + send) | `hermes-email` Worker | H3 |
+| H8 | Teams / Copilot adapter | `hermes-teams` Worker | H3 |
+| H9 | Cron adapter — daily digest, email triage, scheduled sends | `hermes-cron` Worker | H3 + H7 |
+| H10 | Skill loop hardening — promotion rules, failure handling, user-authored skill UI | code + UI | H3 + observed real-world usage |
+| H11 | Cutover: archive aqua's overlap with Hermes; redirect channels from aqua-m365-mcp to hermes-* | cutover plan + DNS / webhook config | H6/H7/H8 + W1 verdicts |
+
+### 7.9 Open questions for §7 only
+
+| # | Question | Default if user doesn't answer | Block? |
+|---|---|---|---|
+| H-Q1 | Single-tenant (just office@drivenwp.com) or multi-tenant from day 1? | Single-tenant; schema supports multi-tenant later | no |
+| H-Q2 | M365 Copilot integration mode — declarative agent (manifest) or full Teams bot? | Teams bot first (simpler); add Copilot manifest later | no |
+| H-Q3 | Voice (SMS + Twilio Voice) in scope, or text-only? | Text-only for now | no |
+| H-Q4 | Run Hermes-LLM weights as fallback when Anthropic API is down? | No — keep it Claude-only, simpler | no |
+| H-Q5 | Memory deletion / right-to-forget UI required? | Yes, build admin endpoint; not blocking H3 | no |
+| H-Q6 | Public name when shipped externally? | Decide later, internal codename stays Hermes | no |
+
+None of these block H1–H4. Hermes can start standing up against the current set of defaults.
 
 ---
 
@@ -284,13 +550,13 @@ What I'd want to know to plan it (in order of importance):
 | 1 | GitHub scope | ⏳ Partial-clear | W2 covers `take-off` (in-scope now) + `aqua` (needs MCP scope expansion in next session — give me the exact repo slug, e.g. `driven-waterproofing-solutions-pty-ltd/aqua`) |
 | 2 | Cowork repo location + storage | 🔍 Investigate | First action of W4 = find where cowork lives via CF API + grep. Plan adjusted (§3) so W4 starts with discovery before any inventory |
 | 3 | Aqua URL + CF Access creds | ⏳ User sending | Will land via chat. W1's UI section runs once received. |
-| 4 | Hermes definition | 🟡 Partial — see research dispatch | Background research run 2026-06-18 → `hermes-research-2026-06.md`. Key findings: (a) namespace is taken (Nous Research's `hermes-agent` dominates), (b) canonical folklore role = "messaging gateway / bridge", (c) `NousResearch/Hermes-Function-Calling` MIT schema is reusable verbatim, (d) reference architecture = one process, many channel adapters, session-keyed routing, provider-agnostic LLM backend. **Open decision:** keep the name "Hermes" and collide, or rename. Still need user-specific Hermes spec (what comms channels in scope for Driven, what triggers, what data ownership). |
+| 4 | Hermes definition | ✅ Resolved | User clarification 2026-06-18: "version of Claude wrapped in my own UI with all the tools we've built but constant learning and memory and all the shit like aqua has on CF but better — channels: SMS, M365/Copilot, email." Full spec in §7. Public name TBD; internal codename stays Hermes. |
 | 5 | Claude.ai session export | ❌ No path | Out of scope unless you export manually (settings → data export) into a readable folder. W4's Claude piece flagged gap-only. |
 | 6 | End-state in §0 | ✅ Implicitly confirmed | Proceeding on the §0 description as written |
 
 **Cleared to start now:** W1 CF-bundle audit (no URL needed yet) + W3 local files + W4 cowork discovery. The three can run in parallel.
 
-**Waiting on:** Aqua URL + token (W1 UI), `aqua` repo slug + scope expansion (W2), Hermes spec (§7).
+**Waiting on:** Aqua URL + token (W1 UI), `aqua` repo slug + GitHub scope expansion (W2).
 
 ---
 
