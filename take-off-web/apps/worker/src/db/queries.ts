@@ -164,10 +164,12 @@ export async function insertShape(
 
 // Measurement families that share a value unit and can land shapes on the
 // same item without re-labeling totals/quotes:
-//   AREA/FILL/VOLUME   -> polygon area in m² (VOLUME folds in item.depth)
-//   LINEAR/SEGMENT/DIMENSION -> polyline length in linear units
-//   ARC                -> arc length (bulge-aware) in linear units
-//   COUNT, NOTE        -> distinct families of their own
+//   AREA/FILL/VOLUME            -> polygon area (VOLUME folds in item.depth)
+//   LINEAR/SEGMENT/DIMENSION/ARC-> linear length (ARC shares the family
+//     because multi-vertex arcs are stored as straight-chord polylines and
+//     persisted through the LINEAR endpoint — see useShapeSync's create
+//     branch. Single-segment bulged arcs still go through /shapes/arc.)
+//   COUNT, NOTE                 -> distinct families of their own
 // Mixing families silently labels e.g. an area-valued polygon as metres,
 // so refuse to reuse an existing row whose type is in a different family.
 export function itemFamily(type: ToolType): string {
@@ -179,9 +181,8 @@ export function itemFamily(type: ToolType): string {
     case ToolType.LINEAR:
     case ToolType.SEGMENT:
     case ToolType.DIMENSION:
-      return 'linear';
     case ToolType.ARC:
-      return 'arc';
+      return 'linear';
     case ToolType.COUNT:
       return 'count';
     case ToolType.NOTE:
@@ -189,6 +190,19 @@ export function itemFamily(type: ToolType): string {
     default:
       return 'unknown';
   }
+}
+
+// Extract the underlying linear unit from any compound unit. AREA items
+// store "sq_m"/"sq_ft", VOLUME items store "cu_m"/"cu_ft", LINEAR items
+// store the bare "m"/"ft". A VOLUME item with unit "cu_m" still hosts AREA
+// polygons (the polygon area × item.depth = cubic quantity), so addArea
+// passes hint.unit = "sq_m" against existing.unit = "cu_m" — comparing the
+// raw strings would reject. Compare linear bases instead so the mix is
+// allowed, but a sq_m / sq_ft mismatch still throws.
+function unitLinearBase(unit: string): string {
+  if (unit.startsWith('sq_')) return unit.slice(3);
+  if (unit.startsWith('cu_')) return unit.slice(3);
+  return unit;
 }
 
 export async function getOrCreateItem(
@@ -209,13 +223,12 @@ export async function getOrCreateItem(
           `Item ${hint.id} is ${existing.type} (${existingFamily}-family); a ${hint.type} shape (${requestedFamily}-family) can't land on it — totals/quotes would label the value with the wrong unit.`
         );
       }
-      // Family match isn't enough: an AREA item with unit "sq_m" still can't
-      // host a shape measured on an ft-calibrated page (hint.unit "sq_ft"),
-      // because the raw destination m² value would be summed into the
-      // item's total under the "sq_m" label and corrupt legends/quotes.
-      if (existing.unit !== hint.unit) {
+      // Compare linear bases so AREA shapes can land on VOLUME items
+      // (both derive from the same linear unit) while a sq_m item still
+      // rejects a sq_ft shape from a differently-calibrated page.
+      if (unitLinearBase(existing.unit) !== unitLinearBase(hint.unit)) {
         throw new Error(
-          `Item ${hint.id} has unit "${existing.unit}"; the destination page measures in "${hint.unit}". Recalibrate the page or use a separate item — mixing units silently corrupts totals.`
+          `Item ${hint.id} has unit "${existing.unit}"; the destination page measures in "${hint.unit}" (different linear base). Recalibrate the page or use a separate item — mixing units silently corrupts totals.`
         );
       }
       return existing;

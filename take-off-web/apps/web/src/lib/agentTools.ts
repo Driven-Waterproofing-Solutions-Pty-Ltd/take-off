@@ -306,14 +306,22 @@ export async function executeAgentTool(
 
 // Run every tool_use block in an assistant turn, returning the user-role
 // message (array of tool_result blocks) to append before the next turn.
+// `isAborted` lets the caller (useTakeoffAgent) interrupt between tools so
+// clicking Stop mid-turn doesn't run every remaining mutating tool in the
+// batch — Claude can emit multiple parallel tool_use blocks per turn.
 export async function executeAgentTurn(
   content: Array<Record<string, unknown>>,
-  ctx: AgentToolContext
+  ctx: AgentToolContext,
+  isAborted?: () => boolean
 ): Promise<{ toolResults: ToolResultBlock[]; ranTools: boolean }> {
   const toolUses = content.filter((b) => b.type === 'tool_use') as unknown as ToolUseBlock[];
   if (toolUses.length === 0) return { toolResults: [], ranTools: false };
   const toolResults: ToolResultBlock[] = [];
   for (const block of toolUses) {
+    if (isAborted?.()) {
+      toolResults.push(textResult(block.id, 'Aborted by user before execution', true));
+      continue;
+    }
     toolResults.push(await executeAgentTool(block, ctx));
   }
   return { toolResults, ranTools: true };

@@ -98,6 +98,21 @@ app.post('/:id/pdfs', async (c) => {
   if (!body.file_key.startsWith(`projects/${projectId}/`)) {
     return c.json({ error: 'file_key not bound to project' }, 403);
   }
+  // Idempotent on (project_id, r2_key): if the original POST committed but
+  // the response was lost, usePlanSetSync retries with the same file_key and
+  // a plain INSERT would mint a duplicate pdfs row. The project would then
+  // hydrate with the same PDF at the same start_page_index twice, inflating
+  // totalPages. r2_key contains a crypto.randomUUID() from
+  // requestUploadUrl so it's already unique per logical upload; reuse it as
+  // the idempotency key.
+  const existing = (await c.env.DB.prepare(
+    'SELECT id FROM pdfs WHERE project_id = ? AND r2_key = ?'
+  )
+    .bind(projectId, body.file_key)
+    .first()) as { id: string } | null;
+  if (existing) {
+    return c.json({ pdf_id: existing.id, page_count: body.page_count, page_sizes: body.page_sizes });
+  }
   const pdfId = crypto.randomUUID();
   await c.env.DB.prepare(
     `INSERT INTO pdfs (id, project_id, r2_key, name, page_count, page_sizes, start_page_index, sha256, created_at)

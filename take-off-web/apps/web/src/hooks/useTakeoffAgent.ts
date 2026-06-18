@@ -127,7 +127,18 @@ export function useTakeoffAgent() {
             break;
           }
 
-          const { toolResults } = await executeAgentTurn(turn.content, ctx);
+          // The user can click Stop while the api.ai.turn fetch is still in
+          // flight. Without re-checking abortRef before tool execution, the
+          // already-resolved turn would still execute mutating tools
+          // (add_area / set_scale_manual / apply_assembly) and write to the
+          // canvas / DB after the user stopped. Same check repeats inside
+          // executeAgentTurn for between-tool granularity.
+          if (abortRef.current) {
+            push({ kind: 'aborted', text: 'Stopped by user.' });
+            break;
+          }
+
+          const { toolResults } = await executeAgentTurn(turn.content, ctx, () => abortRef.current);
           for (const tr of toolResults) {
             if (tr.is_error) {
               const t = tr.content.find((c) => c.type === 'text');
@@ -135,6 +146,11 @@ export function useTakeoffAgent() {
             }
           }
           messages.push({ role: 'user', content: toolResults });
+
+          if (abortRef.current) {
+            push({ kind: 'aborted', text: 'Stopped by user.' });
+            break;
+          }
         }
       } catch (err) {
         push({ kind: 'error', text: err instanceof Error ? err.message : String(err) });

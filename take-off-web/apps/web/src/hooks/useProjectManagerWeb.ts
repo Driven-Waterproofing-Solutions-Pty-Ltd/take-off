@@ -226,6 +226,22 @@ export const useProjectManager = (_isLicensed = true) => {
   };
 
   const handleSaveProject = async () => {
+    // __r2_key is only stamped after the R2 upload AND the pdfs-row
+    // registration both resolve. If a user clicks Save before that finishes
+    // for a freshly-uploaded plan, exportProjectToZip serializes r2_key as
+    // undefined; importing the snapshot then has no key to fetch and the
+    // drawing reopens as a blank placeholder. Block the save and tell them
+    // to wait until plan sync completes.
+    const stillUploading = planSets.find(
+      (p) => !(p as PlanSet & { __r2_key?: string }).__r2_key
+    );
+    if (stillUploading) {
+      addToast(
+        `Plan "${stillUploading.name}" is still uploading — wait a moment and try Save again.`,
+        'info'
+      );
+      return;
+    }
     setIsSaving(true);
     try {
       const blob = await exportProjectToZip(

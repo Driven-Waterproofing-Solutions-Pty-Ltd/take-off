@@ -1686,7 +1686,19 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             const newPoints = [...shape.points];
             newPoints.splice(pointIndex, 1);
 
-            if (newPoints.length === 0) {
+            // Below the per-tool minimum the shape becomes invalid
+            // geometry (zero-area polygon, single-point line). Keeping it
+            // around saved an invisible zero-quantity row that survived
+            // reload and polluted legends/quotes; drop the shape instead.
+            const minPoints =
+                item.type === ToolType.AREA ||
+                item.type === ToolType.FILL ||
+                item.type === ToolType.VOLUME
+                    ? 3
+                    : item.type === ToolType.COUNT || item.type === ToolType.NOTE
+                        ? 1
+                        : 2;
+            if (newPoints.length < minPoints) {
                 onDeleteShape(itemId, shapeId);
             } else {
                 updateShapeValue(item, shape, newPoints);
@@ -1782,7 +1794,17 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         // newPoints are already in PDF space (passed from handlers that convert to PDF space)
         const pdfPoints = newPoints;
 
-        if (item.type === ToolType.SEGMENT || item.type === ToolType.LINEAR || item.type === ToolType.ARC || item.type === ToolType.DIMENSION) {
+        if (item.type === ToolType.ARC && pdfPoints.length === 2 && shape.bulges?.[0]) {
+            // Two-point arc with a non-zero bulge carries its curvature in
+            // bulges[0]. Polyline length collapses that to the straight
+            // chord, so vertex-drag edits silently shrink the saved value
+            // and quotes undercount. Multi-vertex arcs (length > 2) are
+            // straight-chord polylines per the create + recal convention.
+            newValue = getScaledValue(
+                calculateArcLength(pdfPoints[0], pdfPoints[1], shape.bulges[0]),
+                ppu
+            );
+        } else if (item.type === ToolType.SEGMENT || item.type === ToolType.LINEAR || item.type === ToolType.ARC || item.type === ToolType.DIMENSION) {
             newValue = getScaledValue(calculatePolylineLength(pdfPoints), ppu);
         } else if (item.type === ToolType.AREA || item.type === ToolType.VOLUME || item.type === ToolType.FILL) {
             // FILL is a polygon like AREA; without this branch dragging or
@@ -1962,11 +1984,30 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     // tool-switch that clears drawingPoints.
     useImperativeHandle(ref, () => ({
         finishShape: () => {
-            if (drawingPoints.length > 0) {
-                finalizeMeasurement(drawingPoints);
+            if (drawingPoints.length === 0) return;
+            // Below the per-tool minimum the shape is incomplete (zero-area
+            // polygon or single-point line). Without this guard the
+            // shortcut posted a malformed shape that useShapeSync retried
+            // forever against the server's Zod schemas — the measurement
+            // stayed local-only and disappeared on reload.
+            const minPoints =
+                activeTool === ToolType.AREA ||
+                activeTool === ToolType.FILL ||
+                activeTool === ToolType.VOLUME
+                    ? 3
+                    : activeTool === ToolType.COUNT || activeTool === ToolType.NOTE
+                        ? 1
+                        : 2;
+            if (drawingPoints.length < minPoints) {
+                addToast(
+                    `Need at least ${minPoints} point${minPoints > 1 ? 's' : ''} for this tool`,
+                    'info'
+                );
+                return;
             }
+            finalizeMeasurement(drawingPoints);
         },
-    }), [drawingPoints]);
+    }), [drawingPoints, activeTool, addToast]);
 
     const finalizeMeasurement = (points: Point[]) => {
         let value = 0;

@@ -9,6 +9,12 @@ import {
   ShapeRow,
 } from '../db/queries';
 
+function unitLinearBase(unit: string): string {
+  if (unit.startsWith('sq_')) return unit.slice(3);
+  if (unit.startsWith('cu_')) return unit.slice(3);
+  return unit;
+}
+
 export async function createItem(
   env: Env,
   args: {
@@ -216,9 +222,14 @@ export async function updateShape(
           `Cannot move shape into ${target.type} item — it's in the ${targetFamily}-family but the shape lives in a ${sourceFamily}-family item; totals/quotes would label the value with the wrong unit.`
         );
       }
-      if (source.unit !== target.unit) {
+      // Linear base comparison so an AREA shape (sq_m) can still reparent
+      // to a VOLUME item (cu_m) — both derive from "m". Mismatched linear
+      // bases (sq_m vs sq_ft) still throw.
+      const sourceBase = unitLinearBase(source.unit);
+      const targetBase = unitLinearBase(target.unit);
+      if (sourceBase !== targetBase) {
         throw new Error(
-          `Cannot move shape into item with unit "${target.unit}" — shape is measured in "${source.unit}". Use a same-unit target or recalibrate first.`
+          `Cannot move shape into item with unit "${target.unit}" — shape is measured in "${source.unit}" (different linear base). Use a same-unit target or recalibrate first.`
         );
       }
     }

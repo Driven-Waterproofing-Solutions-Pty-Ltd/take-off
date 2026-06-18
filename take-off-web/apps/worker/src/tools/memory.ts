@@ -256,14 +256,16 @@ export async function buildQuote(env: Env, projectId: string): Promise<QuoteDraf
     // Sub-items: the Properties/Estimates UI lets users break an item down
     // into material/labour sub-lines, each with its own formula and price.
     // Two cases:
-    //   (a) parent price is unset: sub-items ARE the line items — emit each.
-    //   (b) parent has a price already (emitted above): the in-app Estimates
-    //       view treats sub-items as informational only and does NOT add
-    //       their lineTotals to the project total. Match that behaviour
-    //       server-side, otherwise quotes would double-charge: once for the
-    //       parent's `qty × price` and again for each sub-item line.
-    const parentHasPrice = !item.assemblyId && !!item.price;
-    if (!parentHasPrice && item.subItems && item.subItems.length > 0) {
+    //   (a) parent price is unset AND no assembly linked: sub-items ARE the
+    //       line items — emit each.
+    //   (b) parent has an assembly OR a price (both emit lines above): the
+    //       in-app Estimates view treats sub-items as informational only and
+    //       does NOT add their lineTotals to the project total. Match that
+    //       behaviour server-side, otherwise quotes would double-charge —
+    //       once for the assembly's material/labour breakdown and again for
+    //       each sub-item line that was pre-templated on the item.
+    const parentEmitsLines = !!item.assemblyId || !!item.price;
+    if (!parentEmitsLines && item.subItems && item.subItems.length > 0) {
       // Mirror the canvas Estimates view: each sub-item formula can reference
       // every PRIOR sub-item by its variable-safe label. Without this context
       // a chain like `Membrane = Qty`, `Adhesive = Membrane * 0.2` would
