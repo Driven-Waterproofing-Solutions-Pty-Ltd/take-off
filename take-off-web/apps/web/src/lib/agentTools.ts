@@ -291,7 +291,9 @@ export async function executeAgentTool(
       }
 
       case 'list_assemblies': {
-        const out = await api.memory.listAssemblies();
+        const out = await api.memory.listAssemblies({
+          tag: typeof input.tag === 'string' ? input.tag : undefined,
+        });
         return textResult(id, out);
       }
 

@@ -3,7 +3,7 @@ import { Stage, Layer, Rect, Circle, Line as KonvaLine, Path, Group, Label, Tag,
 import Konva from 'konva';
 // import { Document, Page, pdfjs } from 'react-pdf'; // Removed for MuPDF
 import { Point, ToolType, TakeoffItem, Shape, Unit, LegendSettings } from '../types';
-import { calculateArcLength, calculateDistance, calculatePolylineLength, calculatePolygonArea, getScaledValue, getScaledArea, getAreaUnitFromLinear, getVolumeUnitFromLinear, parseDimensionInput, PresetScale, isPointInPolygon, PRESET_SCALES } from '../utils/geometry';
+import { calculateArcLength, calculateDistance, calculatePolylineLength, calculatePolygonArea, getScaledValue, getScaledArea, getAreaUnitFromLinear, getVolumeUnitFromLinear, parseDimensionInput, PresetScale, isPointInPolygon, PRESET_SCALES, convertLinearUnit } from '../utils/geometry';
 import { AlertCircle, Trash2, Scissors, Plus, Eraser, MessageSquare, Ruler, Edit2, Loader2 } from 'lucide-react';
 // import '../utils/pdfWorker'; // Removed for MuPDF
 import { useToast } from '../contexts/ToastContext';
@@ -2088,7 +2088,17 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         const real = parseDimensionInput(scaleInputStr);
 
         if (real && real > 0) {
-            onUpdateScale(distPdfPoints, real, scaleUnit);
+            // parseDimensionInput returns the value in FEET whenever the user
+            // typed feet/inches notation (`'`, `"`, `ft`, `in`); otherwise it
+            // returns the bare number, which we treat as already-in-scaleUnit.
+            // Without the conversion, picking `in` and typing `12"` returned
+            // `1` (feet) and got persisted as 1 inch — making every downstream
+            // measurement 12× too big.
+            const usedFeetInchesNotation = /['"]|ft|in/.test(scaleInputStr.toLowerCase());
+            const realInUnit = usedFeetInchesNotation && scaleUnit !== Unit.FEET
+                ? convertLinearUnit(real, Unit.FEET, scaleUnit)
+                : real;
+            onUpdateScale(distPdfPoints, realInUnit, scaleUnit);
             setDrawingPoints([]);
             setShowScaleModal(false);
             setScaleInputStr('');

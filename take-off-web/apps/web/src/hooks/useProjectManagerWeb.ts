@@ -119,6 +119,13 @@ export const useProjectManager = (_isLicensed = true) => {
 
   const [projectName, setProjectName] = useState('Untitled Project');
   const [projectId, setProjectId] = useState<string | null>(null);
+  // Originating cloud project for the currently-loaded *imported* state.
+  // After Import, projectId is null (we detach so sync hooks don't write
+  // back to the original), but the plan sets still carry R2 keys against
+  // the source project. exportProjectToZip needs this id stamped on the
+  // snapshot so a downstream import can refetch the PDFs; otherwise the
+  // round-tripped snapshot opens with blank plan placeholders.
+  const [sourceProjectId, setSourceProjectId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
@@ -150,6 +157,7 @@ export const useProjectManager = (_isLicensed = true) => {
               totalPages: snap.totalPages,
             });
             setProjectId(id);
+            setSourceProjectId(null);
             setProjectName(snap.projectName);
             setLastSavedAt(new Date());
           }
@@ -234,6 +242,7 @@ export const useProjectManager = (_isLicensed = true) => {
           totalPages: snap.totalPages,
         });
         setProjectId(id);
+        setSourceProjectId(null);
         setProjectName(snap.projectName);
         setLastSavedAt(new Date());
         const url = new URL(window.location.href);
@@ -260,6 +269,7 @@ export const useProjectManager = (_isLicensed = true) => {
       window.history.replaceState({}, '', url.toString());
       clearHistory({ items: [], projectData: {}, planSets: [], totalPages: 0 });
       setProjectId(created.id);
+      setSourceProjectId(null);
       setProjectName(name);
       setLastSavedAt(new Date());
       addToast(`Created project: ${name}`, 'success');
@@ -294,7 +304,10 @@ export const useProjectManager = (_isLicensed = true) => {
         planSets,
         totalPages,
         projectName,
-        projectId ?? undefined
+        // After Import, projectId is null but the plan sets' r2_keys still
+        // belong to sourceProjectId. Fall back to it so the re-exported
+        // snapshot still resolves PDFs on the next import.
+        projectId ?? sourceProjectId ?? undefined
       );
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -366,6 +379,8 @@ export const useProjectManager = (_isLicensed = true) => {
       // old cloud project as removed and DELETE them, then POST the
       // imported items into the open cloud project.
       setProjectId(null);
+      // Remember the source so a re-save can reach R2 with the same keys.
+      setSourceProjectId(snap.sourceProjectId ?? null);
       const url = new URL(window.location.href);
       url.searchParams.delete('project');
       window.history.replaceState({}, '', url.toString());

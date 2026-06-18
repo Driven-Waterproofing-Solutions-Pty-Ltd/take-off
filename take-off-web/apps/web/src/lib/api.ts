@@ -317,7 +317,10 @@ export const api = {
       req<Array<{ id: string; name: string; xeroContactId?: string }>>(
         `/api/memory/customers/search?q=${encodeURIComponent(q)}`
       ),
-    listAssemblies: () => req('/api/memory/assemblies'),
+    listAssemblies: (opts: { tag?: string } = {}) => {
+      const qs = opts.tag ? `?tag=${encodeURIComponent(opts.tag)}` : '';
+      return req(`/api/memory/assemblies${qs}`);
+    },
     // Methodology, rate cards, counting rule, product system, Pavilion
     // Studio sheet conventions, FFE schedule expectations, worked examples
     // — every piece of skill knowledge the in-app agent pulls before
