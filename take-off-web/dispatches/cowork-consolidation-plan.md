@@ -284,7 +284,7 @@ What I'd want to know to plan it (in order of importance):
 | 1 | GitHub scope | ⏳ Partial-clear | W2 covers `take-off` (in-scope now) + `aqua` (needs MCP scope expansion in next session — give me the exact repo slug, e.g. `driven-waterproofing-solutions-pty-ltd/aqua`) |
 | 2 | Cowork repo location + storage | 🔍 Investigate | First action of W4 = find where cowork lives via CF API + grep. Plan adjusted (§3) so W4 starts with discovery before any inventory |
 | 3 | Aqua URL + CF Access creds | ⏳ User sending | Will land via chat. W1's UI section runs once received. |
-| 4 | Hermes definition | ⏳ User to spec | Build-from-scratch. Need: primary verb, topology placement, data ownership, must-have endpoints. §7 + §5.1 stay placeholder until that arrives. |
+| 4 | Hermes definition | 🟡 Partial — see research dispatch | Background research run 2026-06-18 → `hermes-research-2026-06.md`. Key findings: (a) namespace is taken (Nous Research's `hermes-agent` dominates), (b) canonical folklore role = "messaging gateway / bridge", (c) `NousResearch/Hermes-Function-Calling` MIT schema is reusable verbatim, (d) reference architecture = one process, many channel adapters, session-keyed routing, provider-agnostic LLM backend. **Open decision:** keep the name "Hermes" and collide, or rename. Still need user-specific Hermes spec (what comms channels in scope for Driven, what triggers, what data ownership). |
 | 5 | Claude.ai session export | ❌ No path | Out of scope unless you export manually (settings → data export) into a readable folder. W4's Claude piece flagged gap-only. |
 | 6 | End-state in §0 | ✅ Implicitly confirmed | Proceeding on the §0 description as written |
 
