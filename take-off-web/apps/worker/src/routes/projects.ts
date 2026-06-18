@@ -30,7 +30,25 @@ app.get('/', async (c) => {
 // Xero as an INVOICE yet (and aren't currently snoozed). Drops automatically
 // once pushToXero writes the past_quotes INVOICE row — no separate
 // "mark invoiced" flag to maintain.
+//
+// `?include_snoozed=true` swaps the snooze filter to "only currently
+// snoozed" so the UI can offer a separate Snoozed panel where rows can be
+// un-snoozed (without it, "Until I un-snooze" picks would vanish forever).
 app.get('/ready-to-invoice', async (c) => {
+  const includeSnoozed = c.req.query('include_snoozed') === 'true';
+  const snoozeClause = includeSnoozed
+    ? 'AND p.snoozed_until IS NOT NULL AND p.snoozed_until > ?1'
+    : '  AND (p.snoozed_until IS NULL OR p.snoozed_until < ?1)';
+  // Estimated total mirrors buildQuote's main-item math closely enough for a
+  // queue column: respects VOLUME depth, falls back to raw total_value for
+  // everything else. Items whose price comes from sub_items_json or an
+  // assembly_id contribute 0 here (parent price is 0) — for a precise number
+  // open the project's Estimates view. The column is labelled "Est. total"
+  // in the UI to reflect this is an approximation.
+  // Readiness predicate mirrors buildQuote's surface area: a project is
+  // billable if any item has a direct price OR a non-empty sub_items_json
+  // OR an attached assembly. Without the latter two, jobs priced solely via
+  // sub-items/assemblies never surface in the queue.
   const rows = await c.env.DB.prepare(
     `SELECT
        p.id,
@@ -39,7 +57,10 @@ app.get('/ready-to-invoice', async (c) => {
        p.snoozed_until,
        c.id   AS customer_id,
        c.name AS customer_name,
-       (SELECT COALESCE(SUM(COALESCE(i.price, 0) * i.total_value), 0)
+       (SELECT COALESCE(SUM(
+                  COALESCE(i.price, 0) * i.total_value *
+                  CASE WHEN i.type = 'VOLUME' THEN COALESCE(i.depth, 1) ELSE 1 END
+                ), 0)
           FROM items i WHERE i.project_id = p.id) AS estimated_total,
        (SELECT MAX(s.created_at)
           FROM shapes s JOIN items i ON i.id = s.item_id
@@ -49,11 +70,17 @@ app.get('/ready-to-invoice', async (c) => {
      WHERE NOT EXISTS (
              SELECT 1 FROM past_quotes pq
               WHERE pq.project_id = p.id AND pq.kind = 'INVOICE')
-       AND (p.snoozed_until IS NULL OR p.snoozed_until < ?1)
+       ${snoozeClause}
        AND EXISTS (
              SELECT 1 FROM items i
               WHERE i.project_id = p.id
-                AND i.price IS NOT NULL AND i.price > 0)
+                AND (
+                  (i.price IS NOT NULL AND i.price > 0)
+                  OR (i.sub_items_json IS NOT NULL
+                      AND i.sub_items_json != ''
+                      AND i.sub_items_json != '[]')
+                  OR i.assembly_id IS NOT NULL
+                ))
      ORDER BY COALESCE(last_activity_at, p.updated_at) DESC
      LIMIT 200`
   )

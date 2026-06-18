@@ -47,7 +47,7 @@ export const api = {
     list: () =>
       req<Array<{ id: string; name: string; created_at: number }>>('/api/projects'),
     get: (id: string) => req<unknown>(`/api/projects/${id}`),
-    readyToInvoice: () =>
+    readyToInvoice: (opts: { includeSnoozed?: boolean } = {}) =>
       req<
         Array<{
           id: string;
@@ -59,7 +59,11 @@ export const api = {
           estimated_total: number;
           last_activity_at: number | null;
         }>
-      >('/api/projects/ready-to-invoice'),
+      >(
+        opts.includeSnoozed
+          ? '/api/projects/ready-to-invoice?include_snoozed=true'
+          : '/api/projects/ready-to-invoice'
+      ),
     snooze: (projectId: string, until: number | null) =>
       req<{ id: string; snoozed_until: number | null }>(
         `/api/projects/${projectId}/snooze`,

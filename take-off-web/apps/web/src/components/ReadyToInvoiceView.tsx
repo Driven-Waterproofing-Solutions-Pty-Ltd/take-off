@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, Loader2, Send, Inbox, RefreshCw, MoreHorizontal, BellOff } from 'lucide-react';
+import { ArrowLeft, Loader2, Send, Inbox, RefreshCw, MoreHorizontal, BellOff, Bell } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -19,6 +19,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { api } from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
+
+type Tab = 'active' | 'snoozed';
 
 interface ReadyToInvoiceRow {
   id: string;
@@ -62,6 +64,7 @@ const ReadyToInvoiceView: React.FC<ReadyToInvoiceViewProps> = ({
   onOpenAndInvoice,
 }) => {
   const { addToast } = useToast();
+  const [tab, setTab] = useState<Tab>('active');
   const [rows, setRows] = useState<ReadyToInvoiceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -69,7 +72,9 @@ const ReadyToInvoiceView: React.FC<ReadyToInvoiceViewProps> = ({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await api.projects.readyToInvoice();
+      const data = await api.projects.readyToInvoice({
+        includeSnoozed: tab === 'snoozed',
+      });
       setRows(data);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -77,7 +82,7 @@ const ReadyToInvoiceView: React.FC<ReadyToInvoiceViewProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [addToast]);
+  }, [addToast, tab]);
 
   useEffect(() => {
     load();
@@ -101,6 +106,20 @@ const ReadyToInvoiceView: React.FC<ReadyToInvoiceViewProps> = ({
     }
   };
 
+  const unsnooze = async (projectId: string) => {
+    setBusyId(projectId);
+    try {
+      await api.projects.snooze(projectId, null);
+      setRows((prev) => prev.filter((r) => r.id !== projectId));
+      addToast('Un-snoozed', 'success');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      addToast(`Un-snooze failed: ${msg}`, 'error');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   return (
     <div className="flex flex-col h-full bg-background overflow-hidden">
       <div className="border-b border-border bg-card px-6 py-4 flex items-center justify-between shrink-0">
@@ -111,18 +130,40 @@ const ReadyToInvoiceView: React.FC<ReadyToInvoiceViewProps> = ({
           <div>
             <h1 className="text-xl font-semibold">Ready to invoice</h1>
             <p className="text-xs text-muted-foreground">
-              Priced jobs that haven't been pushed to Xero yet
+              {tab === 'active'
+                ? "Priced jobs that haven't been pushed to Xero yet"
+                : 'Snoozed jobs — un-snooze to put them back on the queue'}
             </p>
           </div>
         </div>
-        <Button onClick={load} variant="outline" size="sm" className="gap-2" disabled={loading}>
-          {loading ? (
-            <Loader2 size={14} className="animate-spin" />
-          ) : (
-            <RefreshCw size={14} />
-          )}
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <div className="inline-flex rounded-md border border-border bg-card p-0.5">
+            <Button
+              size="sm"
+              variant={tab === 'active' ? 'default' : 'ghost'}
+              className="h-7 px-3 text-xs"
+              onClick={() => setTab('active')}
+            >
+              Active
+            </Button>
+            <Button
+              size="sm"
+              variant={tab === 'snoozed' ? 'default' : 'ghost'}
+              className="h-7 px-3 text-xs"
+              onClick={() => setTab('snoozed')}
+            >
+              Snoozed
+            </Button>
+          </div>
+          <Button onClick={load} variant="outline" size="sm" className="gap-2" disabled={loading}>
+            {loading ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : (
+              <RefreshCw size={14} />
+            )}
+            Refresh
+          </Button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-auto p-6">
@@ -133,10 +174,13 @@ const ReadyToInvoiceView: React.FC<ReadyToInvoiceViewProps> = ({
         ) : rows.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 text-muted-foreground text-center">
             <Inbox className="w-10 h-10 mb-3 opacity-40" />
-            <p className="font-medium text-foreground">Inbox zero.</p>
+            <p className="font-medium text-foreground">
+              {tab === 'active' ? 'Inbox zero.' : 'No snoozed jobs.'}
+            </p>
             <p className="text-sm mt-1 max-w-md">
-              Every priced job has been invoiced or snoozed. When you price the
-              next takeoff, it will show up here.
+              {tab === 'active'
+                ? 'Every priced job has been invoiced or snoozed. When you price the next takeoff, it will show up here.'
+                : "Anything you snooze from the Active tab lands here. You can un-snooze it from this list to put it back."}
             </p>
           </div>
         ) : (
@@ -171,42 +215,61 @@ const ReadyToInvoiceView: React.FC<ReadyToInvoiceViewProps> = ({
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="inline-flex items-center gap-1">
-                          <Button
-                            size="sm"
-                            className="gap-1"
-                            onClick={() => onOpenAndInvoice(r.id)}
-                            disabled={busyId === r.id}
-                          >
-                            <Send size={14} /> Open &amp; invoice
-                          </Button>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
+                          {tab === 'active' ? (
+                            <>
                               <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8"
+                                size="sm"
+                                className="gap-1"
+                                onClick={() => onOpenAndInvoice(r.id)}
                                 disabled={busyId === r.id}
-                                aria-label="Snooze options"
                               >
-                                {busyId === r.id ? (
-                                  <Loader2 size={14} className="animate-spin" />
-                                ) : (
-                                  <MoreHorizontal size={14} />
-                                )}
+                                <Send size={14} /> Open &amp; invoice
                               </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              {SNOOZE_OPTIONS.map((opt) => (
-                                <DropdownMenuItem
-                                  key={opt.label}
-                                  onClick={() => snooze(r.id, opt.ms)}
-                                >
-                                  <BellOff size={14} className="mr-2" />
-                                  Snooze {opt.label}
-                                </DropdownMenuItem>
-                              ))}
-                            </DropdownMenuContent>
-                          </DropdownMenu>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8"
+                                    disabled={busyId === r.id}
+                                    aria-label="Snooze options"
+                                  >
+                                    {busyId === r.id ? (
+                                      <Loader2 size={14} className="animate-spin" />
+                                    ) : (
+                                      <MoreHorizontal size={14} />
+                                    )}
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  {SNOOZE_OPTIONS.map((opt) => (
+                                    <DropdownMenuItem
+                                      key={opt.label}
+                                      onClick={() => snooze(r.id, opt.ms)}
+                                    >
+                                      <BellOff size={14} className="mr-2" />
+                                      Snooze {opt.label}
+                                    </DropdownMenuItem>
+                                  ))}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="gap-1"
+                              onClick={() => unsnooze(r.id)}
+                              disabled={busyId === r.id}
+                            >
+                              {busyId === r.id ? (
+                                <Loader2 size={14} className="animate-spin" />
+                              ) : (
+                                <Bell size={14} />
+                              )}
+                              Un-snooze
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
