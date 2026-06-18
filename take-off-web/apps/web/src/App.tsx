@@ -749,6 +749,29 @@ const AppContent: React.FC = () => {
 
   const handleUpdateScale = (pixels: number, realValue: number, unit: Unit) => {
     const ppu = pixels / realValue;
+    // Pre-scan: refuse recalibration entirely if any shared item has shapes
+    // on OTHER pages whose scale unit differs from the requested unit.
+    // Mutating only this page's shape values would otherwise leave page-B
+    // shapes in their old unit while the global item.unit either flips to
+    // the new one (corrupted label) or stays put (corrupted values on this
+    // page). The previous guard skipped only the unit retag and still
+    // rewrote the shape values; this aborts the whole operation and tells
+    // the user to recalibrate the other pages or split the item first.
+    const conflictItem = items.find((item) =>
+      item.shapes.some((s) => s.pageIndex === pageIndex) &&
+      item.shapes.some((s) => {
+        if (s.pageIndex === pageIndex) return false;
+        const otherScale = projectData[s.pageIndex]?.scale;
+        return !otherScale?.isSet || otherScale.unit !== unit;
+      })
+    );
+    if (conflictItem) {
+      addToast(
+        `Can't recalibrate to ${unit}: "${conflictItem.label}" also has shapes on other pages with a different unit. Recalibrate those pages first, or split the item.`,
+        'error'
+      );
+      return;
+    }
     setHistory(draft => {
       if (!draft.projectData[pageIndex]) {
         draft.projectData[pageIndex] = { scale: { isSet: false, pixelsPerUnit: 1, unit: Unit.FEET } };
@@ -764,19 +787,15 @@ const AppContent: React.FC = () => {
 
       // Recalibration: existing shape values + item units were computed
       // against the OLD scale. Walk every shape on this page and recompute
-      // its value with the new ppu; for AREA/VOLUME/FILL items also retune
-      // the item.unit so a metric→imperial recalibration doesn't leave
-      // "sq m" labels on cu-ft quantities. Other pages stay untouched.
+      // its value with the new ppu; the pre-scan above already guaranteed
+      // no item has shapes on differently-calibrated pages, so retagging
+      // item.unit is now safe.
       const areaUnit = getAreaUnitFromLinear(unit);
       const volumeUnit = getVolumeUnitFromLinear(unit);
       for (const item of draft.items) {
         let touched = false;
-        let hasShapesOnOtherPages = false;
         for (const shape of item.shapes) {
-          if (shape.pageIndex !== pageIndex) {
-            hasShapesOnOtherPages = true;
-            continue;
-          }
+          if (shape.pageIndex !== pageIndex) continue;
           touched = true;
           if (item.type === ToolType.AREA || item.type === ToolType.FILL || item.type === ToolType.VOLUME) {
             shape.value = getScaledArea(calculatePolygonArea(shape.points), ppu);
@@ -798,30 +817,14 @@ const AppContent: React.FC = () => {
           // NOTE / COUNT shapes carry annotation/count semantics independent of scale.
         }
         if (touched) {
-          // Multi-page items hold one global unit but each shape was measured
-          // against its own page's calibration. If only THIS page changed and
-          // others stay on the old (or a different) linear unit, retagging
-          // item.unit silently relabels metres on page B as feet. Only
-          // retune the global unit when every other page already shares the
-          // new linear unit — otherwise leave the unit alone (totals/quotes
-          // stay self-consistent with the existing label until the user
-          // recalibrates the other pages or splits the item).
-          const otherPagesShareNewUnit = !hasShapesOnOtherPages ||
-            item.shapes.every((s) => {
-              if (s.pageIndex === pageIndex) return true;
-              const pageScale = draft.projectData[s.pageIndex]?.scale;
-              return pageScale?.isSet && pageScale.unit === unit;
-            });
-          if (otherPagesShareNewUnit) {
-            if (item.type === ToolType.AREA || item.type === ToolType.FILL) item.unit = areaUnit;
-            else if (item.type === ToolType.VOLUME) item.unit = volumeUnit;
-            else if (item.type === ToolType.LINEAR || item.type === ToolType.ARC || item.type === ToolType.SEGMENT || item.type === ToolType.DIMENSION) item.unit = unit;
-            // Convert VOLUME depth into the new linear unit before folding it
-            // into totalValue; otherwise an item depth of "1" silently changes
-            // meaning (1 ft → 1 m) and over/under-states the cubic quantity.
-            if (item.type === ToolType.VOLUME && item.depth != null && prevUnit && prevUnit !== unit) {
-              item.depth = convertLinearUnit(item.depth, prevUnit, unit);
-            }
+          if (item.type === ToolType.AREA || item.type === ToolType.FILL) item.unit = areaUnit;
+          else if (item.type === ToolType.VOLUME) item.unit = volumeUnit;
+          else if (item.type === ToolType.LINEAR || item.type === ToolType.ARC || item.type === ToolType.SEGMENT || item.type === ToolType.DIMENSION) item.unit = unit;
+          // Convert VOLUME depth into the new linear unit before folding it
+          // into totalValue; otherwise an item depth of "1" silently changes
+          // meaning (1 ft → 1 m) and over/under-states the cubic quantity.
+          if (item.type === ToolType.VOLUME && item.depth != null && prevUnit && prevUnit !== unit) {
+            item.depth = convertLinearUnit(item.depth, prevUnit, unit);
           }
           // totalValue mirrors calculateTotalValue: shape sum, with depth fold for VOLUME.
           const baseValue = item.shapes.reduce(

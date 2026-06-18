@@ -1,5 +1,5 @@
 import type { Env } from '../env';
-import { type TakeoffItem, ToolType } from '@takeoff/shared';
+import { type TakeoffItem, ToolType, getLinearBase } from '@takeoff/shared';
 import {
   itemFamily,
   recalcItemTotal,
@@ -8,12 +8,6 @@ import {
   ItemRow,
   ShapeRow,
 } from '../db/queries';
-
-function unitLinearBase(unit: string): string {
-  if (unit.startsWith('sq_')) return unit.slice(3);
-  if (unit.startsWith('cu_')) return unit.slice(3);
-  return unit;
-}
 
 export async function createItem(
   env: Env,
@@ -39,13 +33,10 @@ export async function createItem(
   const now = Date.now();
   // Idempotent on client-supplied id: if useShapeSync retries after a network
   // failure (where the original INSERT may have committed but the response was
-  // lost), the second call must not throw a PK constraint — that would block
-  // the retry loop forever and strand the item's child shapes. INSERT OR
-  // IGNORE means a duplicate id is a no-op; the follow-up SELECT returns the
-  // row that's already there. We still defend against cross-project id reuse
-  // by scoping the lookup to (id, project_id) and treating a mismatch as an
-  // error (UUID collisions across projects are statistically impossible —
-  // this guards against malicious or buggy callers).
+  // lost), the second call must not throw a PK constraint. We still defend
+  // against cross-project id reuse by scoping the lookup to (id, project_id)
+  // — a UUID collision across projects is statistically impossible but a
+  // malicious caller could try it.
   const existing = (await env.DB.prepare(
     'SELECT project_id FROM items WHERE id = ?'
   )
@@ -54,12 +45,32 @@ export async function createItem(
   if (existing && existing.project_id !== args.project_id) {
     throw new Error(`Item ${id} already exists in a different project`);
   }
+  // ON CONFLICT … UPDATE rather than INSERT OR IGNORE: if the user edited
+  // the item's label / price / sub-items / assembly between the failed
+  // initial POST and the retry, useShapeSync's snapshot reflects the new
+  // values and the next diff would consider the item "synced" against the
+  // server's STALE row. The next item-edit then never fires because the
+  // snapshot already matches. Upsert lets the retry payload land for real.
   await env.DB.prepare(
-    `INSERT OR IGNORE INTO items
+    `INSERT INTO items
        (id, project_id, label, type, color, unit, total_value, group_name,
         properties_json, price, formula, sub_items_json, visible, depth,
         hidden_pages_json, assembly_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       label = excluded.label,
+       color = excluded.color,
+       unit = excluded.unit,
+       group_name = excluded.group_name,
+       properties_json = excluded.properties_json,
+       price = excluded.price,
+       formula = excluded.formula,
+       sub_items_json = excluded.sub_items_json,
+       visible = excluded.visible,
+       depth = excluded.depth,
+       hidden_pages_json = excluded.hidden_pages_json,
+       assembly_id = excluded.assembly_id,
+       updated_at = excluded.updated_at`
   )
     .bind(
       id,
@@ -222,11 +233,11 @@ export async function updateShape(
           `Cannot move shape into ${target.type} item — it's in the ${targetFamily}-family but the shape lives in a ${sourceFamily}-family item; totals/quotes would label the value with the wrong unit.`
         );
       }
-      // Linear base comparison so an AREA shape (sq_m) can still reparent
-      // to a VOLUME item (cu_m) — both derive from "m". Mismatched linear
-      // bases (sq_m vs sq_ft) still throw.
-      const sourceBase = unitLinearBase(source.unit);
-      const targetBase = unitLinearBase(target.unit);
+      // Linear base comparison so an AREA shape ("sq m") can still reparent
+      // to a VOLUME item ("cu m") — both derive from "m". Mismatched linear
+      // bases ("sq m" vs "sq ft") still throw. Shared with getOrCreateItem.
+      const sourceBase = getLinearBase(source.unit);
+      const targetBase = getLinearBase(target.unit);
       if (sourceBase !== targetBase) {
         throw new Error(
           `Cannot move shape into item with unit "${target.unit}" — shape is measured in "${source.unit}" (different linear base). Use a same-unit target or recalibrate first.`

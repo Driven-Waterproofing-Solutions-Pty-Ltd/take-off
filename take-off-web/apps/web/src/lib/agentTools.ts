@@ -47,11 +47,18 @@ interface ToolResultBlock {
   is_error?: boolean;
 }
 
+interface PngResult {
+  base64: string;
+  outWidth: number;
+  outHeight: number;
+  downscale: number; // out/in factor; < 1 when image was shrunk to fit MAX_IMAGE_EDGE
+}
+
 function pixelsToPngBase64(
   pixels: Uint8ClampedArray,
   width: number,
   height: number
-): string {
+): PngResult {
   // Draw the RGBA pixmap to an offscreen canvas, downscale if needed, export PNG.
   const src = document.createElement('canvas');
   src.width = width;
@@ -66,17 +73,26 @@ function pixelsToPngBase64(
 
   const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(width, height));
   let out = src;
+  let outWidth = width;
+  let outHeight = height;
   if (scale < 1) {
+    outWidth = Math.round(width * scale);
+    outHeight = Math.round(height * scale);
     out = document.createElement('canvas');
-    out.width = Math.round(width * scale);
-    out.height = Math.round(height * scale);
+    out.width = outWidth;
+    out.height = outHeight;
     const octx = out.getContext('2d');
     if (!octx) throw new Error('2d context unavailable');
     octx.imageSmoothingQuality = 'high';
-    octx.drawImage(src, 0, 0, out.width, out.height);
+    octx.drawImage(src, 0, 0, outWidth, outHeight);
   }
   const dataUrl = out.toDataURL('image/png');
-  return dataUrl.slice(dataUrl.indexOf(',') + 1);
+  return {
+    base64: dataUrl.slice(dataUrl.indexOf(',') + 1),
+    outWidth,
+    outHeight,
+    downscale: scale,
+  };
 }
 
 function textResult(id: string, payload: unknown, isError = false): ToolResultBlock {
@@ -127,16 +143,30 @@ export async function executeAgentTool(
           resolved.localIndex,
           renderScale
         );
-        const data = pixelsToPngBase64(pixels, width, height);
+        const png = pixelsToPngBase64(pixels, width, height);
+        // Effective scale = mupdf renderScale × any downscale applied to fit
+        // MAX_IMAGE_EDGE. A1/A0 sheets at any DPI commonly trigger the
+        // downscale; without telling the model, coordinates read off the
+        // delivered image landed too small (areas by the factor squared)
+        // because the model only knew to divide by renderScale.
+        const effectiveScale = renderScale * png.downscale;
+        const downscaleNote = png.downscale < 1
+          ? ` (original ${width}x${height} downscaled by ${png.downscale.toFixed(4)} to fit vision input)`
+          : '';
         return {
           type: 'tool_result',
           tool_use_id: id,
           content: [
             {
               type: 'text',
-              text: `Page ${pageIndex} rendered at ${width}x${height}px. Coordinates you propose should be in PDF-point space — i.e. divide image-pixel coordinates by ${renderScale} before passing them to add_area / add_linear / add_count / add_arc / set_scale_manual.`,
+              text:
+                `Page ${pageIndex} delivered at ${png.outWidth}x${png.outHeight}px${downscaleNote}. ` +
+                `Image-pixel coordinates relate to PDF-point space by the factor ${effectiveScale.toFixed(6)} ` +
+                `(renderScale=${renderScale} × downscale=${png.downscale.toFixed(6)}). ` +
+                `Divide every (x, y) you read off the image by ${effectiveScale.toFixed(6)} before passing it to ` +
+                `add_area / add_linear / add_count / add_arc / set_scale_manual.`,
             },
-            { type: 'image', source: { type: 'base64', media_type: 'image/png', data } },
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png.base64 } },
           ],
         };
       }

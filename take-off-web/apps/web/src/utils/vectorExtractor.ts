@@ -111,7 +111,63 @@ async function extractPageVectorPaths(
     subpathStart = null;
   };
 
-  // Walk a packed pdf.js 5.x path buffer:
+  // pdf.js's "ordinary" constructPath format passes the ops as one array
+  // and the coordinates as a separate flat array (each op consumes a fixed
+  // pair count: moveTo/lineTo 1 pair, curveTo 3 pairs, closePath 0). The
+  // existing walkPathBuffer below handles the legacy packed form where
+  // ops and coords are interleaved into one buffer — fallback for older
+  // PDFs.
+  const walkOpsCoords = (ops: number[], coords: number[] | Float32Array): void => {
+    const at = (i: number) => (typeof coords === 'number' ? 0 : (coords as ArrayLike<number>)[i] as number);
+    let c = 0;
+    for (const op of ops) {
+      switch (op) {
+        case DRAW_OPS.moveTo: {
+          flushSubpath(false);
+          const [vx, vy] = toViewport(at(c++), at(c++));
+          subpath.push({ x: vx, y: vy });
+          subpathStart = { x: vx, y: vy };
+          break;
+        }
+        case DRAW_OPS.lineTo: {
+          const [vx, vy] = toViewport(at(c++), at(c++));
+          if (subpath.length === 0 && subpathStart) subpath.push(subpathStart);
+          subpath.push({ x: vx, y: vy });
+          break;
+        }
+        case DRAW_OPS.curveTo: {
+          if (subpath.length === 0) {
+            c += 6;
+            break;
+          }
+          const last = subpath[subpath.length - 1];
+          const c1 = toViewport(at(c++), at(c++));
+          const c2 = toViewport(at(c++), at(c++));
+          const p3 = toViewport(at(c++), at(c++));
+          const flat: Array<[number, number]> = [];
+          flattenBezier([last.x, last.y], c1, c2, p3, flat);
+          for (const [fx, fy] of flat) subpath.push({ x: fx, y: fy });
+          break;
+        }
+        case DRAW_OPS.closePath: {
+          if (subpath.length >= 2 && subpathStart) {
+            const first = subpath[0];
+            const last = subpath[subpath.length - 1];
+            if (first.x !== last.x || first.y !== last.y) {
+              subpath.push({ x: first.x, y: first.y });
+            }
+          }
+          flushSubpath(true);
+          break;
+        }
+        default:
+          // Unknown draw op — bail rather than misalign coords.
+          return;
+      }
+    }
+  };
+
+  // Walk a packed pdf.js 5.x path buffer (legacy interleaved form):
   //   [op, ...coords, op, ...coords, ...]
   // op codes are DRAW_OPS values; coord counts follow the spec table.
   const walkPathBuffer = (buf: number[]): void => {
@@ -185,21 +241,50 @@ async function extractPageVectorPaths(
       continue;
     }
     if (fn === OPS.constructPath) {
-      // args = [paintOp, [pathBuffer], minMax]
+      // Two pdf.js argsArray shapes seen in the wild for constructPath:
+      //   (a) modern (pdf.js 4.x/5.x ordinary lists): [ops: number[],
+      //       coords: number[] | Float32Array, minMax?]
+      //   (b) legacy (some older / paint-wrapped variants): [paintOp,
+      //       [pathBuffer], minMax] — ops and coords interleaved into one
+      //       buffer wrapped in a single-element array.
+      // The previous code only handled (b) and read args[1][0]; under
+      // shape (a) that resolved to the first coordinate (a number) and
+      // walkPathBuffer was never called, so CAD pages uploaded EMPTY
+      // vector caches and snap/fill silently failed. Detect both.
       const args = opList.argsArray[i] as unknown[];
-      const paintOp = args[0] as number;
-      const dataWrapper = args[1] as unknown[];
-      const pathBuffer = dataWrapper?.[0];
-      if (Array.isArray(pathBuffer)) {
-        walkPathBuffer(pathBuffer as number[]);
-      } else if (pathBuffer && typeof pathBuffer === 'object' && 'length' in (pathBuffer as object)) {
-        // Float32Array or similar typed array.
-        walkPathBuffer(Array.from(pathBuffer as ArrayLike<number>));
+      const first = args[0];
+      const second = args[1];
+      let closeAtPaint = false;
+      if (Array.isArray(first) && first.length > 0 && typeof first[0] === 'number') {
+        // Shape (a) — modern: [ops, coords].
+        const ops = first as number[];
+        const coords =
+          Array.isArray(second) || (second && typeof second === 'object' && 'length' in (second as object))
+            ? (second as number[] | Float32Array)
+            : ([] as number[]);
+        walkOpsCoords(ops, coords);
+        // Closure intent comes from the NEXT op (stroke / closeStroke / etc.),
+        // not from within constructPath itself.
+        const next = opList.fnArray[i + 1];
+        closeAtPaint =
+          next === OPS.closeStroke ||
+          next === OPS.closeFillStroke ||
+          next === OPS.closeEOFillStroke;
+      } else {
+        // Shape (b) — legacy packed buffer.
+        const paintOp = first as number;
+        const dataWrapper = second as unknown[] | undefined;
+        const pathBuffer = dataWrapper?.[0];
+        if (Array.isArray(pathBuffer)) {
+          walkPathBuffer(pathBuffer as number[]);
+        } else if (pathBuffer && typeof pathBuffer === 'object' && 'length' in (pathBuffer as object)) {
+          walkPathBuffer(Array.from(pathBuffer as ArrayLike<number>));
+        }
+        closeAtPaint =
+          paintOp === OPS.closeStroke ||
+          paintOp === OPS.closeFillStroke ||
+          paintOp === OPS.closeEOFillStroke;
       }
-      const closeAtPaint =
-        paintOp === OPS.closeStroke ||
-        paintOp === OPS.closeFillStroke ||
-        paintOp === OPS.closeEOFillStroke;
       flushSubpath(closeAtPaint);
       continue;
     }

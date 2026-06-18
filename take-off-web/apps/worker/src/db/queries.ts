@@ -1,5 +1,5 @@
 import type { D1Database } from '@cloudflare/workers-types';
-import { ToolType } from '@takeoff/shared';
+import { ToolType, getLinearBase } from '@takeoff/shared';
 import type {
   Shape,
   TakeoffItem,
@@ -192,19 +192,6 @@ export function itemFamily(type: ToolType): string {
   }
 }
 
-// Extract the underlying linear unit from any compound unit. AREA items
-// store "sq_m"/"sq_ft", VOLUME items store "cu_m"/"cu_ft", LINEAR items
-// store the bare "m"/"ft". A VOLUME item with unit "cu_m" still hosts AREA
-// polygons (the polygon area × item.depth = cubic quantity), so addArea
-// passes hint.unit = "sq_m" against existing.unit = "cu_m" — comparing the
-// raw strings would reject. Compare linear bases instead so the mix is
-// allowed, but a sq_m / sq_ft mismatch still throws.
-function unitLinearBase(unit: string): string {
-  if (unit.startsWith('sq_')) return unit.slice(3);
-  if (unit.startsWith('cu_')) return unit.slice(3);
-  return unit;
-}
-
 export async function getOrCreateItem(
   db: D1Database,
   projectId: string,
@@ -224,9 +211,11 @@ export async function getOrCreateItem(
         );
       }
       // Compare linear bases so AREA shapes can land on VOLUME items
-      // (both derive from the same linear unit) while a sq_m item still
-      // rejects a sq_ft shape from a differently-calibrated page.
-      if (unitLinearBase(existing.unit) !== unitLinearBase(hint.unit)) {
+      // (both derive from the same linear unit) while a "sq m" item still
+      // rejects a "sq ft" shape from a differently-calibrated page.
+      // Unit values are SPACE-separated ("sq ft", "cu m") — getLinearBase
+      // handles the space prefix plus the acres/hectares special cases.
+      if (getLinearBase(existing.unit) !== getLinearBase(hint.unit)) {
         throw new Error(
           `Item ${hint.id} has unit "${existing.unit}"; the destination page measures in "${hint.unit}" (different linear base). Recalibrate the page or use a separate item — mixing units silently corrupts totals.`
         );

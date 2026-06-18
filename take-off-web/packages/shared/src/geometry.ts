@@ -213,6 +213,19 @@ export const getVolumeUnitFromLinear = (unit: Unit): Unit => {
   }
 };
 
+// Strip "sq "/"cu " prefix from a compound unit so an AREA shape (sq m)
+// can be tested for compatibility with a VOLUME item (cu m) — both derive
+// from the same linear base. The Unit enum stores values with SPACES
+// (e.g. "sq ft", "cu m"), not underscores, and there are two named
+// exceptions (acres → ft-derived, hectares → m-derived) that we map by
+// hand. Bare linear units pass through unchanged.
+export const getLinearBase = (unit: string): string => {
+  if (unit.startsWith('sq ') || unit.startsWith('cu ')) return unit.slice(3);
+  if (unit === 'acres') return 'ft';
+  if (unit === 'hectares') return 'm';
+  return unit;
+};
+
 export const calculateArcPoints = (start: Point, end: Point, bulge: number, segments = 20): Point[] => {
   if (Math.abs(bulge) < 0.001) return [start, end];
   const dx = end.x - start.x;

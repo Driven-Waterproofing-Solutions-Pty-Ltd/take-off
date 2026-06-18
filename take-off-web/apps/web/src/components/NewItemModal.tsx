@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { TakeoffItem, ToolType, Unit } from '../types';
-import { generateColor } from '../utils/geometry';
+import { generateColor, getAreaUnitFromLinear, getVolumeUnitFromLinear } from '../utils/geometry';
 import TemplateManager from './TemplateManager';
 import { Tag, Edit3 } from 'lucide-react';
 import {
@@ -166,10 +166,37 @@ const NewItemModal: React.FC<NewItemModalProps> = ({ toolType, existingCount, sc
                                     // stays cubic, and legends/quotes undercount
                                     // every volume takeoff until the user re-enters
                                     // the depth manually.
+                                    //
+                                    // Rebase the measurement unit to the current
+                                    // page's scale. A template saved under "ft"
+                                    // selected on an "m"-calibrated page used to
+                                    // carry "sq ft" through, and getOrCreateItem's
+                                    // linear-base check then rejected every shape
+                                    // ("sq m" hint vs "sq ft" existing) and the
+                                    // hook retried forever. For AREA/FILL/VOLUME
+                                    // and linear families we override the unit
+                                    // from the active calibration. COUNT/NOTE
+                                    // keep the template's unit (always EACH).
+                                    const pageLinearUnit = scaleUnit;
+                                    let rebasedUnit = template.unit;
+                                    if (pageLinearUnit) {
+                                        if (toolType === ToolType.AREA || toolType === ToolType.FILL) {
+                                            rebasedUnit = getAreaUnitFromLinear(pageLinearUnit);
+                                        } else if (toolType === ToolType.VOLUME) {
+                                            rebasedUnit = getVolumeUnitFromLinear(pageLinearUnit);
+                                        } else if (
+                                            toolType === ToolType.LINEAR ||
+                                            toolType === ToolType.SEGMENT ||
+                                            toolType === ToolType.DIMENSION ||
+                                            toolType === ToolType.ARC
+                                        ) {
+                                            rebasedUnit = pageLinearUnit;
+                                        }
+                                    }
                                     onCreate({
                                         label: template.label,
                                         color: template.color,
-                                        unit: template.unit,
+                                        unit: rebasedUnit,
                                         properties: template.properties,
                                         formula: template.formula,
                                         price: template.price,
