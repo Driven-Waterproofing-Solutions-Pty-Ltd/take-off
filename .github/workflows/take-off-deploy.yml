@@ -84,6 +84,19 @@ jobs:
             exit 1
           fi
 
+      - name: apply D1 migrations (remote)
+        # Runs BEFORE deploy so the new worker never starts against an
+        # un-migrated production DB. `d1 migrations apply` is idempotent —
+        # it queries the d1_migrations table and only executes files that
+        # haven't been recorded yet. Same token as the deploy step
+        # (CLOUDFLARE_API_TOKEN already has D1: Edit per the scopes
+        # listed at the top of this file).
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          workingDirectory: take-off-web/apps/worker
+          command: d1 migrations apply takeoff-production --remote
+
       - name: deploy worker (SPA + API + MCP + Agent)
         uses: cloudflare/wrangler-action@v3
         with:
