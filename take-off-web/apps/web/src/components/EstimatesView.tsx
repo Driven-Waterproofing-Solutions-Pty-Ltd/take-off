@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { TakeoffItem, ToolType, Unit } from '../types';
 import { evaluateFormula, convertValue, toVariableName } from '../utils/math';
-import { FileSpreadsheet, ArrowLeft, Trash2, GripVertical, Plus, ChevronDown, ChevronRight, Edit2, CornerDownRight, FileText, Tag, Loader2 } from 'lucide-react';
+import { FileSpreadsheet, ArrowLeft, Trash2, GripVertical, Plus, ChevronDown, ChevronRight, Edit2, CornerDownRight, FileText, Tag, Loader2, Send } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useToast } from '../contexts/ToastContext';
 import PromptModal from './PromptModal';
 import TemplateManager from './TemplateManager';
+import SendToXeroModal from './SendToXeroModal';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,11 +20,14 @@ interface EstimatesViewProps {
     onUpdateItem: (id: string, updates: Partial<TakeoffItem>) => void;
     onReorderItems: (items: TakeoffItem[]) => void;
     onEditItem: (item: TakeoffItem) => void;
+    projectId?: string | null;
+    projectName?: string;
 }
 
-const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteItem, onUpdateItem, onReorderItems, onEditItem }) => {
+const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteItem, onUpdateItem, onReorderItems, onEditItem, projectId, projectName }) => {
     const { addToast } = useToast();
     const [activeTab, setActiveTab] = useState<'estimates' | 'templates'>('estimates');
+    const [showXeroModal, setShowXeroModal] = useState(false);
     const [groups, setGroups] = useState<string[]>([]);
     const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
     const [draggedGroup, setDraggedGroup] = useState<string | null>(null);
@@ -491,9 +495,18 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                         {activeTab === 'estimates' && (
                             <Button
                                 onClick={handleExport}
+                                variant="outline"
                                 className="gap-2"
                             >
                                 <FileSpreadsheet size={16} /> Export to Excel
+                            </Button>
+                        )}
+                        {activeTab === 'estimates' && projectId && (
+                            <Button
+                                onClick={() => setShowXeroModal(true)}
+                                className="gap-2"
+                            >
+                                <Send size={16} /> Send to Xero
                             </Button>
                         )}
                     </div>
@@ -817,6 +830,15 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                 )}
 
             </div>
+
+            {projectId && (
+                <SendToXeroModal
+                    open={showXeroModal}
+                    projectId={projectId}
+                    projectName={projectName}
+                    onClose={() => setShowXeroModal(false)}
+                />
+            )}
         </div>
     );
 };

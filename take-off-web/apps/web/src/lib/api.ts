@@ -349,6 +349,29 @@ export const api = {
           reference,
         }),
       }),
+    // Find or create a Xero contact for a brand-new customer, returning the
+    // ContactID to push against. Persists the contact server-side.
+    findOrCreateContact: (body: { name: string; email?: string; phone?: string }) =>
+      req<{ contact_id: string; name: string; created: boolean }>(
+        '/xero/contacts/find-or-create',
+        { method: 'POST', body: JSON.stringify(body) }
+      ),
+    // Xero docs already pushed for a project, with live invoice status.
+    projectDocs: (projectId: string) =>
+      req<{
+        docs: Array<{
+          id: string;
+          kind: string;
+          xero_id: string;
+          total: number;
+          created_at: number;
+          status: string | null;
+          deep_link: string;
+        }>;
+      }>('/xero/project-docs', {
+        method: 'POST',
+        body: JSON.stringify({ project_id: projectId }),
+      }),
     pullInvoice: (body: { invoice_id?: string; invoice_number?: string }) =>
       req<{
         invoice_id: string;

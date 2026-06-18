@@ -1,8 +1,61 @@
 # Xero draft-invoice integration — scope & plan
 
-**Status:** Scoping. No code changes yet.
+**Status:** Phase A + Phase B BUILT (this branch). Phase C (webhooks) deferred. Live smoke test pending user go-ahead.
 **Audience:** Driven Waterproofing Solutions operator + future implementer.
 **Mission in one sentence:** Polish the existing-but-buried Xero draft-invoice path so producing a priced quote in the take-off app and creating a reviewed draft invoice in Xero is a single, reliable, observable action — and fix a latent AU GST tax-code bug while we're there.
+
+---
+
+## ✅ Implementation status (built on this branch)
+
+**Phase A — bug fix + reliability (DONE):**
+- `apps/worker/migrations/0006_xero_org_config.sql` — per-tenant cache of the
+  resolved GST tax code + sales account.
+- `apps/worker/src/tools/xero.ts`:
+  - `resolveOrgConfig()` reads `/TaxRates` and picks the active GST-on-income
+    rate (OUTPUT2 on modern AU orgs), replacing the hardcoded `TaxType:'OUTPUT'`.
+    Cached 7 days, defensive against a missing table, falls back to `OUTPUT`
+    on any error so a push never hard-breaks.
+  - `Idempotency-Key` header on both Quote and Invoice POSTs — deterministic
+    per project+payload, so a retried push replays Xero's stored result instead
+    of duplicating a draft.
+  - `Reference` now defaults to `Take-off: <project name>` so drafts are
+    findable in Xero.
+  - Account code now read from config (defaults to `200`).
+
+**Phase B — surface + new-customer + status (DONE):**
+- `apps/worker/src/tools/xero.ts`:
+  - `findOrCreateXeroContact()` — match by name → email → create; persists the
+    ContactID to `customers`.
+  - `listProjectXeroDocs()` — lists pushed docs with **live invoice status**,
+    and repairs the previously-dead `past_quotes.accepted` flag.
+- `apps/worker/src/routes/xero.ts` — `POST /xero/contacts/find-or-create`,
+  `POST /xero/project-docs` (REST-only, inline zod, NOT added to the agent tool
+  registry).
+- `apps/web/src/lib/api.ts` — `api.xero.findOrCreateContact`, `api.xero.projectDocs`.
+- `apps/web/src/components/SendToXeroModal.tsx` — new. Quote summary, existing-vs-new
+  customer toggle, find-or-create, editable Reference, live status of prior docs,
+  deep link on success.
+- `apps/web/src/components/EstimatesView.tsx` — prominent **"Send to Xero"**
+  button on the priced view (next to Export to Excel); renders the modal.
+- `apps/web/src/App.tsx` — passes `projectId` + `projectName` to EstimatesView.
+
+Both `@takeoff/worker` and `@takeoff/web` typecheck clean; the production web
+build passes.
+
+**⚠️ Before this deploys to prod:**
+1. **Apply migration 0006** to the remote D1:
+   `cd apps/worker && pnpm migrate:remote` (Workers Builds does NOT auto-run
+   migrations). The code is defensive if you forget — it falls back to live
+   lookup without caching — but the cache table should exist.
+2. **Live smoke test needs your OK.** I did NOT push any real invoice to
+   Driven's Xero org (that creates a real draft in your books). When you're
+   ready, create one $1 test draft, verify the GST line shows the correct tax
+   code, then void it. See "Test plan" below.
+
+**Phase C (webhooks) — deferred.** Needs a Xero developer-portal webhook config
++ a new `XERO_WEBHOOK_KEY` secret (both manual steps only you can do). Phase B's
+pull-on-open already shows live status, so this is pure proactive-update polish.
 
 ## TL;DR
 

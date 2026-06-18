@@ -1,7 +1,14 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { Env } from '../env';
 import { tools } from '@takeoff/shared';
-import { pushToXero, syncXeroContacts, pullXeroInvoice } from '../tools/xero';
+import {
+  pushToXero,
+  syncXeroContacts,
+  pullXeroInvoice,
+  findOrCreateXeroContact,
+  listProjectXeroDocs,
+} from '../tools/xero';
 import { requireAuth, requireAdmin } from '../lib/auth';
 import { encryptString, signOauthState, verifyOauthState } from '../lib/crypto';
 
@@ -161,6 +168,27 @@ app.post('/invoices/pull', requireAuth, async (c) => {
   const body = await c.req.json();
   const input = tools.pull_xero_invoice.input.parse(body);
   return c.json(await pullXeroInvoice(c.env, input));
+});
+
+// Find an existing Xero contact (by name, then email) or create one, so a
+// brand-new customer can be invoiced without a manual Xero round-trip first.
+// REST-only — deliberately NOT in the agent tool registry; the human picks or
+// confirms the contact in the Send-to-Xero modal.
+const findOrCreateContactZ = z.object({
+  name: z.string().min(1),
+  email: z.string().optional(),
+  phone: z.string().optional(),
+});
+app.post('/contacts/find-or-create', requireAuth, async (c) => {
+  const input = findOrCreateContactZ.parse(await c.req.json());
+  return c.json(await findOrCreateXeroContact(c.env, input));
+});
+
+// List the Xero docs already pushed for a project, with live invoice status.
+const projectDocsZ = z.object({ project_id: z.string().min(1) });
+app.post('/project-docs', requireAuth, async (c) => {
+  const input = projectDocsZ.parse(await c.req.json());
+  return c.json(await listProjectXeroDocs(c.env, input));
 });
 
 export default app;
