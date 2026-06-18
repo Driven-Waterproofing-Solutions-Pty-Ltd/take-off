@@ -47,6 +47,24 @@ export const api = {
     list: () =>
       req<Array<{ id: string; name: string; created_at: number }>>('/api/projects'),
     get: (id: string) => req<unknown>(`/api/projects/${id}`),
+    readyToInvoice: () =>
+      req<
+        Array<{
+          id: string;
+          name: string;
+          updated_at: number;
+          snoozed_until: number | null;
+          customer_id: string | null;
+          customer_name: string | null;
+          estimated_total: number;
+          last_activity_at: number | null;
+        }>
+      >('/api/projects/ready-to-invoice'),
+    snooze: (projectId: string, until: number | null) =>
+      req<{ id: string; snoozed_until: number | null }>(
+        `/api/projects/${projectId}/snooze`,
+        { method: 'POST', body: JSON.stringify({ until }) }
+      ),
     requestUploadUrl: (projectId: string, filename: string) =>
       req<{ file_key: string }>(`/api/projects/${projectId}/upload-url`, {
         method: 'POST',

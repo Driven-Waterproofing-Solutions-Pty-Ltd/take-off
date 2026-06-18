@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { TakeoffItem, ToolType, ProjectData, PlanSet } from '../types';
-import { Trash2, Upload, ChevronDown, ChevronRight, FilePlus, FolderOpen, Save, RefreshCw, Settings, Edit2, Table, Eye, EyeOff, FileDown, MoreHorizontal, Plus, HelpCircle, ShieldCheck, Target, Box } from 'lucide-react';
+import { Trash2, Upload, ChevronDown, ChevronRight, FilePlus, FolderOpen, Save, RefreshCw, Settings, Edit2, Table, Eye, EyeOff, FileDown, MoreHorizontal, Plus, HelpCircle, ShieldCheck, Target, Box, Send } from 'lucide-react';
 import { evaluateFormula } from '../utils/math';
 import ChangeItemModal from './ChangeItemModal';
 import { Button } from "@/components/ui/button";
@@ -33,6 +33,7 @@ interface SidebarProps {
     onToggleVisibility: (id: string, pageIndex: number) => void;
     onShowEstimates: () => void;
     onShow3D: () => void;
+    onShowInvoices: () => void;
     onRenamePage: (index: number, name: string) => void;
     onDeletePage: (index: number) => void;
     onEditItem: (item: TakeoffItem) => void;
@@ -68,6 +69,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     onToggleVisibility,
     onShowEstimates,
     onShow3D,
+    onShowInvoices,
     onRenamePage,
     onDeletePage,
     onEditItem,
@@ -311,6 +313,15 @@ const Sidebar: React.FC<SidebarProps> = ({
                                 </Button>
                             </TooltipTrigger>
                             <TooltipContent>Save Project (Cmd+S)</TooltipContent>
+                        </Tooltip>
+
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" onClick={onShowInvoices}>
+                                    <Send size={16} />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Ready to Invoice</TooltipContent>
                         </Tooltip>
 
                         <Separator orientation="vertical" className="h-4 mx-1" />

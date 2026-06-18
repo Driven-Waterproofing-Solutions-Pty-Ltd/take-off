@@ -22,12 +22,24 @@ interface EstimatesViewProps {
     onEditItem: (item: TakeoffItem) => void;
     projectId?: string | null;
     projectName?: string;
+    // Auto-open the Send-to-Xero modal on mount. Used by the
+    // Ready-to-Invoice queue so "Open & invoice" lands the user
+    // straight on the push flow.
+    autoOpenXero?: boolean;
+    onAutoOpenXeroHandled?: () => void;
 }
 
-const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteItem, onUpdateItem, onReorderItems, onEditItem, projectId, projectName }) => {
+const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteItem, onUpdateItem, onReorderItems, onEditItem, projectId, projectName, autoOpenXero, onAutoOpenXeroHandled }) => {
     const { addToast } = useToast();
     const [activeTab, setActiveTab] = useState<'estimates' | 'templates'>('estimates');
     const [showXeroModal, setShowXeroModal] = useState(false);
+
+    useEffect(() => {
+        if (autoOpenXero && projectId) {
+            setShowXeroModal(true);
+            onAutoOpenXeroHandled?.();
+        }
+    }, [autoOpenXero, projectId, onAutoOpenXeroHandled]);
     const [groups, setGroups] = useState<string[]>([]);
     const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
     const [draggedGroup, setDraggedGroup] = useState<string | null>(null);

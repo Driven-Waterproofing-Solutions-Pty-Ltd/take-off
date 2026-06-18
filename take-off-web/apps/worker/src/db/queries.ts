@@ -14,6 +14,7 @@ export interface ProjectRow {
   meta_json: string;
   created_at: number;
   updated_at: number;
+  snoozed_until?: number | null;
 }
 
 export interface PageRow {

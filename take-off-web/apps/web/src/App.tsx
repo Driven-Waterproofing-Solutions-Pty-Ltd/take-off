@@ -13,6 +13,7 @@ import PromptModal from './components/PromptModal';
 import ExportModal from './components/ExportModal';
 import ConfirmModal from './components/ConfirmModal';
 import EstimatesView from './components/EstimatesView';
+import ReadyToInvoiceView from './components/ReadyToInvoiceView';
 import ThreeDView from './components/ThreeDView';
 import PDFSearch from './components/PDFSearch';
 import { ToolType, ProjectData, TakeoffItem, Shape, Unit, PlanSet, LegendSettings } from './types';
@@ -49,8 +50,11 @@ const useLicense = () => ({ isLicensed: true });
 const AppContent: React.FC = () => {
   const { addToast } = useToast();
   const { isLicensed } = useLicense();
-  const [viewMode, setViewMode] = useState<'canvas' | 'estimates' | '3d'>('canvas');
+  const [viewMode, setViewMode] = useState<'canvas' | 'estimates' | '3d' | 'invoices'>('canvas');
   const [showAgent, setShowAgent] = useState(false);
+  // When set, EstimatesView auto-opens the Send-to-Xero modal on mount —
+  // driven by the Ready-to-Invoice queue's "Open & invoice" action.
+  const [autoOpenXero, setAutoOpenXero] = useState(false);
 
   const {
     projectName,
@@ -81,8 +85,18 @@ const AppContent: React.FC = () => {
     setShowImportConfirm,
     setPendingImportPath,
     currentFilePath: projectId,
+    openProjectById,
     refreshProject,
   } = useProjectManager(isLicensed);
+
+  // Ready-to-Invoice queue → load the project, then drop the user on
+  // Estimates with the Xero modal pre-opened. Modeled on the ?project=
+  // bootstrap path so cross-project navigation stays inside the SPA.
+  const handleOpenAndInvoice = async (id: string) => {
+    setAutoOpenXero(true);
+    setViewMode('estimates');
+    await openProjectById(id);
+  };
 
   // Persist every local state change back to D1 + R2.
   useShapeSync(projectId, items);
@@ -957,6 +971,7 @@ const AppContent: React.FC = () => {
         onToggleVisibility={handleToggleItemVisibility}
         onShowEstimates={() => { handleStopTakeoff(); setViewMode('estimates'); }}
         onShow3D={() => { handleStopTakeoff(); setViewMode('3d'); }}
+        onShowInvoices={() => { handleStopTakeoff(); setViewMode('invoices'); }}
         onRenamePage={(i, n) => setHistory(draft => {
           if (!draft.projectData[i]) {
             draft.projectData[i] = { scale: { isSet: false, pixelsPerUnit: 1, unit: Unit.FEET } };
@@ -975,9 +990,16 @@ const AppContent: React.FC = () => {
         {viewMode === 'estimates' ? (
           <EstimatesView items={items} onBack={() => setViewMode('canvas')} onDeleteItem={handleDeleteItem} onUpdateItem={handleUpdateItem}
             onReorderItems={(newItems) => setHistory(draft => { draft.items = newItems; })} onEditItem={setEditingItem}
-            projectId={projectId} projectName={projectName} />
+            projectId={projectId} projectName={projectName}
+            autoOpenXero={autoOpenXero}
+            onAutoOpenXeroHandled={() => setAutoOpenXero(false)} />
         ) : viewMode === '3d' ? (
           <ThreeDView items={items} onBack={() => setViewMode('canvas')} planSets={planSets} pageIndex={pageIndex} />
+        ) : viewMode === 'invoices' ? (
+          <ReadyToInvoiceView
+            onBack={() => setViewMode('canvas')}
+            onOpenAndInvoice={handleOpenAndInvoice}
+          />
         ) : (
           <>
             {planSets.length > 0 && (

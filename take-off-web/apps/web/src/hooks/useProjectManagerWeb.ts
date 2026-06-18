@@ -205,6 +205,50 @@ export const useProjectManager = (_isLicensed = true) => {
     }
   }, [projectId, setHistory]);
 
+  // Hydrate a different cloud project into the current workspace. Mirrors
+  // the on-mount ?project= bootstrap (line 131) but without a page reload,
+  // so cross-project navigation (Ready-to-Invoice queue → Open) keeps the
+  // SPA state. URL is updated so a refresh reopens the same project.
+  const openProjectById = useCallback(
+    async (id: string) => {
+      if (!id) return;
+      setIsInitializing(true);
+      setLoadingMessage('Loading project…');
+      try {
+        const snap = await fetchProject(id);
+        if (!snap) {
+          addToast('Project not found', 'error');
+          return;
+        }
+        const patched = snap.items.map((item) => {
+          if (item.type === ToolType.AREA) {
+            const correctedUnit = getAreaUnitFromLinear(item.unit as Unit);
+            if (correctedUnit !== item.unit) return { ...item, unit: correctedUnit };
+          }
+          return item;
+        });
+        clearHistory({
+          items: patched,
+          projectData: snap.projectData,
+          planSets: snap.planSets,
+          totalPages: snap.totalPages,
+        });
+        setProjectId(id);
+        setProjectName(snap.projectName);
+        setLastSavedAt(new Date());
+        const url = new URL(window.location.href);
+        url.searchParams.set('project', id);
+        window.history.replaceState({}, '', url.toString());
+      } catch (e) {
+        console.error('openProjectById failed', e);
+        addToast('Failed to open project', 'error');
+      } finally {
+        setIsInitializing(false);
+      }
+    },
+    [addToast, clearHistory]
+  );
+
   const handleNewProjectRequest = () => setShowNewProjectPrompt(true);
 
   const handleNewProjectConfirmed = async (name: string) => {
@@ -381,6 +425,7 @@ export const useProjectManager = (_isLicensed = true) => {
     handleSaveProject,
     handleLoadProjectClick,
     handleImportConfirmed,
+    openProjectById,
     refreshProject,
   };
 };

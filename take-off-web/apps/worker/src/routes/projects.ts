@@ -26,6 +26,62 @@ app.get('/', async (c) => {
   return c.json(rows.results);
 });
 
+// Cross-project queue: jobs with priced items that haven't been pushed to
+// Xero as an INVOICE yet (and aren't currently snoozed). Drops automatically
+// once pushToXero writes the past_quotes INVOICE row — no separate
+// "mark invoiced" flag to maintain.
+app.get('/ready-to-invoice', async (c) => {
+  const rows = await c.env.DB.prepare(
+    `SELECT
+       p.id,
+       p.name,
+       p.updated_at,
+       p.snoozed_until,
+       c.id   AS customer_id,
+       c.name AS customer_name,
+       (SELECT COALESCE(SUM(COALESCE(i.price, 0) * i.total_value), 0)
+          FROM items i WHERE i.project_id = p.id) AS estimated_total,
+       (SELECT MAX(s.created_at)
+          FROM shapes s JOIN items i ON i.id = s.item_id
+          WHERE i.project_id = p.id) AS last_activity_at
+     FROM projects p
+     LEFT JOIN customers c ON c.id = p.customer_id
+     WHERE NOT EXISTS (
+             SELECT 1 FROM past_quotes pq
+              WHERE pq.project_id = p.id AND pq.kind = 'INVOICE')
+       AND (p.snoozed_until IS NULL OR p.snoozed_until < ?1)
+       AND EXISTS (
+             SELECT 1 FROM items i
+              WHERE i.project_id = p.id
+                AND i.price IS NOT NULL AND i.price > 0)
+     ORDER BY COALESCE(last_activity_at, p.updated_at) DESC
+     LIMIT 200`
+  )
+    .bind(Date.now())
+    .all();
+  return c.json(rows.results);
+});
+
+// Dismiss a project from the queue. `until` is epoch-ms; null un-snoozes.
+app.post('/:id/snooze', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json<{ until: number | null }>();
+  const until =
+    body.until === null || body.until === undefined
+      ? null
+      : Number(body.until);
+  if (until !== null && (!Number.isFinite(until) || until < 0)) {
+    return c.json({ error: 'until must be a non-negative epoch-ms number or null' }, 400);
+  }
+  const result = await c.env.DB.prepare(
+    'UPDATE projects SET snoozed_until = ? WHERE id = ?'
+  )
+    .bind(until, id)
+    .run();
+  if (!result.success) return c.json({ error: 'snooze failed' }, 500);
+  return c.json({ id, snoozed_until: until });
+});
+
 app.get('/:id', async (c) => {
   const id = c.req.param('id');
   const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(id).first();
