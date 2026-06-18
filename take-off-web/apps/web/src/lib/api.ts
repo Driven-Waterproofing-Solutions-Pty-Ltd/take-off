@@ -296,6 +296,25 @@ export const api = {
         `/api/memory/customers/search?q=${encodeURIComponent(q)}`
       ),
     listAssemblies: () => req('/api/memory/assemblies'),
+    // Methodology, rate cards, counting rule, product system, Pavilion
+    // Studio sheet conventions, FFE schedule expectations, worked examples
+    // — every piece of skill knowledge the in-app agent pulls before
+    // measuring. See migrations/0005_takeoff_knowledge.sql + the seed.
+    getTakeoffKnowledge: (params: { topic?: string; builder?: string } = {}) => {
+      const qs = new URLSearchParams();
+      if (params.topic) qs.set('topic', params.topic);
+      if (params.builder) qs.set('builder', params.builder);
+      const q = qs.toString();
+      return req<
+        Array<{
+          id: string;
+          topic: string;
+          title: string;
+          body_md: string;
+          builder: string | null;
+        }>
+      >(`/api/memory/takeoff-knowledge${q ? `?${q}` : ''}`);
+    },
     // Validated apply-assembly path — the server checks the assembly exists
     // before stamping its id onto the item. The agent must NOT route this
     // through api.items.update({ assembly_id }), which writes the id raw and

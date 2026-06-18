@@ -295,6 +295,14 @@ export async function executeAgentTool(
         return textResult(id, out);
       }
 
+      case 'get_takeoff_knowledge': {
+        const out = await api.memory.getTakeoffKnowledge({
+          topic: input.topic as string | undefined,
+          builder: input.builder as string | undefined,
+        });
+        return textResult(id, out);
+      }
+
       case 'apply_assembly': {
         // Route through the validated /api/memory/apply-assembly endpoint —
         // it checks the assembly row exists before stamping its id on the

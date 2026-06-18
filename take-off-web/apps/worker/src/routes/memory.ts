@@ -7,6 +7,7 @@ import {
   listAssemblies,
   applyAssembly,
   buildQuote,
+  getTakeoffKnowledge,
 } from '../tools/memory';
 import { requireAuth, requireAdmin } from '../lib/auth';
 
@@ -30,6 +31,15 @@ app.get('/customers/search', async (c) => {
 app.get('/assemblies', async (c) => {
   const tag = c.req.query('tag') ?? undefined;
   return c.json(await listAssemblies(c.env, { tag }));
+});
+
+// Topic-tagged markdown the agent pulls before measuring (methodology,
+// rate cards, counting rule, Pavilion Studio template, FFE conventions,
+// worked examples). See migrations/0005_takeoff_knowledge.sql.
+app.get('/takeoff-knowledge', async (c) => {
+  const topic = c.req.query('topic') ?? undefined;
+  const builder = c.req.query('builder') ?? undefined;
+  return c.json(await getTakeoffKnowledge(c.env, { topic, builder }));
 });
 
 // WRITES to the org-wide pricing catalog (assemblies / materials) flow into

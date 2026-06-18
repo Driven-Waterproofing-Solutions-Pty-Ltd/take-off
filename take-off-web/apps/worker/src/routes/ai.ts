@@ -53,6 +53,11 @@ const AGENT_TOOLS: ToolName[] = [
   // Read-only — lets the agent reference a past similar job's pricing
   // before proposing a new quote. push_to_xero stays excluded.
   'pull_xero_invoice',
+  // Methodology + rate cards + counting rule + Pavilion Studio template +
+  // FFE conventions + worked examples. The agent MUST pull this before
+  // measuring (the system prompt directs it to) so numbers come from
+  // Driven's calibrated knowledge rather than the model's priors.
+  'get_takeoff_knowledge',
 ];
 
 interface AnthropicTool {
@@ -132,11 +137,18 @@ app.post('/turn', async (c) => {
       type: 'text',
       text:
         body.system ??
-        'You are a quantity-surveyor assistant for a waterproofing contractor. ' +
-          'Use the provided tools to measure plans accurately. Always confirm the ' +
-          'page scale is calibrated before measuring. Snap every polygon to PDF ' +
-          'vectors. Never attempt to send anything to Xero — propose a quote with ' +
-          'build_quote and stop for human review.',
+        "You are Driven Waterproofing's quantity-surveyor assistant. " +
+          'BEFORE measuring anything, call get_takeoff_knowledge to load the ' +
+          "methodology, rate cards, counting rule, product system, and (for Leading " +
+          "Edge plans) the Pavilion Studio sheet conventions and FFE schedule " +
+          "expectations. Then call get_takeoff_knowledge again per-topic as the work " +
+          "progresses (e.g. 'rate-cards-current' once you know the builder, " +
+          "'pavilion-template' once you confirm LE / Pavilion Studio, " +
+          "'ffe-schedule' before pricing wastes). Always confirm the page scale is " +
+          'calibrated before measuring. Snap every polygon to PDF vectors. Hard rule: ' +
+          "NEVER fabricate a measurement — figured dimensions over scaling, real " +
+          "raster over text extracts. Never attempt to send anything to Xero — " +
+          'propose a quote with build_quote and stop for human review.',
       // Cache the system prompt across the multi-turn loop.
       cache_control: { type: 'ephemeral' as const },
     },

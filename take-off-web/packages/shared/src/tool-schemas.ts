@@ -258,6 +258,23 @@ export const tools = {
       })
     ),
   },
+  get_takeoff_knowledge: {
+    description:
+      "Fetch curated takeoff knowledge chunks from D1. Use this BEFORE measuring any plan — it returns the methodology rules (never fabricate a measurement; measure off figured dimensions; counting rule for fillets/junctions), the rate cards per builder, the product system (GCP Silcor + SAS PU25 fillet, +10% wastage), worked-example bands, the Pavilion Studio LE template (sheet 13/14 = wet area details), FFE schedule conventions (matte-black tile-insert wastes on LE jobs per Eliza Grace Interiors selections), and prior takeoff records. Filter by topic ('methodology' | 'counting-rule' | 'product-system' | 'plan-retrieval' | 'rate-cards-current' | 'rate-cards-legacy' | 'rate-cards-proposed' | 'labour-rates' | 'worked-examples' | 'pavilion-template' | 'ffe-schedule' | 'waste-finish' | 'takeoff-record') or by builder ('leading-edge'). Omit both filters for the full index.",
+    input: z.object({
+      topic: z.string().optional(),
+      builder: z.string().optional(),
+    }),
+    output: z.array(
+      z.object({
+        id: z.string(),
+        topic: z.string(),
+        title: z.string(),
+        body_md: z.string(),
+        builder: z.string().nullable(),
+      })
+    ),
+  },
   apply_assembly: {
     description: 'Attach an assembly to an item; line items flow into the quote.',
     input: z.object({

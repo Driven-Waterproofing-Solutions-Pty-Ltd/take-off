@@ -123,6 +123,44 @@ export async function recallCustomer(
   }));
 }
 
+export async function getTakeoffKnowledge(
+  env: Env,
+  args: { topic?: string; builder?: string }
+): Promise<
+  Array<{ id: string; topic: string; title: string; body_md: string; builder: string | null }>
+> {
+  // Topic-tagged markdown chunks the agent pulls at run time so the
+  // skill / methodology / rate cards / FFE conventions stop being
+  // Claude-Code-only and become first-class knowledge for the deployed
+  // in-app agent + every MCP client. Filters are AND-combined; omit both
+  // for the full index. Order by topic + title to keep ranking stable
+  // across runs (the agent typically reads top-down).
+  const where: string[] = [];
+  const binds: unknown[] = [];
+  if (args.topic) {
+    where.push('topic = ?');
+    binds.push(args.topic);
+  }
+  if (args.builder) {
+    where.push('builder = ?');
+    binds.push(args.builder);
+  }
+  const sql =
+    `SELECT id, topic, title, body_md, builder FROM takeoff_knowledge` +
+    (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
+    ` ORDER BY topic, title`;
+  const rows = await env.DB.prepare(sql)
+    .bind(...binds)
+    .all();
+  return rows.results.map((r) => ({
+    id: r.id as string,
+    topic: r.topic as string,
+    title: r.title as string,
+    body_md: r.body_md as string,
+    builder: (r.builder as string | null) ?? null,
+  }));
+}
+
 export async function listAssemblies(
   env: Env,
   args: { tag?: string }
