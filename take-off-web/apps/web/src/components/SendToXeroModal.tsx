@@ -69,9 +69,13 @@ const SendToXeroModal: React.FC<SendToXeroModalProps> = ({
   const [pushing, setPushing] = useState(false);
   const [pushed, setPushed] = useState<{ deep_link: string } | null>(null);
 
-  // Load the draft quote + any already-pushed docs when the modal opens.
+  // Two effects, intentionally split: data-fetch is keyed only on (open,
+  // projectId) so a parent re-render that bumps projectName/addToast can't
+  // wipe the user's mid-flow input and re-trigger the (now-bulked) Xero
+  // call. The reference-seed effect listens to projectName on open only.
   useEffect(() => {
     if (!open) return;
+    let cancelled = false;
     setQuote(null);
     setDocs([]);
     setMode('existing');
@@ -81,23 +85,55 @@ const SendToXeroModal: React.FC<SendToXeroModalProps> = ({
     setNewName('');
     setNewEmail('');
     setNewPhone('');
-    setReference(projectName ? `Take-off: ${projectName}` : '');
     setPushed(null);
+    setLoadingDocs(true);
 
     api.memory
       .quote(projectId)
-      .then(setQuote)
-      .catch(() => addToast('No quote to send yet — price some items first', 'error'));
+      .then((q) => {
+        if (!cancelled) setQuote(q);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        // 404 / empty-quote = "no quote built yet, go price items"; any other
+        // failure surfaces the real reason (auth, 5xx) so the user can act on it.
+        const msg = e instanceof Error ? e.message : String(e);
+        if (/404|not found|no quote/i.test(msg)) {
+          addToast('No quote to send yet — price some items first', 'error');
+        } else {
+          addToast(`Could not load quote: ${msg}`, 'error');
+        }
+      });
 
-    setLoadingDocs(true);
     api.xero
       .projectDocs(projectId)
-      .then((r) => setDocs(r.docs))
-      .catch(() => {
-        /* no docs / Xero not connected — non-fatal */
+      .then((r) => {
+        if (!cancelled) setDocs(r.docs);
       })
-      .finally(() => setLoadingDocs(false));
-  }, [open, projectId, projectName, addToast]);
+      .catch((e) => {
+        if (cancelled) return;
+        const msg = e instanceof Error ? e.message : String(e);
+        // 401/403 = unconnected / not allowed; 5xx = real outage. Either way
+        // tell the user instead of silently showing an empty 'Already in Xero'
+        // panel that looks like a clean project.
+        addToast(`Could not load Xero history: ${msg}`, 'info');
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingDocs(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, projectId, addToast]);
+
+  // Seed the Reference field with the project name on open (and on rename
+  // while the modal is open). User can edit / clear it; an explicit empty
+  // string is honoured by the server (the `verbatim send` change below).
+  useEffect(() => {
+    if (!open) return;
+    setReference(projectName ? `Take-off: ${projectName}` : '');
+  }, [open, projectName]);
 
   const search = async () => {
     if (!query.trim()) return;
@@ -137,7 +173,10 @@ const SendToXeroModal: React.FC<SendToXeroModalProps> = ({
     try {
       const contactId = await resolveContactId();
       if (!contactId) return;
-      const res = await api.xero.pushInvoice(projectId, contactId, reference.trim() || undefined);
+      // Send Reference verbatim — including an explicit empty string the user
+      // typed to clear it. The server only auto-fills `Take-off: <name>` when
+      // the field is OMITTED, not when it's an explicit empty string.
+      const res = await api.xero.pushInvoice(projectId, contactId, reference);
       setPushed({ deep_link: res.deep_link });
       addToast('DRAFT invoice created in Xero', 'success');
       // Refresh the docs list so the new draft shows immediately.
@@ -251,6 +290,7 @@ const SendToXeroModal: React.FC<SendToXeroModalProps> = ({
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     placeholder="Search Xero customers…"
+                    aria-label="Search Xero customers"
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') search();
                     }}
@@ -264,6 +304,7 @@ const SendToXeroModal: React.FC<SendToXeroModalProps> = ({
                     className="w-full text-sm border rounded px-2 py-2 bg-background"
                     value={selectedContactId ?? ''}
                     onChange={(e) => setSelectedContactId(e.target.value || null)}
+                    aria-label="Select Xero customer"
                   >
                     <option value="">Select customer…</option>
                     {results.map((c) => (
@@ -280,18 +321,21 @@ const SendToXeroModal: React.FC<SendToXeroModalProps> = ({
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   placeholder="Customer name (required)"
+                  aria-label="Customer name"
                   autoFocus
                 />
                 <Input
                   value={newEmail}
                   onChange={(e) => setNewEmail(e.target.value)}
                   placeholder="Email (optional)"
+                  aria-label="Customer email"
                   type="email"
                 />
                 <Input
                   value={newPhone}
                   onChange={(e) => setNewPhone(e.target.value)}
                   placeholder="Phone (optional)"
+                  aria-label="Customer phone"
                 />
                 <p className="text-[11px] text-muted-foreground">
                   We’ll match an existing Xero contact by name or email, or create one if there’s no
@@ -302,8 +346,11 @@ const SendToXeroModal: React.FC<SendToXeroModalProps> = ({
 
             {/* Reference */}
             <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">Reference (shown in Xero)</label>
+              <label htmlFor="xero-reference" className="text-xs text-muted-foreground">
+                Reference (shown in Xero)
+              </label>
               <Input
+                id="xero-reference"
                 value={reference}
                 onChange={(e) => setReference(e.target.value)}
                 placeholder="Take-off: …"

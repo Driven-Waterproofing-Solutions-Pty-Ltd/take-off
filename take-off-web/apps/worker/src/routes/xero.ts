@@ -9,7 +9,7 @@ import {
   findOrCreateXeroContact,
   listProjectXeroDocs,
 } from '../tools/xero';
-import { requireAuth, requireAdmin } from '../lib/auth';
+import { requireAuth, requireAdmin, requireSession } from '../lib/auth';
 import { encryptString, signOauthState, verifyOauthState } from '../lib/crypto';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -152,7 +152,13 @@ app.get('/oauth/callback', async (c) => {
   return c.redirect(c.env.APP_BASE_URL ?? '/');
 });
 
-app.post('/push', requireAuth, async (c) => {
+// Pushes/contact-create/project-docs use requireSession (browser-only) — they
+// mutate Driven's Xero books or expose invoice totals, and the agent paths
+// go through the MCP `push_to_xero` tool (which calls pushToXero directly),
+// not this REST route. /sync and /invoices/pull stay on requireAuth because
+// the MCP agent legitimately uses them to refresh contacts and reverse-
+// engineer prior quotes.
+app.post('/push', requireSession, async (c) => {
   const body = await c.req.json();
   const input = tools.push_to_xero.input.parse(body);
   return c.json(await pushToXero(c.env, input));
@@ -172,21 +178,20 @@ app.post('/invoices/pull', requireAuth, async (c) => {
 
 // Find an existing Xero contact (by name, then email) or create one, so a
 // brand-new customer can be invoiced without a manual Xero round-trip first.
-// REST-only — deliberately NOT in the agent tool registry; the human picks or
-// confirms the contact in the Send-to-Xero modal.
+// Browser-session only: the agent uses the existing customer-sync path.
 const findOrCreateContactZ = z.object({
   name: z.string().min(1),
   email: z.string().optional(),
   phone: z.string().optional(),
 });
-app.post('/contacts/find-or-create', requireAuth, async (c) => {
+app.post('/contacts/find-or-create', requireSession, async (c) => {
   const input = findOrCreateContactZ.parse(await c.req.json());
   return c.json(await findOrCreateXeroContact(c.env, input));
 });
 
-// List the Xero docs already pushed for a project, with live invoice status.
+// List the Xero docs already pushed for a project, with live status.
 const projectDocsZ = z.object({ project_id: z.string().min(1) });
-app.post('/project-docs', requireAuth, async (c) => {
+app.post('/project-docs', requireSession, async (c) => {
   const input = projectDocsZ.parse(await c.req.json());
   return c.json(await listProjectXeroDocs(c.env, input));
 });

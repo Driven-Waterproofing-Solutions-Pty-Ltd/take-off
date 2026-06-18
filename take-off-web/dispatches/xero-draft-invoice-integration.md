@@ -1,61 +1,87 @@
 # Xero draft-invoice integration — scope & plan
 
-**Status:** Phase A + Phase B BUILT (this branch). Phase C (webhooks) deferred. Live smoke test pending user go-ahead.
+**Status:** Phase A + B BUILT, code-review fixes BUILT (15 findings actioned). Phase C (webhooks) deferred. Live smoke test pending user go-ahead.
 **Audience:** Driven Waterproofing Solutions operator + future implementer.
-**Mission in one sentence:** Polish the existing-but-buried Xero draft-invoice path so producing a priced quote in the take-off app and creating a reviewed draft invoice in Xero is a single, reliable, observable action — and fix a latent AU GST tax-code bug while we're there.
+**Mission in one sentence:** Polish the existing-but-buried Xero draft-invoice path so producing a priced quote in the take-off app and creating a reviewed draft invoice in Xero is a single, reliable, observable action — and do it correctly.
 
 ---
 
-## ✅ Implementation status (built on this branch)
+## ✅ Implementation status
 
-**Phase A — bug fix + reliability (DONE):**
-- `apps/worker/migrations/0006_xero_org_config.sql` — per-tenant cache of the
-  resolved GST tax code + sales account.
-- `apps/worker/src/tools/xero.ts`:
-  - `resolveOrgConfig()` reads `/TaxRates` and picks the active GST-on-income
-    rate (OUTPUT2 on modern AU orgs), replacing the hardcoded `TaxType:'OUTPUT'`.
-    Cached 7 days, defensive against a missing table, falls back to `OUTPUT`
-    on any error so a push never hard-breaks.
-  - `Idempotency-Key` header on both Quote and Invoice POSTs — deterministic
-    per project+payload, so a retried push replays Xero's stored result instead
-    of duplicating a draft.
-  - `Reference` now defaults to `Take-off: <project name>` so drafts are
-    findable in Xero.
-  - Account code now read from config (defaults to `200`).
+The original Phase A+B work shipped, then an xhigh-effort code review surfaced
+**15 ranked findings** (≈8 high-impact) plus a deep Xero-API research pass that
+collapsed two whole bug-clusters into deletions. The fix PR is built and green;
+the dispatch below reflects the **current state**.
 
-**Phase B — surface + new-customer + status (DONE):**
-- `apps/worker/src/tools/xero.ts`:
-  - `findOrCreateXeroContact()` — match by name → email → create; persists the
-    ContactID to `customers`.
-  - `listProjectXeroDocs()` — lists pushed docs with **live invoice status**,
-    and repairs the previously-dead `past_quotes.accepted` flag.
-- `apps/worker/src/routes/xero.ts` — `POST /xero/contacts/find-or-create`,
-  `POST /xero/project-docs` (REST-only, inline zod, NOT added to the agent tool
-  registry).
-- `apps/web/src/lib/api.ts` — `api.xero.findOrCreateContact`, `api.xero.projectDocs`.
-- `apps/web/src/components/SendToXeroModal.tsx` — new. Quote summary, existing-vs-new
-  customer toggle, find-or-create, editable Reference, live status of prior docs,
-  deep link on success.
-- `apps/web/src/components/EstimatesView.tsx` — prominent **"Send to Xero"**
-  button on the priced view (next to Export to Excel); renders the modal.
-- `apps/web/src/App.tsx` — passes `projectId` + `projectName` to EstimatesView.
+**Worker — `apps/worker/src/tools/xero.ts`:**
+- **Tax-code machinery deleted.** No `resolveOrgConfig`, no `/TaxRates` lookup,
+  no `pickGstOnIncome` regex, no `xero_org_config` table. Line items now omit
+  `TaxType`; Xero applies the rate configured on the `AccountCode` (Sales
+  account — set by Driven's accountant). Authoritative source of truth,
+  zero failure modes.
+- **AU-local dates** (`auDateString`) — Invoice Date / DueDate computed in
+  Australia/Sydney via `Intl.DateTimeFormat('en-CA', {timeZone})`. No more
+  off-by-one when pushing at AU evening.
+- **Stable idempotency key** (`buildIdempotencyKey`) — hashes only rounded
+  logical fields (description + cents + qty), sorted, includes `reference`.
+  An identical retry replays Xero's stored draft; a Reference edit mints a
+  fresh key. Uses the shared `sha256Hex` from `lib/crypto`.
+- **Bulk live status** (`listProjectXeroDocs`) — one
+  `GET /Invoices?IDs=<csv>&summaryOnly=true` + one `GET /Quotes?QuoteIDs=<csv>`
+  in parallel, replacing the prior N-iteration serial loop. Three subrequests
+  worst case (was up to ~60, breaching CF Workers' 50-subrequest budget).
+  Token fetched once. `accepted` flag corrected per row: AUTHORISED/PAID for
+  Invoices, ACCEPTED/INVOICED for Quotes (SUBMITTED is Xero's internal
+  awaiting-approval — never customer-accepted). Status-fetch failures leave
+  the existing flag alone (no overwriting known-good with a transient blip).
+- **`findOrCreateXeroContact` overhaul** — `AND` not `&&` in the email-fallback
+  where-clause (Xero's documented operator; `&&` silently ignored the filter
+  and returned the wrong contact); `tryMatch` throws on non-2xx (transient
+  429/5xx no longer cascades into duplicate CREATE); `Idempotency-Key` on
+  POST /Contacts (double-click race collapses to one contact); local row-claim
+  logic (attach to an existing unlinked customer row rather than fork
+  `customers.id` history); persists CANONICAL `match.Name` (no name clobber).
+- **`xeroHeaders` spread order** — `extra` first, well-known headers last
+  (caller can't accidentally override Authorization).
+- **`xeroDeepLink(kind, id)` helper** — single source of truth for the deep
+  link URLs (QUOTE → modern `/app/quotes/view/<id>`; INVOICE → documented
+  legacy `AccountsReceivable/Edit.aspx`).
 
-Both `@takeoff/worker` and `@takeoff/web` typecheck clean; the production web
-build passes.
+**Worker — `apps/worker/src/lib/auth.ts` + `routes/xero.ts`:**
+- New `requireSession` middleware: any logged-in browser session passes;
+  server-to-server MCP/API tokens get 403. Applied to `/xero/push`,
+  `/xero/contacts/find-or-create`, `/xero/project-docs`. (The MCP `push_to_xero`
+  tool calls `pushToXero()` directly via `mcp/server.ts`; the agent surface is
+  unaffected. `/xero/sync` and `/xero/invoices/pull` stay on `requireAuth` —
+  legitimately used by the agent.)
+
+**Web — `apps/web/src/components/SendToXeroModal.tsx`:**
+- Effect split: data-fetch keyed on `(open, projectId)`; reference-seed keyed
+  on `(open, projectName)`. A project rename mid-flow no longer wipes typed
+  state or re-fires the Xero call.
+- Cancellation flag — stale promise resolutions can't overwrite fresh state.
+- Honest errors — quote-fetch failure shows the real message (only the
+  "price some items first" toast on a 404/empty-quote); docs-fetch failure
+  surfaces a real message instead of silently rendering empty.
+- Reference sent VERBATIM (including empty string) so a deliberately-cleared
+  field is honoured.
+- A11y — `aria-label` on each `Input`; `<label htmlFor>` on Reference.
+
+Both packages typecheck clean; the production web build passes.
 
 **⚠️ Before this deploys to prod:**
-1. **Apply migration 0006** to the remote D1:
-   `cd apps/worker && pnpm migrate:remote` (Workers Builds does NOT auto-run
-   migrations). The code is defensive if you forget — it falls back to live
-   lookup without caching — but the cache table should exist.
-2. **Live smoke test needs your OK.** I did NOT push any real invoice to
-   Driven's Xero org (that creates a real draft in your books). When you're
-   ready, create one $1 test draft, verify the GST line shows the correct tax
-   code, then void it. See "Test plan" below.
+- **Live smoke test needs your OK.** No real invoice has been pushed to
+  Driven's Xero org. When ready: create one $1 test draft, confirm Xero
+  applied the Sales-account tax rate correctly (it should — that's Xero's
+  configured default), confirm the Reference reads `Take-off: <project>`,
+  then void it.
+- **No new migrations** — the original `0006_xero_org_config.sql` was deleted
+  (never applied to remote D1; the tax-resolution machinery it backed is
+  gone). The remote schema is unchanged from the pre-Xero state.
 
-**Phase C (webhooks) — deferred.** Needs a Xero developer-portal webhook config
-+ a new `XERO_WEBHOOK_KEY` secret (both manual steps only you can do). Phase B's
-pull-on-open already shows live status, so this is pure proactive-update polish.
+**Phase C (webhooks) — deferred.** Bulk-fetch-on-open is already cheap
+(3 subrequests) and surfaces fresh status. Webhooks become worthwhile when we
+want push-driven status updates across all projects without a modal open.
 
 ## TL;DR
 

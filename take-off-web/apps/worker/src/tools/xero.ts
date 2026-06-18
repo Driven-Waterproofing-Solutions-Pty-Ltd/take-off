@@ -1,6 +1,6 @@
 import type { Env } from '../env';
 import { buildQuote } from './memory';
-import { encryptString, decryptString } from '../lib/crypto';
+import { encryptString, decryptString, sha256Hex } from '../lib/crypto';
 
 interface XeroTokenRow {
   tenant_id: string;
@@ -85,27 +85,28 @@ async function refreshXeroToken(
 }
 
 const XERO_API = 'https://api.xero.com/api.xro/2.0';
-const ORG_CONFIG_TTL_MS = 7 * 86_400_000;
-const DEFAULT_TAX_TYPE = 'OUTPUT';
-const DEFAULT_ACCOUNT_CODE = '200';
 
+// Default Sales account in Xero's standard AU chart of accounts. The account
+// itself carries a default tax rate (set by Driven's accountant on the
+// account — typically "GST on Income" 10%), and we deliberately do NOT set
+// TaxType on LineItems so Xero applies that account-level default. This
+// replaces an earlier attempt that hardcoded TaxType:'OUTPUT', which silently
+// mis-recorded GST on modern AU orgs whose code is OUTPUT2 — the account's
+// configured rate is the authoritative source of truth.
+const SALES_ACCOUNT_CODE = '200';
+
+// `extra` first, well-known headers last: a caller cannot accidentally
+// override Authorization / xero-tenant-id / Accept via the extra map.
 function xeroHeaders(
   token: DecryptedXeroToken,
   extra?: Record<string, string>
 ): Record<string, string> {
   return {
+    ...extra,
     Authorization: `Bearer ${token.access_token}`,
     'xero-tenant-id': token.tenant_id,
     Accept: 'application/json',
-    ...extra,
   };
-}
-
-async function sha256Hex(input: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
 }
 
 // Xero's filter strings are wrapped in double quotes; a literal quote or
@@ -114,96 +115,62 @@ function escapeXeroString(s: string): string {
   return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-interface XeroTaxRate {
-  Name?: string;
-  TaxType?: string;
-  Status?: string;
-  CanApplyToRevenue?: boolean;
+// Format `at` as YYYY-MM-DD in Australia/Sydney (handles AEST/AEDT switch).
+// Xero treats invoice Date / DueDate as local org dates; using the UTC date
+// for an evening AU push would book the invoice a day early.
+function auDateString(at: number = Date.now()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Australia/Sydney',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(at));
 }
 
-// Pick the tax code to stamp on ACCREC lines for 10% GST on income. Priority:
-// an explicit "GST on Income" name, then OUTPUT2 (current AU code), then the
-// legacy OUTPUT — all restricted to ACTIVE, revenue-applicable rates. Returns
-// null if nothing qualifies so the caller can fall back without caching it.
-function pickGstOnIncome(rates: XeroTaxRate[]): XeroTaxRate | null {
-  const candidates = rates.filter(
-    (r) => (r.Status ?? 'ACTIVE') === 'ACTIVE' && r.CanApplyToRevenue !== false && !!r.TaxType
-  );
-  return (
-    candidates.find((r) => /gst on income/i.test(r.Name ?? '')) ??
-    candidates.find((r) => r.TaxType === 'OUTPUT2') ??
-    candidates.find((r) => r.TaxType === 'OUTPUT') ??
-    null
-  );
+// Single source of truth for "open this Xero doc in Xero". QUOTE uses the
+// modern /app SPA route; INVOICE keeps the documented legacy
+// AccountsReceivable URL (the only form known to resolve every ACCREC UUID).
+function xeroDeepLink(kind: 'QUOTE' | 'INVOICE', xeroId: string): string {
+  return kind === 'QUOTE'
+    ? `https://go.xero.com/app/quotes/view/${xeroId}`
+    : `https://go.xero.com/AccountsReceivable/Edit.aspx?InvoiceID=${xeroId}`;
 }
 
-interface OrgConfig {
-  taxType: string;
-  accountCode: string;
-}
-
-// Resolve the GST tax code + sales account for the active tenant, caching the
-// tax code in xero_org_config. Replaces the old hardcoded TaxType:'OUTPUT' /
-// AccountCode:'200' — see migration 0006. On any lookup failure we fall back
-// to the legacy defaults (and do NOT cache) so pushing never hard-breaks on a
-// transient TaxRates error, but a healthy org self-corrects to OUTPUT2.
-async function resolveOrgConfig(env: Env, token: DecryptedXeroToken): Promise<OrgConfig> {
-  // Read the cache defensively: if migration 0006 hasn't been applied yet
-  // (Workers Builds deploys but doesn't auto-run migrations), a missing table
-  // must not break pushing — we just fall through to the live lookup.
-  type OrgConfigRow = {
-    gst_output_tax_type: string | null;
-    sales_account_code: string | null;
-    resolved_at: number | null;
+// Deterministic key for Xero's Idempotency-Key header. A replay of the exact
+// same logical push (e.g. after a dropped response) hits Xero's stored result
+// instead of creating a duplicate draft. We hash only fields that survive a
+// retry intact:
+//   * LOGICAL line shape — description + qty + unitPrice, rounded so FP drift
+//     in buildQuote can't mint a new key for the same logical quote
+//   * sorted by description so re-ordering doesn't change the hash
+//   * explicit reference (so a "send, edit Reference, retry" submits a fresh
+//     key — the earlier behaviour silently replayed the stale Reference)
+// We deliberately exclude server-resolved fields (tax type, account code,
+// date) so a transient resolution blip between attempts can't break retry
+// safety. Comfortably under Xero's 128-char limit.
+async function buildIdempotencyKey(args: {
+  kind: 'QUOTE' | 'INVOICE';
+  project_id: string;
+  customer_xero_id: string;
+  reference: string | undefined;
+  lines: Array<{ description: string; qty: number; unitPrice: number }>;
+  total: number;
+}): Promise<string> {
+  const stableShape = {
+    kind: args.kind,
+    contact: args.customer_xero_id,
+    reference: args.reference ?? '',
+    total_cents: Math.round(args.total * 100),
+    lines: args.lines
+      .map((l) => ({
+        d: l.description,
+        q: Math.round(l.qty * 1000),
+        p_cents: Math.round(l.unitPrice * 100),
+      }))
+      .sort((a, b) => a.d.localeCompare(b.d) || a.q - b.q),
   };
-  let row: OrgConfigRow | null = null;
-  try {
-    row = (await env.DB.prepare(
-      'SELECT gst_output_tax_type, sales_account_code, resolved_at FROM xero_org_config WHERE tenant_id = ?'
-    )
-      .bind(token.tenant_id)
-      .first()) as OrgConfigRow | null;
-  } catch (err) {
-    console.warn('xero_org_config read failed (migration not applied?)', err);
-  }
-
-  const accountCode = row?.sales_account_code ?? DEFAULT_ACCOUNT_CODE;
-
-  if (row?.gst_output_tax_type && row.resolved_at && Date.now() - row.resolved_at < ORG_CONFIG_TTL_MS) {
-    return { taxType: row.gst_output_tax_type, accountCode };
-  }
-
-  try {
-    const res = await fetch(`${XERO_API}/TaxRates`, { headers: xeroHeaders(token) });
-    if (res.ok) {
-      const json = (await res.json()) as { TaxRates?: XeroTaxRate[] };
-      const rate = pickGstOnIncome(json.TaxRates ?? []);
-      if (rate?.TaxType) {
-        // Best-effort cache write — never let a cache failure break the push.
-        try {
-          await env.DB.prepare(
-            `INSERT INTO xero_org_config (tenant_id, gst_output_tax_type, sales_account_code, resolved_at)
-             VALUES (?, ?, ?, ?)
-             ON CONFLICT(tenant_id) DO UPDATE SET
-               gst_output_tax_type = excluded.gst_output_tax_type,
-               resolved_at = excluded.resolved_at`
-          )
-            .bind(token.tenant_id, rate.TaxType, row?.sales_account_code ?? null, Date.now())
-            .run();
-        } catch (err) {
-          console.warn('xero_org_config write failed (migration not applied?)', err);
-        }
-        return { taxType: rate.TaxType, accountCode };
-      }
-      console.warn('Xero TaxRates returned no usable GST-on-income rate; using', DEFAULT_TAX_TYPE);
-    } else {
-      console.warn('Xero TaxRates fetch failed', res.status, '- using', DEFAULT_TAX_TYPE);
-    }
-  } catch (err) {
-    console.warn('Xero TaxRates lookup error', err, '- using', DEFAULT_TAX_TYPE);
-  }
-
-  return { taxType: row?.gst_output_tax_type ?? DEFAULT_TAX_TYPE, accountCode };
+  const digest = (await sha256Hex(JSON.stringify(stableShape))).slice(0, 24);
+  return `takeoff-${args.kind.toLowerCase()}-${args.project_id}-${digest}`;
 }
 
 async function defaultReference(env: Env, projectId: string): Promise<string | undefined> {
@@ -217,84 +184,161 @@ async function defaultReference(env: Env, projectId: string): Promise<string | u
 // matches. Persists the resolved ContactID into `customers` so future pushes
 // and the customer picker use it directly instead of waiting for the nightly
 // sync. Lets a brand-new customer be invoiced without a manual Xero round-trip.
+//
+// Anti-footgun details, each motivated by a code-review finding on the
+// pre-fix implementation:
+//   * Email-fallback `where` uses Xero's documented `AND` operator (with
+//     spaces). The earlier `&&` form was silently ignored: Xero returned the
+//     first contact in the org and we'd link the local row to whoever that
+//     happened to be.
+//   * `tryMatch` re-throws on non-2xx — a transient 429/5xx is NOT a "no
+//     match", so we don't cascade into a duplicate-contact CREATE.
+//   * POST /Contacts carries an Idempotency-Key derived from the normalised
+//     (name, email). A double-click / two-tab race replays Xero's stored
+//     contact instead of creating two with the same Name.
+//   * Before INSERTing locally, attach to an existing unlinked row matching
+//     the name (case-insensitive) rather than creating a parallel
+//     `customers` row that splits history across two ids.
+//   * On a Xero match we persist the CANONICAL Name returned by Xero; we
+//     never clobber an existing local name with the user's just-typed string.
 export async function findOrCreateXeroContact(
   env: Env,
   args: { name: string; email?: string; phone?: string }
 ): Promise<{ contact_id: string; name: string; created: boolean }> {
   const name = args.name?.trim();
   if (!name) throw new Error('Customer name is required');
+  const email = args.email?.trim() || undefined;
+  const phone = args.phone?.trim() || undefined;
   const token = await getActiveXeroToken(env);
 
   const tryMatch = async (where: string): Promise<{ ContactID: string; Name: string } | null> => {
     const res = await fetch(`${XERO_API}/Contacts?where=${encodeURIComponent(where)}`, {
       headers: xeroHeaders(token),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      // Re-throw rather than silently treating an upstream error as "no match"
+      // — otherwise a transient 429/5xx cascades into a duplicate CREATE.
+      throw new Error(`Xero Contacts lookup failed: ${res.status} ${await res.text()}`);
+    }
     const json = (await res.json()) as { Contacts?: Array<{ ContactID: string; Name: string }> };
     return json.Contacts?.[0] ?? null;
   };
 
   let match = await tryMatch(`Name=="${escapeXeroString(name)}"`);
-  if (!match && args.email?.trim()) {
-    match = await tryMatch(
-      `EmailAddress!=null&&EmailAddress=="${escapeXeroString(args.email.trim())}"`
-    );
+  if (!match && email) {
+    match = await tryMatch(`EmailAddress!=null AND EmailAddress=="${escapeXeroString(email)}"`);
   }
 
   let contactId: string;
+  let canonicalName: string;
   let created = false;
   if (match) {
     contactId = match.ContactID;
+    canonicalName = match.Name;
   } else {
     const body = {
       Contacts: [
         {
           Name: name,
-          ...(args.email?.trim() ? { EmailAddress: args.email.trim() } : {}),
-          ...(args.phone?.trim()
-            ? { Phones: [{ PhoneType: 'DEFAULT', PhoneNumber: args.phone.trim() }] }
-            : {}),
+          ...(email ? { EmailAddress: email } : {}),
+          ...(phone ? { Phones: [{ PhoneType: 'DEFAULT', PhoneNumber: phone }] } : {}),
         },
       ],
     };
+    // Keyed on the normalised (name, email) so a double-click / two-tab race
+    // collapses to a single Xero contact. Different name+email = fresh key.
+    const idempotencyKey = `takeoff-contact-${(
+      await sha256Hex(name.toLowerCase() + '|' + (email ?? ''))
+    ).slice(0, 32)}`;
     const res = await fetch(`${XERO_API}/Contacts`, {
       method: 'POST',
-      headers: xeroHeaders(token, { 'Content-Type': 'application/json' }),
+      headers: xeroHeaders(token, {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': idempotencyKey,
+      }),
       body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`Xero Contact create failed: ${res.status} ${await res.text()}`);
     const json = (await res.json()) as { Contacts: Array<{ ContactID: string; Name: string }> };
     contactId = json.Contacts[0].ContactID;
+    canonicalName = json.Contacts[0].Name;
     created = true;
   }
 
-  await env.DB.prepare(
-    `INSERT INTO customers (id, xero_contact_id, xero_tenant_id, name, email, phone, last_synced_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(xero_contact_id) DO UPDATE SET
-       xero_tenant_id = excluded.xero_tenant_id,
-       name = excluded.name,
-       email = COALESCE(excluded.email, customers.email),
-       phone = COALESCE(excluded.phone, customers.phone),
-       last_synced_at = excluded.last_synced_at`
+  // Local persistence: attach to an already-linked row (nightly sync) or to an
+  // unlinked-by-name row (manually-added customer) before falling back to a
+  // fresh INSERT. Preserves customers.id so past_quotes.customer_id history
+  // doesn't fork across two parallel rows for the same human customer.
+  const linkedRow = (await env.DB.prepare(
+    'SELECT id FROM customers WHERE xero_contact_id = ?'
   )
-    .bind(
-      crypto.randomUUID(),
-      contactId,
-      token.tenant_id,
-      match?.Name ?? name,
-      args.email?.trim() ?? null,
-      args.phone?.trim() ?? null,
-      Date.now()
-    )
-    .run();
+    .bind(contactId)
+    .first()) as { id: string } | null;
 
-  return { contact_id: contactId, name: match?.Name ?? name, created };
+  if (linkedRow) {
+    await env.DB.prepare(
+      `UPDATE customers
+       SET xero_tenant_id = ?,
+           name = ?,
+           email = COALESCE(?, email),
+           phone = COALESCE(?, phone),
+           last_synced_at = ?
+       WHERE id = ?`
+    )
+      .bind(token.tenant_id, canonicalName, email ?? null, phone ?? null, Date.now(), linkedRow.id)
+      .run();
+  } else {
+    const unlinkedRow = (await env.DB.prepare(
+      'SELECT id FROM customers WHERE xero_contact_id IS NULL AND lower(name) = lower(?) LIMIT 1'
+    )
+      .bind(name)
+      .first()) as { id: string } | null;
+
+    if (unlinkedRow) {
+      await env.DB.prepare(
+        `UPDATE customers
+         SET xero_contact_id = ?,
+             xero_tenant_id = ?,
+             email = COALESCE(?, email),
+             phone = COALESCE(?, phone),
+             last_synced_at = ?
+         WHERE id = ?`
+      )
+        .bind(contactId, token.tenant_id, email ?? null, phone ?? null, Date.now(), unlinkedRow.id)
+        .run();
+    } else {
+      await env.DB.prepare(
+        `INSERT INTO customers (id, xero_contact_id, xero_tenant_id, name, email, phone, last_synced_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      )
+        .bind(
+          crypto.randomUUID(),
+          contactId,
+          token.tenant_id,
+          canonicalName,
+          email ?? null,
+          phone ?? null,
+          Date.now()
+        )
+        .run();
+    }
+  }
+
+  return { contact_id: contactId, name: canonicalName, created };
 }
 
-// List the Xero documents already pushed for a project, with live invoice
-// status pulled from Xero. Also repairs the previously-dead past_quotes.accepted
-// flag so the UI can show which drafts the user has since approved in Xero.
+// List the Xero documents already pushed for a project, with live status
+// pulled via a SINGLE bulk fetch per kind. Replaces an earlier per-row loop
+// that issued up to ~60 subrequests per modal open (one token re-fetch and
+// one /Invoices/{id} call per row, ×20 rows), which exceeded Cloudflare
+// Workers' default 50-subrequest budget on any project with ~17+ pushes.
+//
+// Also corrects `past_quotes.accepted` from authoritative Xero state on each
+// open: AUTHORISED/PAID for Invoices, ACCEPTED/INVOICED for Quotes. (SUBMITTED
+// is Xero's internal "awaiting approval" stage, NOT customer-accepted — the
+// earlier code conflated them.) Status-fetch failures leave the existing
+// accepted flag untouched, so a transient Xero blip can't overwrite a known-
+// good value.
 export async function listProjectXeroDocs(
   env: Env,
   args: { project_id: string }
@@ -325,7 +369,54 @@ export async function listProjectXeroDocs(
     created_at: number;
   }>;
 
-  const docs = [] as Array<{
+  if (rows.length === 0) return { docs: [] };
+
+  const invoiceIds = rows.filter((r) => r.kind === 'INVOICE').map((r) => r.xero_id);
+  const quoteIds = rows.filter((r) => r.kind === 'QUOTE').map((r) => r.xero_id);
+
+  // Fetch token once, then in parallel run at most ONE Invoices and ONE Quotes
+  // bulk GET. Three subrequests worst case, regardless of row count.
+  const token = await getActiveXeroToken(env);
+  const statusByXeroId = new Map<string, string>();
+
+  await Promise.all([
+    (async () => {
+      if (invoiceIds.length === 0) return;
+      try {
+        const url = `${XERO_API}/Invoices?IDs=${invoiceIds.join(',')}&summaryOnly=true`;
+        const res = await fetch(url, { headers: xeroHeaders(token) });
+        if (!res.ok) {
+          console.warn('Xero bulk Invoices fetch failed', res.status);
+          return;
+        }
+        const json = (await res.json()) as {
+          Invoices?: Array<{ InvoiceID: string; Status: string }>;
+        };
+        for (const inv of json.Invoices ?? []) statusByXeroId.set(inv.InvoiceID, inv.Status);
+      } catch (err) {
+        console.warn('Xero bulk Invoices lookup error', err);
+      }
+    })(),
+    (async () => {
+      if (quoteIds.length === 0) return;
+      try {
+        const url = `${XERO_API}/Quotes?QuoteIDs=${quoteIds.join(',')}`;
+        const res = await fetch(url, { headers: xeroHeaders(token) });
+        if (!res.ok) {
+          console.warn('Xero bulk Quotes fetch failed', res.status);
+          return;
+        }
+        const json = (await res.json()) as {
+          Quotes?: Array<{ QuoteID: string; Status: string }>;
+        };
+        for (const q of json.Quotes ?? []) statusByXeroId.set(q.QuoteID, q.Status);
+      } catch (err) {
+        console.warn('Xero bulk Quotes lookup error', err);
+      }
+    })(),
+  ]);
+
+  const docs: Array<{
     id: string;
     kind: string;
     xero_id: string;
@@ -333,29 +424,11 @@ export async function listProjectXeroDocs(
     created_at: number;
     status: string | null;
     deep_link: string;
-  }>;
+  }> = [];
+  const updates: ReturnType<typeof env.DB.prepare>[] = [];
+
   for (const r of rows) {
-    let status: string | null = null;
-    let deepLink =
-      r.kind === 'QUOTE'
-        ? `https://go.xero.com/app/quotes/edit/${r.xero_id}`
-        : `https://go.xero.com/AccountsReceivable/Edit.aspx?InvoiceID=${r.xero_id}`;
-    if (r.kind === 'INVOICE') {
-      try {
-        const inv = await pullXeroInvoice(env, { invoice_id: r.xero_id });
-        status = inv.status;
-        deepLink = inv.deep_link;
-        const accepted = ['AUTHORISED', 'PAID', 'SUBMITTED'].includes(inv.status.toUpperCase())
-          ? 1
-          : 0;
-        await env.DB.prepare('UPDATE past_quotes SET accepted = ? WHERE id = ?')
-          .bind(accepted, r.id)
-          .run();
-      } catch {
-        // Invoice deleted/voided in Xero, or a transient fetch error.
-        status = 'UNKNOWN';
-      }
-    }
+    const status = statusByXeroId.get(r.xero_id) ?? null;
     docs.push({
       id: r.id,
       kind: r.kind,
@@ -363,9 +436,41 @@ export async function listProjectXeroDocs(
       total: r.total,
       created_at: r.created_at,
       status,
-      deep_link: deepLink,
+      deep_link: xeroDeepLink(r.kind as 'QUOTE' | 'INVOICE', r.xero_id),
     });
+
+    // Only sync `accepted` when Xero gave us ground truth; a missing status
+    // (failed fetch / deleted in Xero) MUST leave the flag alone, otherwise a
+    // transient blip overwrites a known-good value.
+    if (!status) continue;
+    const s = status.toUpperCase();
+    const accepted =
+      r.kind === 'INVOICE'
+        ? s === 'AUTHORISED' || s === 'PAID'
+          ? 1
+          : 0
+        : s === 'ACCEPTED' || s === 'INVOICED'
+          ? 1
+          : 0;
+    // `accepted IS NOT ?` skips the write when the row already matches, so
+    // 20 unchanged rows cost zero D1 writes.
+    updates.push(
+      env.DB.prepare('UPDATE past_quotes SET accepted = ? WHERE id = ? AND accepted IS NOT ?').bind(
+        accepted,
+        r.id,
+        accepted
+      )
+    );
   }
+
+  if (updates.length > 0) {
+    try {
+      await env.DB.batch(updates);
+    } catch (err) {
+      console.warn('past_quotes accepted batch update failed', err);
+    }
+  }
+
   return { docs };
 }
 
@@ -380,30 +485,35 @@ export async function pushToXero(
 ): Promise<{ xero_id: string; deep_link: string }> {
   const token = await getActiveXeroToken(env);
   const quote = await buildQuote(env, args.project_id);
-  const orgConfig = await resolveOrgConfig(env, token);
+  // Server-side default; the modal sends the user-edited reference verbatim
+  // (including an explicit empty string), so this only fires for callers that
+  // omitted the field entirely (e.g. the agent path).
   const reference = args.reference ?? (await defaultReference(env, args.project_id));
 
+  // LineItems carry NO TaxType: Xero applies the AccountCode's configured
+  // default tax rate (set on the Sales account by Driven's accountant), which
+  // is the authoritative source of truth and avoids us guessing OUTPUT vs
+  // OUTPUT2 — both the bug the original code had and the bug a regex-based
+  // /TaxRates lookup would still risk.
   const lineItems = quote.lines.map((l) => ({
     Description: l.description,
     Quantity: l.qty,
     UnitAmount: l.unitPrice,
-    AccountCode: orgConfig.accountCode,
-    TaxType: orgConfig.taxType,
+    AccountCode: SALES_ACCOUNT_CODE,
   }));
 
-  // Deterministic per project + payload: a retry of the same logical push
-  // (e.g. after a dropped response) replays Xero's stored result instead of
-  // creating a duplicate draft; a genuinely changed quote gets a fresh key.
-  const idempotencyKey = `takeoff-${args.kind.toLowerCase()}-${args.project_id}-${(
-    await sha256Hex(
-      JSON.stringify({
-        kind: args.kind,
-        contact: args.customer_xero_id,
-        lines: lineItems,
-        total: quote.total,
-      })
-    )
-  ).slice(0, 24)}`;
+  const idempotencyKey = await buildIdempotencyKey({
+    kind: args.kind,
+    project_id: args.project_id,
+    customer_xero_id: args.customer_xero_id,
+    reference,
+    lines: quote.lines.map((l) => ({
+      description: l.description,
+      qty: l.qty,
+      unitPrice: l.unitPrice,
+    })),
+    total: quote.total,
+  });
 
   // Refuse to push to a ContactID that belongs to a different Xero tenant
   // than the one the OAuth token is currently bound to — otherwise a stale
@@ -420,27 +530,27 @@ export async function pushToXero(
     );
   }
 
+  const today = auDateString();
+  const headers = xeroHeaders(token, {
+    'Content-Type': 'application/json',
+    'Idempotency-Key': idempotencyKey,
+  });
+
   if (args.kind === 'QUOTE') {
     const body = {
       Quotes: [
         {
           Contact: { ContactID: args.customer_xero_id },
-          Date: new Date().toISOString().split('T')[0],
+          Date: today,
           LineItems: lineItems,
           Status: 'DRAFT' as const,
           Reference: reference,
         },
       ],
     };
-    const res = await fetch('https://api.xero.com/api.xro/2.0/Quotes', {
+    const res = await fetch(`${XERO_API}/Quotes`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token.access_token}`,
-        'xero-tenant-id': token.tenant_id,
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        'Idempotency-Key': idempotencyKey,
-      },
+      headers,
       body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`Xero Quote create failed: ${res.status} ${await res.text()}`);
@@ -460,57 +570,45 @@ export async function pushToXero(
         Date.now()
       )
       .run();
-    return {
-      xero_id: xeroId,
-      deep_link: `https://go.xero.com/app/quotes/edit/${xeroId}`,
-    };
-  } else {
-    const body = {
-      Invoices: [
-        {
-          Type: 'ACCREC',
-          Contact: { ContactID: args.customer_xero_id },
-          Date: new Date().toISOString().split('T')[0],
-          DueDate: new Date(Date.now() + 14 * 86400_000).toISOString().split('T')[0],
-          LineItems: lineItems,
-          Status: 'DRAFT' as const,
-          Reference: reference,
-        },
-      ],
-    };
-    const res = await fetch('https://api.xero.com/api.xro/2.0/Invoices', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token.access_token}`,
-        'xero-tenant-id': token.tenant_id,
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        'Idempotency-Key': idempotencyKey,
-      },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`Xero Invoice create failed: ${res.status} ${await res.text()}`);
-    const json = (await res.json()) as { Invoices: Array<{ InvoiceID: string }> };
-    const xeroId = json.Invoices[0].InvoiceID;
-    await env.DB.prepare(
-      `INSERT INTO past_quotes (id, project_id, customer_id, kind, total, xero_id, snapshot_json, created_at)
-       VALUES (?, ?, ?, 'INVOICE', ?, ?, ?, ?)`
-    )
-      .bind(
-        crypto.randomUUID(),
-        args.project_id,
-        quote.customerId ?? null,
-        quote.total,
-        xeroId,
-        JSON.stringify(quote),
-        Date.now()
-      )
-      .run();
-    return {
-      xero_id: xeroId,
-      deep_link: `https://go.xero.com/AccountsReceivable/Edit.aspx?InvoiceID=${xeroId}`,
-    };
+    return { xero_id: xeroId, deep_link: xeroDeepLink('QUOTE', xeroId) };
   }
+
+  const body = {
+    Invoices: [
+      {
+        Type: 'ACCREC',
+        Contact: { ContactID: args.customer_xero_id },
+        Date: today,
+        DueDate: auDateString(Date.now() + 14 * 86400_000),
+        LineItems: lineItems,
+        Status: 'DRAFT' as const,
+        Reference: reference,
+      },
+    ],
+  };
+  const res = await fetch(`${XERO_API}/Invoices`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`Xero Invoice create failed: ${res.status} ${await res.text()}`);
+  const json = (await res.json()) as { Invoices: Array<{ InvoiceID: string }> };
+  const xeroId = json.Invoices[0].InvoiceID;
+  await env.DB.prepare(
+    `INSERT INTO past_quotes (id, project_id, customer_id, kind, total, xero_id, snapshot_json, created_at)
+     VALUES (?, ?, ?, 'INVOICE', ?, ?, ?, ?)`
+  )
+    .bind(
+      crypto.randomUUID(),
+      args.project_id,
+      quote.customerId ?? null,
+      quote.total,
+      xeroId,
+      JSON.stringify(quote),
+      Date.now()
+    )
+    .run();
+  return { xero_id: xeroId, deep_link: xeroDeepLink('INVOICE', xeroId) };
 }
 
 export async function syncXeroContacts(env: Env): Promise<{ synced: number; tenant_id: string }> {

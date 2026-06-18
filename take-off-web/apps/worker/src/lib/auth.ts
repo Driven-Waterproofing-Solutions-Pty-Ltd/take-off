@@ -62,6 +62,24 @@ export const requireAuth: MiddlewareHandler<{ Bindings: Env; Variables: { auth: 
     await next();
   };
 
+// Gate for browser-only actions that mutate state in a third-party org
+// (Xero pushes, contact create, etc.). Any signed-in staff member passes;
+// server-to-server MCP/API tokens are rejected. This is the middle tier
+// between requireAuth (anyone with a credential) and requireAdmin (only
+// admin users via a browser session). MCP clients that need to push to
+// Xero call the tool implementation directly through /mcp, which has its
+// own per-tool authorisation surface — they do not need the REST route.
+export const requireSession: MiddlewareHandler<{ Bindings: Env; Variables: { auth: AuthContext } }> =
+  async (c, next) => {
+    const auth = await authenticate(c);
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    if (auth.via !== 'session') {
+      return c.json({ error: 'browser session required' }, 403);
+    }
+    c.set('auth', auth);
+    await next();
+  };
+
 // Gate for operations that mutate org-wide integration state (currently:
 // reconnecting Xero — a member user could otherwise repoint the shared
 // xero_tokens row at their own tenant, and all subsequent quote/invoice
