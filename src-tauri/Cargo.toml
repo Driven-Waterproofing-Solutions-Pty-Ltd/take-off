@@ -23,7 +23,11 @@ serde_json = "1.0"
 # Use rustls instead of the default native-tls (OpenSSL) so the crate
 # cross-compiles to Android (and iOS) without a target OpenSSL build.
 reqwest = { version = "0.11", default-features = false, features = ["json", "blocking", "rustls-tls"] }
-machine-uid = "0.5"
 rsa = "0.9"
 base64 = "0.21"
 tokio = { version = "1", features = ["full"] }
+
+# machine-uid (hardware ID for licensing) has no Android backend, so depend
+# on it only for desktop targets. license.rs provides an Android fallback.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+machine-uid = "0.5"
