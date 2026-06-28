@@ -1,12 +1,18 @@
 /**
- * Server-side Form 43 certificate PDF renderer.
+ * Server-side Form 43 PDF — fills the OFFICIAL QLD Government / QBCC
+ * Form 43 template (Certificate of Compliance for Waterproofing).
  *
- * Pure pdf-lib — runs in both the Cloudflare Worker and the local Node
- * build (no native deps, no headless browser). Produces a clean A4
- * QLD Form 43 "Certificate of Compliance for Waterproofing".
+ * This is the SAME official fillable PDF the /form43 browser page uses
+ * (QBCC AcroForm). We load it, set the official field names (FM), flatten,
+ * and return — so the server output is the real Form 43, not a redrawn
+ * lookalike. Field names + licensee defaults + scope/basis/refdocs text
+ * are kept verbatim-aligned with standalone.ts's getVals().
+ *
+ * Pure pdf-lib — runs in both the Worker and the local Node build.
  */
 
-import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf-lib';
+import { PDFDocument } from 'pdf-lib';
+import { QBCC_FORM43_TEMPLATE_B64 } from './qbcc-template';
 
 export interface Form43PdfData {
   job_id?: string;
@@ -29,107 +35,143 @@ export interface Form43PdfData {
   contact_name?: string;
   contact_phone?: string;
   notes?: string;
+  refdocs?: string;
 }
 
-const NAVY = rgb(0.10, 0.23, 0.36);
-const ACCENT = rgb(0.91, 0.45, 0.04);
-const TEXT = rgb(0.10, 0.10, 0.18);
-const MUTED = rgb(0.42, 0.45, 0.50);
-const LINE = rgb(0.82, 0.84, 0.86);
+// Official QBCC AcroForm field names (verbatim from standalone.ts FM map).
+const FM = {
+  scope: 'Scope of the aspect work',
+  street1: 'Street address 1', street2: 'Street address 2',
+  state1: 'State 1', postcode1: 'Postcode 1',
+  lot: 'Lot and plan details 1', lga: 'Local government area 1',
+  bdesc: 'Building/structure description', bclass: 'Class of building/structure 1',
+  description: 'Description of aspect/s certified',
+  basis: 'Basis of certification', refdocs: 'Reference documentation',
+  certref: 'Building certifier reference number', danum: 'Development approval number',
+  name: 'Name 1', company: 'Company name 1', contact: 'Contact person 1',
+  bizphone: 'Business phone number 1', mobile: 'Mobile number 1',
+  email: 'Email address 1', addr1: 'Postal address 1', addr2: 'Postal address 2',
+  state2: 'State 2', postcode2: 'Postcode 2',
+  licclass: 'Licence class', licnum: 'Licence number',
+  inspdate: 'Date approval to inspect received from building certifier',
+  certdate: 'Date 9',
+} as const;
 
-const A4: [number, number] = [595.28, 841.89];
-const MARGIN = 48;
+// QBCC licensee details — pre-filled in the page, fixed for Driven WP.
+const LICENSEE = {
+  name: 'Andrew Brett Driver',
+  company: 'Driven Waterproofing Solutions PTY LTD',
+  bizphone: '0473 518 216',
+  mobile: '0473 518 216',
+  email: 'office@drivenwp.com',
+  addr1: '2 Dijon Ct',
+  addr2: 'Petrie',
+  state2: 'QLD',
+  postcode2: '4502',
+  licclass: 'Waterproofing',
+  licnum: '15214278',
+} as const;
+
+const SCOPE =
+  'Installing waterproofing materials to all wet areas such as bathrooms, ensuites, toilets, ' +
+  'laundries, balconies, decks, retaining walls, rooftops, planter boxes and basements in ' +
+  'accordance with the Building Code of Australia — AS 3740:2021 (Waterproofing of domestic wet ' +
+  'areas) and AS 4654.2-2012 (Waterproofing membranes for external above-ground use) and ' +
+  'AS 4654.1-2012 and NCC Volume 2 Part 10.2';
+
+const BASIS =
+  'Installation of waterproofing membranes carried out in accordance with AS 3740:2021, ' +
+  'AS 4654.2-2012 and AS 4654.1-2012 and NCC Volume 2 Part 10.2, QBCC licence conditions ' +
+  "(Licence No. 15214278), and manufacturer's installation requirements. All works inspected " +
+  'and certified by QBCC licensed waterproofing contractor.';
+
+const DEFAULT_REFDOCS =
+  'Development permit documents including Decision Notice, stamped approved plans and reports. ' +
+  'Waterproofing installed in accordance with QBCC licence requirements (Licence No. 15214278). ' +
+  'Product data sheets and manufacturer installation guides for all products used. Full breakdown ' +
+  'of materials and areas available upon request.';
+
+function fmtDate(d: string | undefined): string {
+  if (!d) return '';
+  const iso = d.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`; // YYYY-MM-DD -> DD/MM/YYYY
+  return d;
+}
+
+// Build the "Description of aspect/s certified" block exactly like the page.
+function buildDescription(data: Form43PdfData): string {
+  const parts: string[] = [];
+  const prods = data.products_used ?? [];
+  const areas = data.areas_waterproofed ?? [];
+  if (prods.length) parts.push('Products used: ' + prods.join(', '));
+  if (areas.length) parts.push('Areas waterproofed: ' + areas.join(', '));
+  parts.push('All waterproofing installed by QBCC licensed contractor — Licence No. 15214278');
+  parts.push('Installed in accordance with AS 3740:2021, AS 4654.2-2012 and AS 4654.1-2012 and NCC Volume 2 Part 10.2');
+  return parts.join('\n');
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
 
 export async function buildForm43Pdf(data: Form43PdfData): Promise<Uint8Array> {
-  const doc = await PDFDocument.create();
-  doc.setTitle('QLD Form 43 — Certificate of Compliance for Waterproofing');
-  doc.setProducer('form43-app');
-  doc.setCreator('Driven Waterproofing Solutions');
+  const doc = await PDFDocument.load(base64ToBytes(QBCC_FORM43_TEMPLATE_B64), { ignoreEncryption: true });
+  const form = doc.getForm();
 
-  const page = doc.addPage(A4);
-  const font = await doc.embedFont(StandardFonts.Helvetica);
-  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
-  const { width, height } = page.getSize();
+  const lot = [data.unit ? `Unit ${data.unit}` : '', data.lot ? `Lot ${data.lot}` : '']
+    .filter(Boolean).join(', ') || (data.lot ?? '');
 
-  // ── Header band ───────────────────────────────────────────
-  page.drawRectangle({ x: 0, y: height - 96, width, height: 96, color: NAVY });
-  page.drawRectangle({ x: MARGIN, y: height - 70, width: 46, height: 26, color: ACCENT });
-  page.drawText('DWP', { x: MARGIN + 7, y: height - 64, size: 14, font: bold, color: rgb(1, 1, 1) });
-  page.drawText('Form 43', { x: MARGIN + 60, y: height - 56, size: 18, font: bold, color: rgb(1, 1, 1) });
-  page.drawText('Certificate of Compliance for Waterproofing (QLD)', {
-    x: MARGIN + 60, y: height - 74, size: 9.5, font, color: rgb(0.82, 0.86, 0.9),
-  });
-  page.drawText('Driven Waterproofing Solutions Pty Ltd', {
-    x: width - MARGIN - 220, y: height - 56, size: 9, font, color: rgb(0.82, 0.86, 0.9),
-  });
+  // Text fields (skip empties so the official template's own blanks remain blank).
+  const textFields: Record<string, string | undefined> = {
+    [FM.scope]: SCOPE,
+    [FM.street1]: data.street_address,
+    [FM.street2]: data.suburb,
+    [FM.postcode1]: data.postcode,
+    [FM.lot]: lot,
+    [FM.lga]: data.lga,
+    [FM.bdesc]: data.building_desc || 'New residential dwelling',
+    [FM.bclass]: data.building_class || '1a',
+    [FM.description]: buildDescription(data),
+    [FM.basis]: BASIS,
+    [FM.refdocs]: data.refdocs || DEFAULT_REFDOCS,
+    [FM.certref]: data.certifier_ref,
+    [FM.danum]: data.da_number,
+    [FM.name]: LICENSEE.name,
+    [FM.company]: LICENSEE.company,
+    [FM.contact]: data.contact_name || LICENSEE.name,
+    [FM.bizphone]: data.contact_phone || LICENSEE.bizphone,
+    [FM.mobile]: LICENSEE.mobile,
+    [FM.email]: LICENSEE.email,
+    [FM.addr1]: LICENSEE.addr1,
+    [FM.addr2]: LICENSEE.addr2,
+    [FM.postcode2]: LICENSEE.postcode2,
+    [FM.licclass]: LICENSEE.licclass,
+    [FM.licnum]: LICENSEE.licnum,
+    [FM.inspdate]: fmtDate(data.insp_date),
+    [FM.certdate]: fmtDate(data.cert_date),
+  };
 
-  let y = height - 128;
-
-  // ── Compliance statement ──────────────────────────────────
-  const statement =
-    'This certifies that the waterproofing of the wet areas described below has been ' +
-    'carried out in accordance with the National Construction Code (NCC) and AS 3740, ' +
-    'using the products and to the areas listed.';
-  y = drawWrapped(page, statement, MARGIN, y, width - MARGIN * 2, font, 10, TEXT, 14);
-  y -= 14;
-
-  // ── Site / job section ────────────────────────────────────
-  y = sectionTitle(page, 'Site & Job', MARGIN, y, bold);
-  const addressLine = [
-    data.unit ? `Unit ${data.unit}` : '',
-    data.lot ? `Lot ${data.lot}` : '',
-    data.street_address || '',
-  ].filter(Boolean).join(', ');
-  const cityLine = [data.suburb, data.state, data.postcode].filter(Boolean).join(' ');
-
-  y = row(page, 'Builder', data.builder_name, MARGIN, y, font, bold);
-  y = row(page, 'Job reference', data.job_id, MARGIN, y, font, bold);
-  y = row(page, 'Site address', addressLine, MARGIN, y, font, bold);
-  y = row(page, 'Suburb / State / PC', cityLine, MARGIN, y, font, bold);
-  y = row(page, 'Local Government Area', data.lga, MARGIN, y, font, bold);
-  y -= 10;
-
-  // ── Building section ──────────────────────────────────────
-  y = sectionTitle(page, 'Building', MARGIN, y, bold);
-  y = row(page, 'Building class', data.building_class || '1a', MARGIN, y, font, bold);
-  y = row(page, 'Description', data.building_desc || 'New residential dwelling', MARGIN, y, font, bold);
-  y -= 10;
-
-  // ── Waterproofing section ─────────────────────────────────
-  y = sectionTitle(page, 'Waterproofing', MARGIN, y, bold);
-  y = row(page, 'Areas waterproofed', (data.areas_waterproofed || []).join(', '), MARGIN, y, font, bold);
-  y = row(page, 'Products / membranes', (data.products_used || []).join(', '), MARGIN, y, font, bold);
-  y -= 10;
-
-  // ── Certification section ─────────────────────────────────
-  y = sectionTitle(page, 'Certification', MARGIN, y, bold);
-  y = row(page, 'Certifier reference', data.certifier_ref, MARGIN, y, font, bold);
-  y = row(page, 'DA / approval number', data.da_number, MARGIN, y, font, bold);
-  y = row(page, 'Inspection date', data.insp_date, MARGIN, y, font, bold);
-  y = row(page, 'Certificate date', data.cert_date, MARGIN, y, font, bold);
-  if (data.notes) {
-    y -= 4;
-    y = row(page, 'Notes', data.notes, MARGIN, y, font, bold);
+  for (const [fname, fval] of Object.entries(textFields)) {
+    if (!fval) continue;
+    try {
+      const field = form.getField(fname);
+      const kind = field.constructor.name;
+      if (kind === 'PDFDropdown' || kind === 'PDFOptionList') {
+        try { (field as any).select(fval); } catch { try { (field as any).setText(fval); } catch { /* noop */ } }
+      } else {
+        (field as any).setText(String(fval));
+      }
+    } catch { /* field absent in template — skip, like the page does */ }
   }
 
-  // ── Signature block ───────────────────────────────────────
-  const sigY = 130;
-  page.drawLine({ start: { x: MARGIN, y: sigY }, end: { x: MARGIN + 200, y: sigY }, thickness: 0.8, color: LINE });
-  page.drawLine({ start: { x: width - MARGIN - 200, y: sigY }, end: { x: width - MARGIN, y: sigY }, thickness: 0.8, color: LINE });
-  page.drawText('Authorised signature', { x: MARGIN, y: sigY - 14, size: 8.5, font, color: MUTED });
-  page.drawText('Date', { x: width - MARGIN - 200, y: sigY - 14, size: 8.5, font, color: MUTED });
-  if (data.contact_name) {
-    page.drawText(data.contact_name, { x: MARGIN, y: sigY + 6, size: 10, font: bold, color: TEXT });
-  }
-  if (data.cert_date) {
-    page.drawText(data.cert_date, { x: width - MARGIN - 200, y: sigY + 6, size: 10, font: bold, color: TEXT });
-  }
+  // State dropdowns (select with graceful fallback).
+  try { form.getDropdown(FM.state1).select(data.state || 'QLD'); } catch { /* noop */ }
+  try { form.getDropdown(FM.state2).select(LICENSEE.state2); } catch { /* noop */ }
 
-  // ── Footer ────────────────────────────────────────────────
-  page.drawText('Generated by form43-app — review before issuing.', {
-    x: MARGIN, y: 40, size: 8, font, color: MUTED,
-  });
-
+  form.flatten();
   return doc.save();
 }
 
@@ -141,42 +183,4 @@ export function bytesToBase64(bytes: Uint8Array): string {
     binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
   }
   return btoa(binary);
-}
-
-// ── helpers ─────────────────────────────────────────────────
-
-function sectionTitle(page: PDFPage, label: string, x: number, y: number, bold: PDFFont): number {
-  page.drawText(label.toUpperCase(), { x, y, size: 9, font: bold, color: ACCENT });
-  page.drawLine({ start: { x, y: y - 5 }, end: { x: page.getWidth() - MARGIN, y: y - 5 }, thickness: 0.6, color: LINE });
-  return y - 22;
-}
-
-function row(page: PDFPage, label: string, value: string | undefined, x: number, y: number, font: PDFFont, bold: PDFFont): number {
-  page.drawText(label, { x, y, size: 9, font, color: MUTED });
-  const v = (value && value.trim()) ? value : '—';
-  const valX = x + 150;
-  const maxW = page.getWidth() - MARGIN - valX;
-  const endY = drawWrapped(page, v, valX, y, maxW, bold, 10, TEXT, 13);
-  return Math.min(y, endY) - 18;
-}
-
-function drawWrapped(
-  page: PDFPage, text: string, x: number, y: number, maxWidth: number,
-  font: PDFFont, size: number, color: ReturnType<typeof rgb>, lineHeight: number,
-): number {
-  const words = text.split(/\s+/);
-  let line = '';
-  let cursorY = y;
-  for (const word of words) {
-    const test = line ? `${line} ${word}` : word;
-    if (font.widthOfTextAtSize(test, size) > maxWidth && line) {
-      page.drawText(line, { x, y: cursorY, size, font, color });
-      cursorY -= lineHeight;
-      line = word;
-    } else {
-      line = test;
-    }
-  }
-  if (line) page.drawText(line, { x, y: cursorY, size, font, color });
-  return cursorY;
 }
