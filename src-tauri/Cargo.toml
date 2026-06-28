@@ -7,6 +7,12 @@ edition = "2021"
 rust-version = "1.77.2"
 build = "build.rs"
 
+# Android/iOS link the app as a shared library, which requires cdylib +
+# staticlib crate types. rlib keeps the desktop binary (main.rs) working.
+[lib]
+name = "protakeoff_ai"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
 [build-dependencies]
 tauri-build = { version = "2.0.0", features = [] }
 
