@@ -59,6 +59,10 @@ app.onError((e, c) => {
 
 app.notFound((c) => c.json(err('Not found', c.get('correlationId')), 404));
 
+// Named export so the local Node build (local/server.mjs) can mount the
+// exact same app + routes and inject a Node env via app.fetch(req, env).
+export { app };
+
 /**
  * Worker handlers. `fetch` serves HTTP; `scheduled` runs the memory R2
  * snapshot on the cron defined in wrangler.jsonc (triggers.crons).

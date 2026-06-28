@@ -4,3 +4,7 @@ dist
 .dev.vars
 *.log
 .DS_Store
+
+# local Node build runtime artifacts
+local/data/
+local/boot.log
