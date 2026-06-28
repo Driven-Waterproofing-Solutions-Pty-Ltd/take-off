@@ -137,6 +137,9 @@ export async function buildForm43Pdf(data: Form43PdfData): Promise<Uint8Array> {
     [FM.description]: buildDescription(data),
     [FM.basis]: BASIS,
     [FM.refdocs]: data.refdocs || DEFAULT_REFDOCS,
+    // certref / inspdate belong to the EXTERNAL building certifier (who relies
+    // on this aspect certificate). The licensee block below is Driven — the
+    // competent person certifying its own waterproofing aspect, NOT the certifier.
     [FM.certref]: data.certifier_ref,
     [FM.danum]: data.da_number,
     [FM.name]: LICENSEE.name,
