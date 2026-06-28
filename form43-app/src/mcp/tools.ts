@@ -75,6 +75,37 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'form43_pdf',
+    description:
+      'Render a Form 43 certificate as a PDF and return it base64-encoded. Pass the same fields as form43_save (street_address, suburb, postcode, lga, products_used, areas_waterproofed, dates, etc.) plus optional builder_name/contact_name. Read-only — does not persist anything.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        job_id: { type: 'string' },
+        builder_name: { type: 'string' },
+        street_address: { type: 'string' },
+        suburb: { type: 'string' },
+        postcode: { type: 'string' },
+        state: { type: 'string' },
+        lga: { type: 'string' },
+        lot: { type: 'string' },
+        unit: { type: 'string' },
+        building_class: { type: 'string' },
+        building_desc: { type: 'string' },
+        products_used: { type: 'array', items: { type: 'string' } },
+        areas_waterproofed: { type: 'array', items: { type: 'string' } },
+        certifier_ref: { type: 'string' },
+        da_number: { type: 'string' },
+        insp_date: { type: 'string' },
+        cert_date: { type: 'string' },
+        contact_name: { type: 'string' },
+        contact_phone: { type: 'string' },
+        notes: { type: 'string' },
+      },
+      required: ['street_address'],
+    },
+  },
+  {
     name: 'form43_list',
     description: 'List recent active Form 43 records (newest first).',
     inputSchema: {

@@ -19,6 +19,7 @@ import type { AppType } from '../../shared/types';
 import { logActivity } from '../../shared/activity';
 import { ok, err } from '../../shared/response';
 import prefillRouter from './prefill';
+import { buildForm43Pdf, bytesToBase64, type Form43PdfData } from './pdf';
 
 const router = new Hono<AppType>();
 
@@ -92,6 +93,34 @@ router.post('/save', async (c) => {
       c.get('tokenHash'),
     );
     return c.json(ok({ id }, { message: 'Form 43 record saved' }), 201);
+  } catch (e: unknown) {
+    return c.json(err((e as Error).message), 500);
+  }
+});
+
+// POST /pdf — render a Form 43 certificate PDF from a payload.
+// Returns application/pdf by default, or { base64 } JSON when ?format=base64
+// (the MCP form43_pdf tool uses base64 so an agent can receive the bytes).
+router.post('/pdf', async (c) => {
+  let body: unknown;
+  try { body = await c.req.json(); } catch { return c.json(err('Invalid JSON'), 400); }
+  const data = body as Form43PdfData;
+  if (!data || (!data.street_address && !data.job_id)) {
+    return c.json(err('Provide at least street_address or job_id'), 400);
+  }
+
+  try {
+    const bytes = await buildForm43Pdf(data);
+    if (c.req.query('format') === 'base64') {
+      return c.json(ok({ filename: 'form43.pdf', mime: 'application/pdf', base64: bytesToBase64(bytes) }));
+    }
+    return new Response(bytes, {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': 'attachment; filename="form43.pdf"',
+      },
+    });
   } catch (e: unknown) {
     return c.json(err((e as Error).message), 500);
   }

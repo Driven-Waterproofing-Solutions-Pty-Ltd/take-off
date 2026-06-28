@@ -124,7 +124,8 @@ describe('mcp transport', () => {
     expect(names).toContain('form43_prefill');
     expect(names).toContain('parse_address');
     expect(names).toContain('save_memory');
-    expect(names.length).toBe(12);
+    expect(names).toContain('form43_pdf');
+    expect(names.length).toBe(13);
   });
 
   it('dispatches parse_address through tools/call', async () => {

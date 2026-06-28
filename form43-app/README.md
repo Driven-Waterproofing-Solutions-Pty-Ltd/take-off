@@ -11,8 +11,13 @@ agents — can drive Form 43 over a single bearer-authenticated MCP endpoint.
 
 - **Form 43 PDF generator** at `/form43` (lifted from aqua, byte-for-byte).
 - **REST API** under `/api/v1/form43/*`, `/api/v1/address/*`, `/api/v1/memory/*`.
-- **Remote MCP** at `/mcp` (Streamable HTTP, JSON-RPC 2.0). 12 tools across
+- **Remote MCP** at `/mcp` (Streamable HTTP, JSON-RPC 2.0). 13 tools across
   Form 43, address, and memory groups.
+- **Server-side PDF** — `form43_pdf` tool + `POST /api/v1/form43/pdf` render
+  the certificate as a real PDF (pdf-lib), so an AI/aqua can get the bytes
+  without the browser page.
+- **Local Node build** — `npm run local` runs the whole app off Cloudflare
+  on `node:sqlite` (see `local/README.md`).
 - **Stdio MCP adapter** (`mcp-stdio/`) for Claude Desktop and any MCP client
   that doesn't yet speak remote transport.
 - **Self-contained memory**: D1 `chat_memory` table + Workers AI BGE
@@ -76,7 +81,7 @@ The same `AQUA_API_TOKEN` pattern aqua already uses applies — point
 
 | Group | Tool |
 |---|---|
-| Form 43 | `form43_prefill`, `form43_save`, `form43_list`, `form43_get`, `form43_delete` |
+| Form 43 | `form43_prefill`, `form43_pdf`, `form43_save`, `form43_list`, `form43_get`, `form43_delete` |
 | Address | `address_autocomplete`, `address_verify`, `parse_address` |
 | Memory | `save_memory`, `search_memory`, `list_recent_memory`, `pin_memory` |
 

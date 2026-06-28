@@ -1,5 +1,6 @@
 import type { ToolContext, ToolResult } from '../tools';
 import { buildPrefillData } from '../../modules/form43/prefill';
+import { buildForm43Pdf, bytesToBase64, type Form43PdfData } from '../../modules/form43/pdf';
 import { logActivity } from '../../shared/activity';
 
 function jsonResult(value: unknown): ToolResult {
@@ -58,6 +59,14 @@ export async function handleForm43(
     const id = result.meta.last_row_id as number;
     await logActivity(db, 'FORM43_SAVED', `Form 43 saved via MCP for job ${input.job_id ?? 'none'}`, String(id), ctx.vars.correlationId, ctx.vars.tokenHash);
     return jsonResult({ success: true, data: { id } });
+  }
+
+  if (name === 'form43_pdf') {
+    const bytes = await buildForm43Pdf(input as Form43PdfData);
+    return jsonResult({
+      success: true,
+      data: { filename: 'form43.pdf', mime: 'application/pdf', base64: bytesToBase64(bytes) },
+    });
   }
 
   if (name === 'form43_list') {
