@@ -1,4 +1,6 @@
 mod license;
+// Native menus are desktop-only in Tauri; this module doesn't exist on Android/iOS.
+#[cfg(desktop)]
 use tauri::menu::{Menu, MenuItem, Submenu, PredefinedMenuItem};
 use tauri::{Emitter, Manager};
 
@@ -19,6 +21,9 @@ pub fn run() {
 // ... (existing setup code) ...
 
         .setup(|app| {
+            // The application menu bar is desktop-only; skip it on mobile.
+            #[cfg(desktop)]
+            {
             let handle = app.handle();
             
             let app_menu = Submenu::with_items(
@@ -123,7 +128,9 @@ pub fn run() {
                     _ => {}
                 }
             });
+            } // end #[cfg(desktop)] menu setup
 
+            let _ = app;
             Ok(())
         })
         .plugin(tauri_plugin_shell::init())
