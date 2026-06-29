@@ -138,7 +138,7 @@ try {
   await demoStep('zoom First Floor', async () => { await zoomIn(5, 0.5, 0.45); await sleep(1700); });
   await shot('ui-12-first-floor-zoom');
   await demoStep('open drawer', async () => { await click('[data-testid=open-menu]'); await sleep(600); });
-  await demoStep('go to Page 4 (Site Plan)', async () => { await goToPageIdx(3); await sleep(5000); });
+  await demoStep('go to Page 3 (Site Plan)', async () => { await goToPageIdx(2); await sleep(5000); });
   await shot('ui-13-site-plan');
 
   await client.close().catch(() => {});
