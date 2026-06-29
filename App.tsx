@@ -30,6 +30,7 @@ import { flattenOCG } from './utils/flattenOCG';
 import { mupdfController, SearchHit } from './utils/mupdfController';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile, BaseDirectory } from '@tauri-apps/plugin-fs';
+import { isMobilePlatform } from './utils/platform';
 import { LazyStore } from '@tauri-apps/plugin-store';
 
 const AppContent: React.FC = () => {
@@ -169,14 +170,14 @@ const AppContent: React.FC = () => {
     setExportProgress({ current: 0, total: pageIndices.length });
     try {
       const { pdfBytes } = await generateMarkupPDF(planSets, projectData, items, pageIndices, includeLegend, includeNotes);
-      const sanitizedProjectName = projectName.replace(/[^a-z0-9]/gi, '_');
+      const sanitizedProjectName = projectName.replace(/[^a-z0-9]/gi, '_') || 'project';
       const dateStr = new Date().toISOString().slice(0, 10);
       const defaultFileName = `${sanitizedProjectName}-Markup-${dateStr}.pdf`;
 
       // Mobile: no native save dialog / writable absolute paths. Write into
       // app-scoped storage (already in the fs capability scope). A share-sheet
       // hand-off is a follow-up; this makes export succeed instead of failing.
-      if (/android|iphone|ipad|ipod/i.test(navigator.userAgent)) {
+      if (isMobilePlatform()) {
         await writeFile(`protakeoff/pdf_store/${defaultFileName}`, pdfBytes, { baseDir: BaseDirectory.AppLocalData });
         addToast(`Exported to app storage: ${defaultFileName}`, 'success');
         return;

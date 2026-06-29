@@ -2,9 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { writeFile, readFile, BaseDirectory } from '@tauri-apps/plugin-fs';
-
-// Android/iOS WebView user-agents contain these tokens; used to branch storage paths.
-const isMobilePlatform = () => /android|iphone|ipad|ipod/i.test(navigator.userAgent);
+import { isMobilePlatform } from '../utils/platform';
 import { useHistory } from './useHistory';
 import { TakeoffItem, ProjectData, PlanSet, ToolType, Unit } from '../types';
 import {

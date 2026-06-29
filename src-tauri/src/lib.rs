@@ -2,6 +2,8 @@ mod license;
 // Native menus are desktop-only in Tauri; this module doesn't exist on Android/iOS.
 #[cfg(desktop)]
 use tauri::menu::{Menu, MenuItem, Submenu, PredefinedMenuItem};
+// Emitter/Manager are only used inside the desktop-only menu setup below.
+#[cfg(desktop)]
 use tauri::{Emitter, Manager};
 
 #[tauri::command]

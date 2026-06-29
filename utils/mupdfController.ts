@@ -1,4 +1,5 @@
 import * as mupdf from 'mupdf';
+import { isMobilePlatform } from './platform';
 
 // Define simplified types based on MuPDF API
 export interface MuPDFPage {
@@ -39,8 +40,7 @@ class MuPDFController {
     // rendered pages in WebView memory risks OOM/jank on a phone. Coordinate math
     // is unaffected (this is purely a render cache).
     private displayListCache: Map<number, DisplayList> = new Map();
-    private readonly MAX_CACHED_PAGES =
-        typeof navigator !== 'undefined' && /android|iphone|ipad|ipod/i.test(navigator.userAgent) ? 3 : 10;
+    private readonly MAX_CACHED_PAGES = isMobilePlatform() ? 3 : 10;
 
     // Page dimensions cache (lightweight, keep all)
     private dimensionsCache: Map<number, { width: number, height: number }> = new Map();

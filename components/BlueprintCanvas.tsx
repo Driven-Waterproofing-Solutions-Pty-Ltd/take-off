@@ -1340,11 +1340,16 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     };
 
     const handleStageClick = (e: Konva.KonvaEventObject<MouseEvent>) => {
-        // On touch, Konva fires both 'tap' and a compatibility 'click'; dedupe so a
-        // single finger tap places exactly one point.
+        // On touch, Konva fires a 'tap' AND a compatibility 'click'; suppress only the
+        // synthetic click that immediately follows a tap. Desktop mouse clicks ('click'
+        // with no recent 'tap') are never throttled, so rapid clicking (e.g. the COUNT
+        // tool placing many points fast) keeps working.
         const nowTs = typeof performance !== 'undefined' ? performance.now() : 0;
-        if (nowTs - lastTapHandledRef.current < 350) return;
-        lastTapHandledRef.current = nowTs;
+        if (e.type === 'tap') {
+            lastTapHandledRef.current = nowTs;
+        } else if (nowTs - lastTapHandledRef.current < 700) {
+            return;
+        }
         // In Select mode, only trigger clicks on the stage background (to deselect)
         // In other modes (Area, Linear, etc.), allow clicking anywhere including on existing shapes
         if (activeTool === ToolType.SELECT && e.target !== e.target.getStage()) {
