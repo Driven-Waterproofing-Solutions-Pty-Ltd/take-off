@@ -106,6 +106,38 @@ try {
 
   result.passed = true; persist();
   log('UI FLOW PASSED');
+
+  // ===== DEMO walkthrough (best-effort; never fails the run) — for the GIF =====
+  const demoStep = async (label, fn) => {
+    try { await fn(); step('demo: ' + label); }
+    catch (e) { log('demo step (non-fatal) failed:', label, e.message); }
+  };
+  const zoomIn = async (steps) => evalJS(`(()=>{
+    const vp = document.querySelector('div.overflow-hidden.select-none') || (document.querySelector('canvas') && document.querySelector('canvas').parentElement);
+    if (!vp) return false;
+    const r = vp.getBoundingClientRect();
+    const cx = r.left + r.width/2, cy = r.top + r.height/2;
+    for (let i=0;i<${steps};i++) vp.dispatchEvent(new WheelEvent('wheel',{deltaY:-120,clientX:cx,clientY:cy,bubbles:true,cancelable:true}));
+    return true;
+  })()`);
+  const goToPage = async (n) => {
+    const ok = await evalJS(`(()=>{const el=[...document.querySelectorAll('div,button,span,li,p')].find(e=>e.textContent.trim()===${JSON.stringify('Page ' + n)}); if(el){el.click(); return true;} return false;})()`);
+    if (!ok) throw new Error('page row not found: ' + n);
+  };
+
+  await demoStep('close drawer to show canvas', async () => { await evalJS(`(()=>{const b=document.querySelector('.fixed.inset-0'); if(b){b.click(); return true;} return false;})()`); await sleep(900); });
+  await shot('ui-07-canvas');
+  await demoStep('zoom in', async () => { await zoomIn(8); await sleep(1600); });
+  await shot('ui-08-zoom');
+  await demoStep('zoom in more', async () => { await zoomIn(8); await sleep(1600); });
+  await shot('ui-09-zoom2');
+  await demoStep('open drawer', async () => { await click('[data-testid=open-menu]'); await sleep(700); });
+  await shot('ui-10-pages');
+  await demoStep('navigate to Page 5', async () => { await goToPage(5); await sleep(4500); });
+  await shot('ui-11-page5');
+  await demoStep('zoom Page 5', async () => { await zoomIn(7); await sleep(1600); });
+  await shot('ui-12-page5-zoom');
+
   await client.close().catch(() => {});
   process.exit(0);
 } catch (e) {

@@ -9,6 +9,9 @@ name: 'Android E2E (UI-driven)'
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - 'claude/android-demo'
 
 env:
   NDK_VERSION: '26.3.11579264'
@@ -169,6 +172,16 @@ jobs:
           ERR=$(grep -iE "aistudiocdn|FATAL EXCEPTION|AndroidRuntime: FATAL|Tauri/Console.*(Uncaught|Error:|Failed to load)" artifacts/logcat-full.txt 2>/dev/null | grep -vi "JavaBinder" || true)
           if [ -n "$ERR" ]; then echo "$ERR"; echo "::error::fatal app/JS error"; exit 1; fi
           echo "no fatal app/JS errors"
+      - name: assemble demo GIF
+        if: always()
+        run: |
+          which convert || sudo apt-get update -y >/dev/null 2>&1 && sudo apt-get install -y imagemagick >/dev/null 2>&1 || true
+          FRAMES=$(ls artifacts/ui-*.png 2>/dev/null | sort -V)
+          echo "frames:"; echo "$FRAMES"
+          if [ -n "$FRAMES" ]; then
+            convert -delay 130 -loop 0 $FRAMES artifacts/demo.gif || true
+            ls -lh artifacts/demo.gif || true
+          fi
       - name: upload results
         if: always()
         uses: actions/upload-artifact@v4
