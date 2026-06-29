@@ -401,6 +401,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                             <div key={globalIdx} className="relative">
                                                 {/* Page Row */}
                                                 <div
+                                                    data-testid={`page-row-${globalIdx}`}
                                                     onClick={() => handlePageClick(globalIdx)}
                                                     className={`group flex items-center justify-between px-2 py-1.5 rounded-md cursor-pointer transition-all ${isPageActive
                                                         ? 'bg-primary/10 text-primary font-medium'
