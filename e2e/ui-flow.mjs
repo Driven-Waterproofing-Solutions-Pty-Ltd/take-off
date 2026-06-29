@@ -22,7 +22,14 @@ log('targets:', JSON.stringify(targets.map((t) => ({ type: t.type, url: t.url })
 const pageTarget = targets.find((t) => t.type === 'page' && /tauri\.localhost|localhost|^https?:/.test(t.url)) || targets.find((t) => t.type === 'page');
 if (!pageTarget) await fail('no page target over CDP');
 
-const client = await CDP({ host: HOST, port: PORT, target: pageTarget.webSocketDebuggerUrl }).catch((e) => fail('CDP connect: ' + e.message));
+// Connect by target id with an explicit IPv4 host so Node doesn't try ::1
+// (the WebView's webSocketDebuggerUrl often says "localhost" but adb forward is IPv4).
+let client = null;
+for (let i = 0; i < 5 && !client; i++) {
+  client = await CDP({ host: HOST, port: PORT, local: true, target: pageTarget.id }).catch((e) => { log('connect attempt', i + 1, 'failed:', e.message); return null; });
+  if (!client) await sleep(2000);
+}
+if (!client) await fail('CDP connect failed after retries');
 const { Runtime, Page, DOM } = client;
 await Runtime.enable();
 await Page.enable().catch(() => {});
