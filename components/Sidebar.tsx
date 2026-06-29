@@ -14,6 +14,7 @@ import {
     TooltipProvider,
     TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { useViewRouter } from './Router';
 
 interface SidebarProps {
     items: TakeoffItem[];
@@ -84,8 +85,22 @@ const Sidebar: React.FC<SidebarProps> = ({
     onOpenExportModal,
     onOpenHelp,
 }) => {
+    const { sidebarOpen, setSidebarOpen } = useViewRouter();
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
     const [expandedPages, setExpandedPages] = useState<Set<number>>(new Set());
+
+    // Track whether we are at desktop width (>=768px) so the fixed pixel width
+    // is only applied on desktop. On mobile the drawer is full-width.
+    const [isDesktop, setIsDesktop] = useState<boolean>(() =>
+        typeof window !== 'undefined' ? window.matchMedia('(min-width: 768px)').matches : true
+    );
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const mql = window.matchMedia('(min-width: 768px)');
+        const handler = (e: MediaQueryListEvent) => setIsDesktop(e.matches);
+        mql.addEventListener('change', handler);
+        return () => mql.removeEventListener('change', handler);
+    }, []);
 
     // Page Renaming State
     const [editingPageIndex, setEditingPageIndex] = useState<number | null>(null);
@@ -263,12 +278,13 @@ const Sidebar: React.FC<SidebarProps> = ({
 
     return (
         <div
-            className="bg-background border-r border-border flex flex-col h-full z-20 flex-shrink-0 relative font-sans text-sm shadow-xl shadow-black/5 min-w-[370px]"
-            style={{ width: `${sidebarWidth}px`, minWidth: '370px' }}
+            data-open={sidebarOpen}
+            className="bg-background border-r border-border flex flex-col h-full z-40 flex-shrink-0 relative font-sans text-sm shadow-xl shadow-black/5 w-full md:w-auto md:min-w-[370px] fixed inset-y-0 left-0 -translate-x-full transition-transform data-[open=true]:translate-x-0 md:static md:translate-x-0"
+            style={{ width: isDesktop ? `${sidebarWidth}px` : undefined, minWidth: isDesktop ? '370px' : undefined }}
         >
-            {/* Resize handle */}
+            {/* Resize handle (desktop only) */}
             <div
-                className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary z-30 transition-colors opacity-0 hover:opacity-100"
+                className="hidden md:block absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary z-30 transition-colors opacity-0 hover:opacity-100"
                 onMouseDown={startResizing}
             />
 
@@ -437,7 +453,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                                         <Button
                                                             variant="ghost"
                                                             size="icon"
-                                                            className={`h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity ${isPageActive ? 'text-primary' : 'text-muted-foreground'}`}
+                                                            className={`h-5 w-5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity ${isPageActive ? 'text-primary' : 'text-muted-foreground'}`}
                                                             onClick={(e) => { e.stopPropagation(); startEditingPage(globalIdx, pageName); }}
                                                         >
                                                             <Edit2 size={10} />
@@ -510,7 +526,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                                                                 e.stopPropagation();
                                                                                 onToggleVisibility(item.id, globalIdx);
                                                                             }}
-                                                                            className={`h-5 w-5 ${item.visible === false || item.hiddenPages?.includes(globalIdx) ? 'text-muted-foreground/50' : 'text-muted-foreground opacity-0 group-hover:opacity-100'}`}
+                                                                            className={`h-5 w-5 ${item.visible === false || item.hiddenPages?.includes(globalIdx) ? 'text-muted-foreground/50' : 'text-muted-foreground opacity-100 md:opacity-0 md:group-hover:opacity-100'}`}
                                                                         >
                                                                             {item.visible === false || item.hiddenPages?.includes(globalIdx) ? <EyeOff size={10} /> : <Eye size={10} />}
                                                                         </Button>
@@ -527,7 +543,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                                                                     onResume(item.id);
                                                                                 }
                                                                             }}
-                                                                            className={`h-5 w-5 p-0 rounded-full ${hasActiveShapesOnThisPage && activeTool !== ToolType.SELECT ? 'text-red-500 bg-red-50 hover:bg-red-100 hover:text-red-600' : 'text-muted-foreground/50 hover:text-green-600 hover:bg-green-50 opacity-0 group-hover:opacity-100'}`}
+                                                                            className={`h-5 w-5 p-0 rounded-full ${hasActiveShapesOnThisPage && activeTool !== ToolType.SELECT ? 'text-red-500 bg-red-50 hover:bg-red-100 hover:text-red-600' : 'text-muted-foreground/50 hover:text-green-600 hover:bg-green-50 opacity-100 md:opacity-0 md:group-hover:opacity-100'}`}
                                                                         >
                                                                             <div className={`w-2 h-2 rounded-full ${hasActiveShapesOnThisPage && activeTool !== ToolType.SELECT ? 'bg-red-500 animate-pulse ring-2 ring-red-200' : 'bg-current'}`} />
                                                                         </Button>

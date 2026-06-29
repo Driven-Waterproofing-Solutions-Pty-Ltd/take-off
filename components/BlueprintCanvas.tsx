@@ -423,6 +423,18 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     const dragStart = useRef({ x: 0, y: 0 });
     const transformStart = useRef({ x: 0, y: 0 });
 
+    // --- Pointer Events / multi-touch state ---
+    const stageRef = useRef<Konva.Stage>(null);
+    // Active pointers currently down on the viewport, keyed by pointerId.
+    const activePointers = useRef<Map<number, { x: number; y: number }>>(new Map());
+    // Gesture state for two-finger pinch-zoom + pan. Null when not pinching.
+    const pinchState = useRef<{
+        startDist: number;
+        startScale: number;
+        startMid: { x: number; y: number };
+        startTransform: { x: number; y: number };
+    } | null>(null);
+
     const [drawingPoints, setDrawingPoints] = useState<Point[]>([]);
     const [tempPoint, setTempPoint] = useState<Point | null>(null);
     const [snapPoint, setSnapPoint] = useState<Point | null>(null);
@@ -990,10 +1002,80 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         };
     }, [contextMenu, setZoomLevel]);
 
-    const handleMouseDown = (e: React.MouseEvent) => {
+    // P2: Ensure the Konva Stage container disables native touch gestures so our
+    // pointer handlers fully own panning/zooming on touch devices. Scoped to the
+    // canvas only (no body/global touch-action change). No-op on desktop.
+    useEffect(() => {
+        const stage = stageRef.current;
+        if (stage) {
+            stage.container().style.touchAction = 'none';
+        }
+    }, [file, contentWidth]);
+
+    // Shared zoom-at-anchor math (same model used by the wheel handler).
+    // anchorX/anchorY are in viewport-local pixels; newScale is pre-clamped.
+    const applyZoomAtPoint = (newScale: number, anchorX: number, anchorY: number) => {
+        const minScale = 0.1 / RENDER_SCALE;
+        const maxScale = 20 / RENDER_SCALE;
+        const clamped = Math.max(minScale, Math.min(maxScale, newScale));
+
+        const cx = (anchorX - transform.current.x) / transform.current.scale;
+        const cy = (anchorY - transform.current.y) / transform.current.scale;
+
+        const newX = anchorX - cx * clamped;
+        const newY = anchorY - cy * clamped;
+
+        updateTransform(newX, newY, clamped);
+        setZoomLevel(clamped * RENDER_SCALE);
+    };
+
+    const handlePointerDown = (e: React.PointerEvent) => {
+        // Track this pointer for multi-touch gesture detection.
+        activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+        // If two pointers are now down (touch), begin a pinch (pan + zoom) gesture
+        // regardless of the active tool, and cancel any in-progress single-pointer
+        // interaction (drawing preview / selection / pan).
+        if (activePointers.current.size === 2) {
+            const pts = Array.from(activePointers.current.values());
+            const dx = pts[1].x - pts[0].x;
+            const dy = pts[1].y - pts[0].y;
+            const dist = Math.hypot(dx, dy);
+            const rect = viewportRef.current?.getBoundingClientRect();
+            const midClientX = (pts[0].x + pts[1].x) / 2;
+            const midClientY = (pts[0].y + pts[1].y) / 2;
+            pinchState.current = {
+                startDist: dist || 1,
+                startScale: transform.current.scale,
+                startMid: {
+                    x: midClientX - (rect?.left ?? 0),
+                    y: midClientY - (rect?.top ?? 0),
+                },
+                startTransform: { x: transform.current.x, y: transform.current.y },
+            };
+            // Abort any single-pointer state so we don't draw/select during pinch.
+            setIsDragging(false);
+            setSelectionRect(null);
+            setIsRectSelecting(false);
+            setTempPoint(null);
+            setSnapPoint(null);
+            return;
+        }
+
+        // More than two pointers: ignore extras while pinching.
+        if (activePointers.current.size > 2) return;
+
+        handleMouseDown(e);
+    };
+
+    const handleMouseDown = (e: React.PointerEvent | React.MouseEvent) => {
         if (contextMenu) setContextMenu(null);
 
-        const isMiddleClick = e.button === 1;
+        const isPointer = 'pointerId' in e;
+        const pointerType = isPointer ? (e as React.PointerEvent).pointerType : 'mouse';
+        // Preserve the desktop middle-click pan: only for a real mouse middle button.
+        const isMiddleClick = pointerType === 'mouse' && e.button === 1;
+        // Left button (button 0) covers mouse left-click and the primary touch contact.
         const isSelectToolLeftClick = activeTool === ToolType.SELECT && e.button === 0;
 
         // If dragging vertex, we don't pan or select
@@ -1011,12 +1093,18 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             setIsRectSelecting(false); // Not yet confirmed as rect selection
             dragStart.current = { x: e.clientX, y: e.clientY };
             transformStart.current = { x: transform.current.x, y: transform.current.y };
+            if (isPointer) {
+                try { e.currentTarget.setPointerCapture((e as React.PointerEvent).pointerId); } catch { /* noop */ }
+            }
             e.preventDefault();
         } else if (isMiddleClick && viewportRef.current) {
             // Middle click always pans
             setIsDragging(true);
             dragStart.current = { x: e.clientX, y: e.clientY };
             transformStart.current = { x: transform.current.x, y: transform.current.y };
+            if (isPointer) {
+                try { e.currentTarget.setPointerCapture((e as React.PointerEvent).pointerId); } catch { /* noop */ }
+            }
             e.preventDefault();
         }
     };
@@ -1056,7 +1144,52 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         return closest;
     };
 
-    const handleMouseMove = (e: React.MouseEvent) => {
+    const handlePointerMove = (e: React.PointerEvent) => {
+        // Keep the active pointer position up to date for gesture math.
+        if (activePointers.current.has(e.pointerId)) {
+            activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        }
+
+        // P3: Two-finger pinch-to-zoom + pan, anchored at the pinch midpoint.
+        if (activePointers.current.size === 2 && pinchState.current) {
+            const pts = Array.from(activePointers.current.values());
+            const dx = pts[1].x - pts[0].x;
+            const dy = pts[1].y - pts[0].y;
+            const dist = Math.hypot(dx, dy) || 1;
+
+            const rect = viewportRef.current?.getBoundingClientRect();
+            const midX = (pts[0].x + pts[1].x) / 2 - (rect?.left ?? 0);
+            const midY = (pts[0].y + pts[1].y) / 2 - (rect?.top ?? 0);
+
+            const { startDist, startScale, startMid, startTransform } = pinchState.current;
+
+            // Zoom by the change in finger distance (reuses the wheel-zoom clamp model).
+            const minScale = 0.1 / RENDER_SCALE;
+            const maxScale = 20 / RENDER_SCALE;
+            const targetScale = Math.max(minScale, Math.min(maxScale, startScale * (dist / startDist)));
+
+            // Content point that was under the original midpoint, using the
+            // transform captured at gesture start (keeps the pinch stable).
+            const cx = (startMid.x - startTransform.x) / startScale;
+            const cy = (startMid.y - startTransform.y) / startScale;
+
+            // Anchor the zoom at the original content point but follow the current
+            // midpoint so the gesture also pans (two-finger drag).
+            const newX = midX - cx * targetScale;
+            const newY = midY - cy * targetScale;
+
+            updateTransform(newX, newY, targetScale);
+            setZoomLevel(targetScale * RENDER_SCALE);
+            return;
+        }
+
+        // Ignore stray moves while a multi-touch gesture is active.
+        if (activePointers.current.size > 2) return;
+
+        handleMouseMove(e);
+    };
+
+    const handleMouseMove = (e: React.PointerEvent | React.MouseEvent) => {
         // Handle entire shape dragging (all points together) - supports multiple shapes
         if (draggedShapes.length > 0 && activeTool === ToolType.SELECT && dragStartPoint.current) {
             const currentPoint = getInternalCoordinates(e.clientX, e.clientY);
@@ -1144,6 +1277,39 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 setSnapPoint(null);
             }
         }
+    };
+
+    const handlePointerUp = (e: React.PointerEvent) => {
+        const wasPinching = pinchState.current !== null && activePointers.current.size >= 2;
+        activePointers.current.delete(e.pointerId);
+
+        try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
+
+        // End a pinch gesture once fewer than two pointers remain. Do NOT fall
+        // through to single-pointer mouse-up logic, which could add a stray point.
+        if (pinchState.current && activePointers.current.size < 2) {
+            pinchState.current = null;
+            if (activePointers.current.size === 1) {
+                // The remaining finger should not resume drawing/selecting from a
+                // gesture; require a fresh tap.
+                setTempPoint(null);
+                setSnapPoint(null);
+            }
+            return;
+        }
+
+        if (wasPinching) return;
+
+        handleMouseUp();
+    };
+
+    const handlePointerCancel = (e: React.PointerEvent) => {
+        activePointers.current.delete(e.pointerId);
+        try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
+        if (activePointers.current.size < 2) {
+            pinchState.current = null;
+        }
+        handleMouseUp();
     };
 
     const handleMouseUp = () => {
@@ -1843,11 +2009,17 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             <div
                 ref={viewportRef}
                 className={`w-full h-full relative overflow-hidden select-none ${isDragging || draggedShapes.length > 0 ? 'cursor-grabbing' : (activeTool === ToolType.SELECT ? 'cursor-default' : 'cursor-crosshair')}`}
-                style={{ cursor: activeTool !== ToolType.SELECT ? 'crosshair' : undefined }}
-                onMouseDown={handleMouseDown}
-                onMouseMove={handleMouseMove}
-                onMouseUp={handleMouseUp}
-                onMouseLeave={() => { handleMouseUp(); setShowLoupe(false); }}
+                style={{ cursor: activeTool !== ToolType.SELECT ? 'crosshair' : undefined, touchAction: 'none' }}
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerUp}
+                onPointerCancel={handlePointerCancel}
+                onPointerLeave={(e) => {
+                    // With pointer capture active during a drag, leave won't fire
+                    // mid-gesture. Treat a genuine leave as a release for that pointer.
+                    handlePointerUp(e);
+                    setShowLoupe(false);
+                }}
                 onContextMenu={handleCanvasContextMenu}
             >
                 {/* PDF Container - Scaled via CSS for performance */}
@@ -1904,6 +2076,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 {/* Konva Canvas Overlay */}
                 {file && contentWidth > 0 && (
                     <Stage
+                        ref={stageRef}
                         width={viewportRef.current?.clientWidth ?? 0}
                         height={viewportRef.current?.clientHeight ?? 0}
                         className="absolute top-0 left-0"

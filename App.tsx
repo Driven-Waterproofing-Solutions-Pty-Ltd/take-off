@@ -20,7 +20,7 @@ import { ToolType, ProjectData, TakeoffItem, Shape, Unit, PlanSet, LegendSetting
 import { PresetScale, getAreaUnitFromLinear, isPointInPolygon } from './utils/geometry';
 import { useToast } from './contexts/ToastContext';
 import { generateMarkupPDF } from './utils/pdfExport';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Menu } from 'lucide-react';
 import { useProjectManager } from './hooks/useProjectManager';
 import { useLicense } from './contexts/LicenseContext';
 import { RamCacheProvider, useRamCache } from './contexts/RamCacheContext';
@@ -35,7 +35,7 @@ import { LazyStore } from '@tauri-apps/plugin-store';
 const AppContent: React.FC = () => {
   const { addToast } = useToast();
   const { isLicensed } = useLicense();
-  const { viewMode, setViewMode } = useViewRouter();
+  const { viewMode, setViewMode, sidebarOpen, setSidebarOpen } = useViewRouter();
 
   const {
     projectName,
@@ -771,7 +771,7 @@ const AppContent: React.FC = () => {
 
   if (isInitializing || isUploadingPdf) {
     return (
-      <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 gap-6">
+      <div className="h-dvh w-dvw flex flex-col items-center justify-center bg-slate-50 gap-6">
         <div className="relative">
           <div className="w-16 h-16 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin"></div>
         </div>
@@ -785,7 +785,15 @@ const AppContent: React.FC = () => {
   const activePlan = getActivePlanDetails();
 
   return (
-    <div className="flex h-screen w-screen bg-slate-50 overflow-hidden font-sans">
+    <div
+      className="flex h-dvh w-dvw bg-slate-50 overflow-hidden font-sans"
+      style={{
+        paddingTop: 'env(safe-area-inset-top)',
+        paddingBottom: 'env(safe-area-inset-bottom)',
+        paddingLeft: 'env(safe-area-inset-left)',
+        paddingRight: 'env(safe-area-inset-right)',
+      }}
+    >
       <Sidebar
         items={items} activeTakeoffId={activeTakeoffId} selectedShapes={selectedShapes} onDelete={handleDeleteItem} onResume={handleResumeTakeoff} onStop={handleStopTakeoff}
         onSelect={setActiveTakeoffId} onOpenUploadModal={() => setShowUploadModal(true)} planSets={planSets} pageIndex={pageIndex}
@@ -809,6 +817,26 @@ const AppContent: React.FC = () => {
         onDeleteShapes={handleDeleteShapes}
       />
       <main className="flex-1 relative flex flex-col h-full overflow-hidden">
+        {/* Mobile-only hamburger to open the sidebar drawer */}
+        <button
+          type="button"
+          aria-label="Open menu"
+          onClick={() => setSidebarOpen(true)}
+          className="md:hidden fixed top-2 left-2 z-30 flex items-center justify-center w-11 h-11 rounded-lg bg-background/90 backdrop-blur-md border border-border shadow-lg text-foreground"
+          style={{ top: 'calc(env(safe-area-inset-top) + 0.5rem)', left: 'calc(env(safe-area-inset-left) + 0.5rem)' }}
+        >
+          <Menu size={22} />
+        </button>
+
+        {/* Mobile-only backdrop, shown when the drawer is open; tap to close */}
+        {sidebarOpen && (
+          <div
+            className="md:hidden fixed inset-0 bg-black/50 z-30"
+            onClick={() => setSidebarOpen(false)}
+            aria-hidden="true"
+          />
+        )}
+
         {viewMode === 'estimates' ? (
           <EstimatesView items={items} onBack={() => setViewMode('canvas')} onDeleteItem={handleDeleteItem} onUpdateItem={handleUpdateItem}
             onReorderItems={(newItems) => setHistory(draft => { draft.items = newItems; })} onEditItem={setEditingItem} />
