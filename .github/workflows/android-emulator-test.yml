@@ -1,0 +1,97 @@
+name: 'Android Emulator Test'
+
+# Boots a KVM-accelerated Android emulator on GitHub's runners, installs the
+# prebuilt debug APK (from the Android APK spike build run), launches the app,
+# and captures screenshots + logcat. This answers the real question the build
+# alone can't: does the ProTakeoff WebView/PDF/canvas actually render on Android?
+#
+# The push trigger on this branch is a spike convenience; remove before any merge.
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: 'Run ID of the Android APK build whose artifact to test'
+        required: true
+        default: '28333455519'
+  push:
+    branches:
+      - 'claude/android-emulator-test'
+
+env:
+  # The successful "Android APK (spike)" build run that produced the APK artifact.
+  DEFAULT_BUILD_RUN_ID: '28333455519'
+  APP_ID: 'com.protakeoff.app'
+
+jobs:
+  emulator-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read   # needed to download the artifact from the build run
+    steps:
+      - name: enable KVM (hardware acceleration)
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: download prebuilt APK
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.inputs.build_run_id || env.DEFAULT_BUILD_RUN_ID }}
+        run: |
+          set -x
+          gh run download "$RUN_ID" -n protakeoff-android-debug-apk -D apk -R "${{ github.repository }}"
+          APK="$(find apk -name '*.apk' | head -1)"
+          test -n "$APK" || { echo "No APK found"; exit 1; }
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+          ls -lh "$APK"
+
+      - name: emulator → install → launch → capture
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disk-size: 8192M
+          ram-size: 4096M
+          force-avd-creation: true
+          disable-animations: true
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -x
+            mkdir -p artifacts
+            adb wait-for-device
+            # Install (grant runtime perms). Fall back without -g if needed.
+            adb install -r -g "$APK_PATH" || adb install -r "$APK_PATH"
+            # Launch via the default launcher activity for the package.
+            adb shell monkey -p "$APP_ID" -c android.intent.category.LAUNCHER 1 || true
+            sleep 30
+            adb exec-out screencap -p > artifacts/screen-1.png || true
+            sleep 12
+            adb exec-out screencap -p > artifacts/screen-2.png || true
+            # Liveness: is the app process still running (i.e. it didn't crash)?
+            adb shell pidof "$APP_ID" | tee artifacts/pid.txt || true
+            # Logs: full + an error-filtered slice for quick triage.
+            adb logcat -d > artifacts/logcat-full.txt || true
+            adb logcat -d *:E 2>/dev/null \
+              | grep -iE "protakeoff|tauri|chromium|webview|AndroidRuntime|FATAL|wry" \
+              > artifacts/logcat-errors.txt || true
+            echo "---- error log preview ----"
+            cat artifacts/logcat-errors.txt || true
+
+      - name: upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-test-results
+          path: artifacts/**
+          if-no-files-found: warn
