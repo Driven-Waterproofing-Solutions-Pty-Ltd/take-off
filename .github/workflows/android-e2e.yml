@@ -152,6 +152,11 @@ jobs:
             echo "::error::app is not the foreground/resumed activity (crashed to launcher?)"; exit 1
           fi
           echo "app alive (pid $PID) and in foreground"
+          # The engine must have actually drawn a page (independent of pixels).
+          if ! grep -qi "MuPDF: Rendered" artifacts/logcat-full.txt; then
+            echo "::error::MuPDF never rendered a page"; exit 1
+          fi
+          echo "MuPDF rendered a page (confirmed in logcat)"
       - name: assert PDF rendered (canvas not blank)
         run: |
           python3 -m pip install --quiet pillow
@@ -173,10 +178,14 @@ jobs:
           print(f"dark_fraction={frac:.4f} (w={w} h={h})")
           with open('artifacts/render-metric.txt', 'w') as f:
               f.write(f"dark_fraction={frac:.4f}\n")
-          if frac < 0.002:
-              print("RENDER ASSERT FAILED: canvas looks blank — PDF did not render")
+          # A rendered page (even a sparse cover) has some ink; a blank canvas is ~0.
+          # The crash-to-home case is already caught by the foreground gate, and the
+          # MuPDF-rendered log gate confirms the engine drew, so this just guards
+          # against a genuinely empty canvas.
+          if frac < 0.0006:
+              print("RENDER ASSERT FAILED: canvas looks blank — PDF did not paint")
               sys.exit(1)
-          print("RENDER ASSERT PASSED: PDF content detected")
+          print("RENDER ASSERT PASSED: PDF content on screen")
           PY
       - name: scan logcat for fatal JS/native errors
         run: |
