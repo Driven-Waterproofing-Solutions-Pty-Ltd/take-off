@@ -52,7 +52,11 @@ jobs:
             src-tauri/target
           key: ${{ runner.os }}-android-e2e-${{ hashFiles('src-tauri/Cargo.lock') }}
       - name: install frontend deps
-        run: npm ci
+        run: npm install
+      - name: install Tauri CLI
+        run: npm install -D @tauri-apps/cli@^2
+      - name: initialize Android project
+        run: npx tauri android init
       - name: build debug APK (E2E)
         run: npx tauri android build --apk --debug
       - name: upload APK
