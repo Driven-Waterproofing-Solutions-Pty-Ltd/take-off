@@ -4,18 +4,11 @@ name: 'Android APK (spike)'
 # Produces an UNSIGNED / debug-signed universal APK that can be sideloaded
 # onto a phone for testing (no Play Store, no release keystore yet).
 #
-# Triggers:
-#   - push to the spike branch (so iterating just means pushing)
-#   - manual run from the Actions tab (workflow_dispatch)
-#
-# This is exploratory: the app was never set up for mobile, so the first
-# runs are expected to surface issues (plugin support, desktop-only Rust,
-# webview quirks). The APK lands as a downloadable build artifact.
+# Produces the distributable debug APK (no E2E auto-load). Manual-trigger only:
+# the per-push functional loop runs android-e2e.yml instead, so we don't build
+# twice on every push. Run this from the Actions tab when you want a clean APK.
 
 on:
-  push:
-    branches:
-      - claude/android-apk-spike
   workflow_dispatch:
 
 jobs:
