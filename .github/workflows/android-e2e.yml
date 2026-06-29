@@ -71,8 +71,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: install Playwright (core, no browser download)
-        run: npm install playwright-core@latest
+      - name: install CDP client (page-level; works with Android WebView)
+        run: npm install chrome-remote-interface@latest
       - name: download APK
         uses: actions/download-artifact@v4
         with:

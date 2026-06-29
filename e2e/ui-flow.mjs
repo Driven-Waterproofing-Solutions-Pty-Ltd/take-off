@@ -1,96 +1,107 @@
-// UI-driven E2E for the Android build. Connects (over CDP, via an adb-forwarded
-// port) to the Tauri WebView running in the emulator and drives the REAL UI:
-// open the drawer, open the upload modal, select the bundled sample PDF on the
-// real <input>, start the project, then save — clicking actual buttons, asserting
-// DOM/canvas state. No app-side test backdoors.
-import { chromium } from 'playwright-core';
+// UI-driven E2E for the Android build. Talks to the Tauri WebView's PAGE-level
+// CDP target (Android WebView doesn't support Playwright's browser-level CDP), and
+// drives the REAL UI: real .click() on real buttons, a real change event on the
+// real file <input>, asserting DOM/canvas state. No app-side test backdoors.
+import CDP from 'chrome-remote-interface';
 import fs from 'fs';
 
-const CDP = process.env.CDP_URL || 'http://127.0.0.1:9222';
+const PORT = parseInt(process.env.CDP_PORT || '9222', 10);
+const HOST = '127.0.0.1';
 const OUT = process.env.ARTIFACTS || 'artifacts';
 fs.mkdirSync(OUT, { recursive: true });
 const log = (...a) => console.log('[ui-test]', ...a);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const result = { connected: false, hasCanvas: false, steps: [] };
-const save = () => fs.writeFileSync(`${OUT}/ui-result.json`, JSON.stringify(result, null, 2));
-const shot = async (page, name) => { try { await page.screenshot({ path: `${OUT}/${name}.png` }); } catch (e) { log('shot fail', name, e.message); } };
-const step = (s) => { log('STEP', s); result.steps.push(s); save(); };
+const persist = () => fs.writeFileSync(`${OUT}/ui-result.json`, JSON.stringify(result, null, 2));
+const step = (s) => { log('STEP', s); result.steps.push(s); persist(); };
+const fail = async (msg) => { log('FAIL:', msg); result.error = String(msg); persist(); process.exit(1); };
 
-const fail = async (msg, page) => { log('FAIL:', msg); result.error = msg; save(); if (page) await shot(page, 'ui-FAIL'); process.exit(1); };
+// Pick the app's page target.
+const targets = await CDP.List({ host: HOST, port: PORT }).catch((e) => fail('CDP.List: ' + e.message));
+log('targets:', JSON.stringify(targets.map((t) => ({ type: t.type, url: t.url }))));
+const pageTarget = targets.find((t) => t.type === 'page' && /tauri\.localhost|localhost|^https?:/.test(t.url)) || targets.find((t) => t.type === 'page');
+if (!pageTarget) await fail('no page target over CDP');
 
-const browser = await chromium.connectOverCDP(CDP, { timeout: 30000 }).catch((e) => { return fail('connectOverCDP: ' + e.message); });
-result.connected = true; step('connected over CDP');
+const client = await CDP({ host: HOST, port: PORT, target: pageTarget.webSocketDebuggerUrl }).catch((e) => fail('CDP connect: ' + e.message));
+const { Runtime, Page, DOM } = client;
+await Runtime.enable();
+await Page.enable().catch(() => {});
+await DOM.enable().catch(() => {});
+result.connected = true; result.pageUrl = pageTarget.url; step('connected to page: ' + pageTarget.url);
 
-// Find the app page across contexts.
-let page = null;
-for (const ctx of browser.contexts()) {
-  for (const p of ctx.pages()) {
-    log('found page:', p.url());
-    if (/tauri\.localhost|localhost|^https?:/.test(p.url())) page = page || p;
+const evalJS = async (expression) => {
+  const { result: r, exceptionDetails } = await Runtime.evaluate({ expression, awaitPromise: true, returnByValue: true });
+  if (exceptionDetails) throw new Error(exceptionDetails.exception?.description || exceptionDetails.text || 'eval error');
+  return r.value;
+};
+const shot = async (name) => {
+  try { const { data } = await Page.captureScreenshot({ format: 'png' }); fs.writeFileSync(`${OUT}/${name}.png`, Buffer.from(data, 'base64')); }
+  catch (e) { log('shot fail', name, e.message); }
+};
+const waitFor = async (sel, ms = 20000) => {
+  const start = Date.now();
+  while (Date.now() - start < ms) {
+    if (await evalJS(`!!document.querySelector(${JSON.stringify(sel)})`)) return true;
+    await sleep(500);
   }
+  throw new Error('element not found: ' + sel);
+};
+const click = async (sel, ms = 20000) => {
+  await waitFor(sel, ms);
+  const ok = await evalJS(`(()=>{const el=document.querySelector(${JSON.stringify(sel)}); if(!el) return false; el.click(); return true;})()`);
+  if (!ok) throw new Error('click failed: ' + sel);
+};
+
+try {
+  await shot('ui-01-initial');
+
+  // 1) Open the mobile drawer.
+  await click('[data-testid=open-menu]');
+  await sleep(600); await shot('ui-02-drawer'); step('opened drawer');
+
+  // 2) Open the upload modal.
+  await click('[data-testid=open-upload]');
+  await sleep(600); await shot('ui-03-upload-modal'); step('opened upload modal');
+
+  // 3) Put the bundled sample PDF onto the real file <input> (same-origin fetch +
+  //    change event — exercises the app's upload component; the OS chooser is not app UI).
+  await waitFor('[data-testid=file-input]');
+  await evalJS(`(async()=>{
+    const res = await fetch('/mupdf-readthedocs-io-en-1.26.1.pdf');
+    const blob = await res.blob();
+    const file = new File([blob], 'sample.pdf', { type: 'application/pdf' });
+    const dt = new DataTransfer(); dt.items.add(file);
+    const input = document.querySelector('[data-testid=file-input]');
+    if (!input) throw new Error('no file input');
+    input.files = dt.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  })()`);
+  await sleep(800); await shot('ui-04-file-selected'); step('selected sample PDF on input');
+
+  // 4) Start the project.
+  await click('[data-testid=upload-submit]');
+  step('clicked Start Project');
+
+  // 5) Wait for the plan to render (a <canvas> appears).
+  let ok = false;
+  for (let i = 0; i < 30; i++) { await sleep(1000); ok = await evalJS(`!!document.querySelector('canvas')`).catch(() => false); if (ok) break; }
+  result.hasCanvas = ok; persist();
+  await shot('ui-05-after-upload');
+  if (!ok) throw new Error('no <canvas> after upload (plan did not render)');
+  step('canvas present after upload');
+
+  // 6) Save via the real UI (reopen drawer -> Save).
+  await click('[data-testid=open-menu]').catch(() => {});
+  await sleep(500);
+  await click('[data-testid=save-project]');
+  await sleep(2500); await shot('ui-06-after-save'); step('clicked Save');
+
+  result.passed = true; persist();
+  log('UI FLOW PASSED');
+  await client.close().catch(() => {});
+  process.exit(0);
+} catch (e) {
+  await shot('ui-FAIL');
+  await fail(e.message || e);
 }
-if (!page) page = browser.contexts()[0]?.pages()[0];
-if (!page) await fail('no WebView page found over CDP');
-result.pageUrl = page.url(); save();
-step('page: ' + page.url());
-await shot(page, 'ui-01-initial');
-
-// 1) Open the mobile drawer (hamburger).
-try { await page.getByTestId('open-menu').click({ timeout: 20000 }); }
-catch { await page.getByLabel('Open menu').click({ timeout: 5000 }).catch(() => {}); }
-await page.waitForTimeout(600);
-await shot(page, 'ui-02-drawer');
-step('opened drawer');
-
-// 2) Open the upload modal (first-upload button).
-await page.getByTestId('open-upload').click({ timeout: 20000 }).catch(async () => {
-  await page.getByText('Upload Plans', { exact: false }).click({ timeout: 5000 });
-});
-await page.waitForTimeout(600);
-await shot(page, 'ui-03-upload-modal');
-step('opened upload modal');
-
-// 3) Put the bundled sample PDF onto the REAL file input via a same-origin fetch
-//    + change event (the app's own upload component; the OS file chooser is not app UI).
-await page.evaluate(async () => {
-  const res = await fetch('/mupdf-readthedocs-io-en-1.26.1.pdf');
-  const blob = await res.blob();
-  const file = new File([blob], 'sample.pdf', { type: 'application/pdf' });
-  const dt = new DataTransfer();
-  dt.items.add(file);
-  const input = document.querySelector('[data-testid=file-input]');
-  if (!input) throw new Error('file input not found');
-  input.files = dt.files;
-  input.dispatchEvent(new Event('change', { bubbles: true }));
-}).catch((e) => fail('set file on input: ' + e.message, page));
-await page.waitForTimeout(800);
-await shot(page, 'ui-04-file-selected');
-step('selected sample PDF on the input');
-
-// 4) Start the project (real button).
-await page.getByTestId('upload-submit').click({ timeout: 20000 }).catch((e) => fail('click upload-submit: ' + e.message, page));
-step('clicked Start Project');
-
-// 5) Wait for the plan to render: a <canvas> appears and MuPDF draws.
-let ok = false;
-for (let i = 0; i < 30; i++) {
-  await page.waitForTimeout(1000);
-  ok = await page.evaluate(() => !!document.querySelector('canvas')).catch(() => false);
-  if (ok) break;
-}
-result.hasCanvas = ok; save();
-await shot(page, 'ui-05-after-upload');
-if (!ok) await fail('no <canvas> after upload (plan did not render)', page);
-step('canvas present after upload');
-
-// 6) Save the project via the real UI (reopen drawer -> Save).
-await page.getByTestId('open-menu').click({ timeout: 10000 }).catch(() => {});
-await page.waitForTimeout(500);
-await page.getByTestId('save-project').click({ timeout: 10000 }).catch((e) => fail('click save: ' + e.message, page));
-await page.waitForTimeout(2500);
-await shot(page, 'ui-06-after-save');
-step('clicked Save');
-
-result.passed = true; save();
-log('UI FLOW PASSED');
-await browser.close().catch(() => {});
-process.exit(0);
