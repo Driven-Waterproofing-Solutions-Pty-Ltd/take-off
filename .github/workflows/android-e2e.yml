@@ -1,17 +1,14 @@
 name: 'Android E2E (UI-driven)'
 
-# Builds a debug APK, boots a KVM emulator, then drives the REAL app UI with
-# Playwright connected to the Tauri WebView over CDP (DevTools socket forwarded
+# Builds a debug APK, boots a KVM emulator, then drives the REAL app UI with a
+# page-level CDP client connected to the Tauri WebView (DevTools socket forwarded
 # via adb): open drawer -> upload the bundled sample PDF on the real file input ->
 # Start Project -> assert the plan renders -> Save. No app-side test backdoors.
 #
-# push trigger is a spike convenience; remove before merging to release.
+# Manual-trigger only. To run on PRs later, add a `pull_request:` trigger.
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - 'claude/android-apk-spike'
 
 env:
   NDK_VERSION: '26.3.11579264'
