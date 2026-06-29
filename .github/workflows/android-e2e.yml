@@ -132,6 +132,10 @@ jobs:
           adb shell dumpsys activity activities 2>/dev/null | grep -iE "ResumedActivity" > artifacts/foreground.txt || true
           adb logcat -d > artifacts/logcat-full.txt || true
           grep -iE "chromium|console|protakeoff|tauri|wry|wasm|aistudiocdn|Failed to load|\[E2E\]|FATAL|Uncaught|RustStdoutStderr" artifacts/logcat-full.txt > artifacts/logcat-relevant.txt || true
+          # Verify the Android save path wrote a project file into app-scoped storage.
+          adb shell run-as "$APP_ID" find . -name '*.takeoff' > artifacts/takeoff-files.txt 2>/dev/null || true
+          adb shell run-as "$APP_ID" find . -name '*.pdf' > artifacts/pdf-files.txt 2>/dev/null || true
+          echo "---- .takeoff in app storage ----"; cat artifacts/takeoff-files.txt || true
           echo "----- relevant log tail -----"; tail -80 artifacts/logcat-relevant.txt || true
           exit 0
           DRIVER
@@ -228,6 +232,13 @@ jobs:
               sys.exit(1)
           print("TOUCH PAN ASSERT PASSED: one-finger swipe panned the canvas")
           PY
+      - name: assert project saved to app storage (Android)
+        run: |
+          echo "takeoff files found:"; cat artifacts/takeoff-files.txt 2>/dev/null
+          if ! grep -qiE '\.takeoff' artifacts/takeoff-files.txt 2>/dev/null; then
+            echo "::error::no .takeoff written to app storage — mobile save path failed"; exit 1
+          fi
+          echo "SAVE ASSERT PASSED: a .takeoff was written to app-scoped storage"
       - name: scan logcat for fatal JS/native errors
         run: |
           # Only real app/JS failures: WebView console errors, CDN loads, app crashes.

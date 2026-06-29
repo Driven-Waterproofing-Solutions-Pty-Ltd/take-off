@@ -29,7 +29,7 @@ import { savePlanFile } from './utils/storage';
 import { flattenOCG } from './utils/flattenOCG';
 import { mupdfController, SearchHit } from './utils/mupdfController';
 import { save } from '@tauri-apps/plugin-dialog';
-import { writeFile } from '@tauri-apps/plugin-fs';
+import { writeFile, BaseDirectory } from '@tauri-apps/plugin-fs';
 import { LazyStore } from '@tauri-apps/plugin-store';
 
 const AppContent: React.FC = () => {
@@ -172,6 +172,15 @@ const AppContent: React.FC = () => {
       const sanitizedProjectName = projectName.replace(/[^a-z0-9]/gi, '_');
       const dateStr = new Date().toISOString().slice(0, 10);
       const defaultFileName = `${sanitizedProjectName}-Markup-${dateStr}.pdf`;
+
+      // Mobile: no native save dialog / writable absolute paths. Write into
+      // app-scoped storage (already in the fs capability scope). A share-sheet
+      // hand-off is a follow-up; this makes export succeed instead of failing.
+      if (/android|iphone|ipad|ipod/i.test(navigator.userAgent)) {
+        await writeFile(`protakeoff/pdf_store/${defaultFileName}`, pdfBytes, { baseDir: BaseDirectory.AppLocalData });
+        addToast(`Exported to app storage: ${defaultFileName}`, 'success');
+        return;
+      }
 
       // Use LazyStore to check if we have a saved export directory
       const store = new LazyStore('settings.json');
@@ -318,6 +327,9 @@ const AppContent: React.FC = () => {
         await handleUpload([file], ['E2E Sample']);
         (window as unknown as Record<string, unknown>).__E2E_PDF_LOADED__ = true;
         console.log('[E2E] sample PDF loaded');
+        // Exercise the Android save path so the test can verify a file lands in storage.
+        try { await handleSaveProject(); console.log('[E2E] project saved'); }
+        catch (saveErr) { console.error('[E2E] project save failed', saveErr); }
       } catch (e) {
         (window as unknown as Record<string, unknown>).__E2E_PDF_ERROR__ = String(e);
         console.error('[E2E] sample PDF load failed', e);

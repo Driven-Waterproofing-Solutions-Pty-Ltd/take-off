@@ -1,7 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { save, open } from '@tauri-apps/plugin-dialog';
-import { writeFile } from '@tauri-apps/plugin-fs';
+import { writeFile, readFile, BaseDirectory } from '@tauri-apps/plugin-fs';
+
+// Android/iOS WebView user-agents contain these tokens; used to branch storage paths.
+const isMobilePlatform = () => /android|iphone|ipad|ipod/i.test(navigator.userAgent);
 import { useHistory } from './useHistory';
 import { TakeoffItem, ProjectData, PlanSet, ToolType, Unit } from '../types';
 import {
@@ -54,9 +57,16 @@ export const useProjectManager = (isLicensed: boolean) => {
 
   // Load project from file logic
   const loadFromFile = useCallback(async (path: string) => {
-    // Read and parse first to ensure validity before clearing existing data
-    const data = await invoke<number[]>('read_file_binary', { path });
-    const importData = new Uint8Array(data);
+    // Read and parse first to ensure validity before clearing existing data.
+    // On mobile the Rust std::fs read_file_binary can't open SAF content:// URIs,
+    // so use plugin-fs readFile (content-URI aware) instead.
+    let importData: Uint8Array;
+    if (isMobilePlatform()) {
+      importData = await readFile(path);
+    } else {
+      const data = await invoke<number[]>('read_file_binary', { path });
+      importData = new Uint8Array(data);
+    }
     const state = await importProjectFromZip(importData);
 
     // Now it's safe to clear and save
@@ -84,22 +94,25 @@ export const useProjectManager = (isLicensed: boolean) => {
         let loadedFilePath: string | null = null;
         let loadSource: 'file' | 'storage' = 'storage';
 
-        // 1. Try to load from arguments
-        try {
-          const args = await invoke<string[]>('get_startup_args');
-          console.log("Startup args:", args);
-          
-          // Find first argument that looks like a .takeoff file
-          const fileArg = args.find(arg => arg.toLowerCase().endsWith('.takeoff'));
-          
-          if (fileArg) {
-            console.log("Attempting to load from argument:", fileArg);
-            state = await loadFromFile(fileArg);
-            loadedFilePath = fileArg;
-            loadSource = 'file';
+        // 1. Try to load from arguments (desktop only; Android delivers "open with"
+        //    as an Intent content:// URI, not argv, so skip the invoke on mobile).
+        if (!isMobilePlatform()) {
+          try {
+            const args = await invoke<string[]>('get_startup_args');
+            console.log("Startup args:", args);
+
+            // Find first argument that looks like a .takeoff file
+            const fileArg = args.find(arg => arg.toLowerCase().endsWith('.takeoff'));
+
+            if (fileArg) {
+              console.log("Attempting to load from argument:", fileArg);
+              state = await loadFromFile(fileArg);
+              loadedFilePath = fileArg;
+              loadSource = 'file';
+            }
+          } catch (argError) {
+            console.error("Error checking startup args:", argError);
           }
-        } catch (argError) {
-          console.error("Error checking startup args:", argError);
         }
 
         // 2. Fallback to storage if no file loaded
@@ -180,6 +193,16 @@ export const useProjectManager = (isLicensed: boolean) => {
       const blob = await exportProjectToZip(items, projectData, planSets, totalPages, projectName);
       const buffer = await blob.arrayBuffer();
       const uint8Array = new Uint8Array(buffer);
+
+      // Mobile: no native save dialog and absolute paths aren't writable under
+      // scoped storage, so persist into app-scoped storage (already in the fs
+      // capability scope). Desktop keeps the save() dialog flow below.
+      if (isMobilePlatform()) {
+        const sanitizedName = (projectName || 'project').replace(/[^a-z0-9]/gi, '_') || 'project';
+        await writeFile(`protakeoff/pdf_store/${sanitizedName}.takeoff`, uint8Array, { baseDir: BaseDirectory.AppLocalData });
+        addToast(`Project saved to app storage (${sanitizedName}.takeoff)`, 'success');
+        return;
+      }
 
       let savePath = currentFilePath;
 
