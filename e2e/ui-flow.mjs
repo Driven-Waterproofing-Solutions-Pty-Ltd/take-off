@@ -74,9 +74,9 @@ try {
   //    change event — exercises the app's upload component; the OS chooser is not app UI).
   await waitFor('[data-testid=file-input]');
   await evalJS(`(async()=>{
-    const res = await fetch('/mupdf-readthedocs-io-en-1.26.1.pdf');
+    const res = await fetch('/demo-plan.pdf');
     const blob = await res.blob();
-    const file = new File([blob], 'sample.pdf', { type: 'application/pdf' });
+    const file = new File([blob], 'demo-plan.pdf', { type: 'application/pdf' });
     const dt = new DataTransfer(); dt.items.add(file);
     const input = document.querySelector('[data-testid=file-input]');
     if (!input) throw new Error('no file input');
@@ -125,19 +125,21 @@ try {
   // globalIdx is 0-based; "Page 6" = index 5. Navigating remounts the canvas (fit-to-width).
   const goToPageIdx = async (idx) => { await click('[data-testid=page-row-' + idx + ']', 8000); };
 
-  await demoStep('close drawer to show cover', async () => { await evalJS(`(()=>{const b=document.querySelector('.fixed.inset-0'); if(b){b.click(); return true;} return false;})()`); await sleep(900); });
-  await shot('ui-07-cover');
-  await demoStep('zoom into cover title', async () => { await zoomIn(4, 0.5, 0.2); await sleep(1600); });
-  await shot('ui-08-cover-zoom');
+  await demoStep('close drawer to show plan', async () => { await evalJS(`(()=>{const b=document.querySelector('.fixed.inset-0'); if(b){b.click(); return true;} return false;})()`); await sleep(900); });
+  await shot('ui-07-ground-floor');
+  await demoStep('zoom into the plan', async () => { await zoomIn(5, 0.5, 0.45); await sleep(1700); });
+  await shot('ui-08-zoomed');
+  await demoStep('zoom in more', async () => { await zoomIn(4, 0.5, 0.45); await sleep(1700); });
+  await shot('ui-09-zoomed2');
   await demoStep('open drawer', async () => { await click('[data-testid=open-menu]'); await sleep(700); });
-  await shot('ui-09-pages');
-  await demoStep('go to Page 6', async () => { await goToPageIdx(5); await sleep(5000); });
-  await shot('ui-10-page6');
-  await demoStep('zoom Page 6', async () => { await zoomIn(5, 0.5, 0.35); await sleep(1700); });
-  await shot('ui-11-page6-zoom');
+  await shot('ui-10-pages');
+  await demoStep('go to Page 2 (First Floor)', async () => { await goToPageIdx(1); await sleep(5000); });
+  await shot('ui-11-first-floor');
+  await demoStep('zoom First Floor', async () => { await zoomIn(5, 0.5, 0.45); await sleep(1700); });
+  await shot('ui-12-first-floor-zoom');
   await demoStep('open drawer', async () => { await click('[data-testid=open-menu]'); await sleep(600); });
-  await demoStep('go to Page 16', async () => { await goToPageIdx(15); await sleep(5000); });
-  await shot('ui-12-page16');
+  await demoStep('go to Page 4 (Site Plan)', async () => { await goToPageIdx(3); await sleep(5000); });
+  await shot('ui-13-site-plan');
 
   await client.close().catch(() => {});
   process.exit(0);
