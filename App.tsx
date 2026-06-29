@@ -314,30 +314,6 @@ const AppContent: React.FC = () => {
     }
   };
 
-  // E2E only: when built with VITE_E2E=1 (CI emulator test), auto-load a bundled
-  // sample plan on startup so the test can verify the PDF actually renders on
-  // Android. This is stripped out of normal builds (the env var is unset).
-  useEffect(() => {
-    if (import.meta.env.VITE_E2E !== '1') return;
-    (async () => {
-      try {
-        const res = await fetch('/mupdf-readthedocs-io-en-1.26.1.pdf');
-        const blob = await res.blob();
-        const file = new File([blob], 'e2e-sample.pdf', { type: 'application/pdf' });
-        await handleUpload([file], ['E2E Sample']);
-        (window as unknown as Record<string, unknown>).__E2E_PDF_LOADED__ = true;
-        console.log('[E2E] sample PDF loaded');
-        // Exercise the Android save path so the test can verify a file lands in storage.
-        try { await handleSaveProject(); console.log('[E2E] project saved'); }
-        catch (saveErr) { console.error('[E2E] project save failed', saveErr); }
-      } catch (e) {
-        (window as unknown as Record<string, unknown>).__E2E_PDF_ERROR__ = String(e);
-        console.error('[E2E] sample PDF load failed', e);
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const handleInitiateTool = (tool: ToolType) => {
     if ([ToolType.LINEAR, ToolType.ARC, ToolType.AREA, ToolType.FILL, ToolType.SEGMENT, ToolType.DIMENSION].includes(tool)) {
       const scale = getCurrentPageScale();
@@ -854,6 +830,7 @@ const AppContent: React.FC = () => {
           type="button"
           onClick={() => setSidebarOpen(true)}
           aria-label="Open menu"
+          data-testid="open-menu"
           className="md:hidden absolute top-2 left-2 z-20 bg-white/95 border border-slate-300 rounded-md p-2 shadow active:bg-slate-100"
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">

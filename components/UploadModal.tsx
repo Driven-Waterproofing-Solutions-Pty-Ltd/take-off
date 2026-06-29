@@ -60,6 +60,7 @@ const UploadModal: React.FC<UploadModalProps> = ({ onUpload, onCancel, isFirstUp
               className="hidden"
               ref={fileInputRef}
               onChange={handleFileChange}
+              data-testid="file-input"
             />
             <Upload className={`mb-3 h-10 w-10 ${files.length > 0 ? 'text-primary' : 'text-muted-foreground'}`} />
             <span className="text-sm font-medium text-foreground text-center">
@@ -100,6 +101,7 @@ const UploadModal: React.FC<UploadModalProps> = ({ onUpload, onCancel, isFirstUp
           <Button
             onClick={handleSubmit}
             disabled={files.length === 0}
+            data-testid="upload-submit"
           >
             {isFirstUpload ? 'Start Project' : 'Add Plans'}
           </Button>

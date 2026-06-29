@@ -308,7 +308,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
                         <Tooltip>
                             <TooltipTrigger asChild>
-                                <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" onClick={onSaveProject}>
+                                <Button data-testid="save-project" variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" onClick={onSaveProject}>
                                     <Save size={16} />
                                 </Button>
                             </TooltipTrigger>
@@ -337,7 +337,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 <Button onClick={onShow3D} variant="outline" className="flex-1 h-8 text-xs font-medium border-dashed border-border hover:border-primary/50 hover:bg-primary/5 text-muted-foreground hover:text-primary">
                     <Box size={14} className="mr-2" /> 3D View
                 </Button>
-                <Button onClick={onOpenExportModal} variant="outline" className="flex-1 h-8 text-xs font-medium border-dashed border-border hover:border-primary/50 hover:bg-primary/5 text-muted-foreground hover:text-primary">
+                <Button data-testid="open-export" onClick={onOpenExportModal} variant="outline" className="flex-1 h-8 text-xs font-medium border-dashed border-border hover:border-primary/50 hover:bg-primary/5 text-muted-foreground hover:text-primary">
                     <FileDown size={14} className="mr-2" /> Export
                 </Button>
             </div>
@@ -363,7 +363,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 {planSets.length === 0 && (
                     <div className="flex flex-col items-center justify-center h-32 text-center text-muted-foreground text-sm px-4">
                         <p className="mb-2">No plans loaded</p>
-                        <Button variant="outline" size="sm" onClick={onOpenUploadModal} className="h-7 text-xs">
+                        <Button data-testid="open-upload" variant="outline" size="sm" onClick={onOpenUploadModal} className="h-7 text-xs">
                             <Upload size={12} className="mr-2" /> Upload Plans
                         </Button>
                     </div>

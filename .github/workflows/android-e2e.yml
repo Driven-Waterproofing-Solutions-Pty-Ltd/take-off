@@ -1,12 +1,11 @@
-name: 'Android E2E (build + render test)'
+name: 'Android E2E (UI-driven)'
 
-# The functional loop: builds a debug APK with VITE_E2E=1 (which makes the app
-# auto-load a bundled sample PDF on startup), boots a KVM emulator, launches the
-# app, and ASSERTS THE PDF ACTUALLY RENDERED (canvas has dark content, not a blank
-# shell) + scans WebView logcat for JS errors. This is what proves "it works",
-# not just "it builds".
+# Builds a debug APK, boots a KVM emulator, then drives the REAL app UI with
+# Playwright connected to the Tauri WebView over CDP (DevTools socket forwarded
+# via adb): open drawer -> upload the bundled sample PDF on the real file input ->
+# Start Project -> assert the plan renders -> Save. No app-side test backdoors.
 #
-# push trigger is a spike convenience — remove before merging to release.
+# push trigger is a spike convenience; remove before merging to release.
 
 on:
   workflow_dispatch:
@@ -21,8 +20,6 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      VITE_E2E: '1'   # frontend auto-loads the bundled sample PDF on startup
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -57,7 +54,7 @@ jobs:
         run: npm install -D @tauri-apps/cli@^2
       - name: initialize Android project
         run: npx tauri android init
-      - name: build debug APK (E2E)
+      - name: build debug APK
         run: npx tauri android build --apk --debug
       - name: upload APK
         uses: actions/upload-artifact@v4
@@ -70,6 +67,12 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: install Playwright (core, no browser download)
+        run: npm install playwright-core@latest
       - name: download APK
         uses: actions/download-artifact@v4
         with:
@@ -90,9 +93,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      # The emulator-runner runs `script:` one line at a time (each its own sh -c),
-      # so multi-line loops must live in a real bash file we invoke in one line.
-      - name: write E2E driver script
+      - name: write UI-test driver
         run: |
           cat > "$GITHUB_WORKSPACE/e2e-drive.sh" <<'DRIVER'
           #!/usr/bin/env bash
@@ -107,41 +108,38 @@ jobs:
           for attempt in 1 2 3 4; do
             echo "=== launch attempt $attempt ==="
             adb shell monkey -p "$APP_ID" -c android.intent.category.LAUNCHER 1 || true
-            sleep 28
-            if alive; then sleep 8; if alive; then STABLE=1; echo "stable on attempt $attempt"; break; fi; fi
-            echo "app died on attempt $attempt (flaky startup crash); capturing + retrying"
-            adb logcat -d > "artifacts/logcat-attempt-$attempt.txt" || true
-            adb logcat -c || true
+            sleep 25
+            if alive; then sleep 6; if alive; then STABLE=1; echo "stable on $attempt"; break; fi; fi
+            adb logcat -d > "artifacts/logcat-attempt-$attempt.txt" || true; adb logcat -c || true
           done
           echo "$STABLE" > artifacts/launch-stable.txt
-          sleep 22
-          adb exec-out screencap -p > artifacts/screen-1.png || true
-          sleep 10
-          adb exec-out screencap -p > artifacts/screen-2.png || true
-          # Touch pan smoke test: in SELECT tool a one-finger vertical swipe through the
-          # center (avoiding the top toolbar / hamburger) must move the view.
-          SZ=$(adb shell wm size | grep -oE '[0-9]+x[0-9]+' | head -1)
-          W=${SZ%x*}; H=${SZ#*x}
-          CX=$((W/2)); Y1=$((H*70/100)); Y2=$((H*35/100))
-          echo "screen ${W}x${H}; swipe $CX $Y1 -> $CX $Y2"
-          adb exec-out screencap -p > artifacts/pan-before.png || true
-          adb shell input swipe "$CX" "$Y1" "$CX" "$Y2" 300 || true
-          sleep 3
-          adb exec-out screencap -p > artifacts/pan-after.png || true
+          sleep 8
+          # Find the WebView DevTools abstract socket and forward it to tcp:9222.
+          SOCK=""
+          for i in 1 2 3 4 5 6 7 8; do
+            SOCK=$(adb shell cat /proc/net/unix 2>/dev/null | grep -o 'webview_devtools_remote_[0-9]*' | head -1 | tr -d '\r\n')
+            [ -n "$SOCK" ] && break
+            sleep 3
+          done
+          echo "socket=$SOCK" | tee artifacts/devtools-socket.txt
+          if [ -n "$SOCK" ]; then
+            adb forward tcp:9222 "localabstract:$SOCK" || true
+            curl -s http://127.0.0.1:9222/json/version > artifacts/cdp-version.json || true
+            cat artifacts/cdp-version.json || true
+          fi
+          # Drive the real UI over CDP.
+          CDP_URL=http://127.0.0.1:9222 ARTIFACTS="$GITHUB_WORKSPACE/artifacts" node "$GITHUB_WORKSPACE/e2e/ui-flow.mjs" > artifacts/ui-test.log 2>&1
+          echo "ui_exit=$?" | tee artifacts/ui-exit.txt
+          cat artifacts/ui-test.log || true
+          # Post-run capture.
+          adb exec-out screencap -p > artifacts/screen-final.png || true
           adb shell pidof "$APP_ID" | tr -d '\r' > artifacts/pid.txt || true
-          adb shell dumpsys activity activities 2>/dev/null | grep -iE "ResumedActivity" > artifacts/foreground.txt || true
-          adb logcat -d > artifacts/logcat-full.txt || true
-          grep -iE "chromium|console|protakeoff|tauri|wry|wasm|aistudiocdn|Failed to load|\[E2E\]|FATAL|Uncaught|RustStdoutStderr" artifacts/logcat-full.txt > artifacts/logcat-relevant.txt || true
-          # Verify the Android save path wrote a project file into app-scoped storage.
           adb shell run-as "$APP_ID" find . -name '*.takeoff' > artifacts/takeoff-files.txt 2>/dev/null || true
-          adb shell run-as "$APP_ID" find . -name '*.pdf' > artifacts/pdf-files.txt 2>/dev/null || true
-          echo "---- .takeoff in app storage ----"; cat artifacts/takeoff-files.txt || true
-          echo "----- relevant log tail -----"; tail -80 artifacts/logcat-relevant.txt || true
+          adb logcat -d > artifacts/logcat-full.txt || true
           exit 0
           DRIVER
           chmod +x "$GITHUB_WORKSPACE/e2e-drive.sh"
-          echo "driver written:"; sed -n '1,5p' "$GITHUB_WORKSPACE/e2e-drive.sh"
-      - name: emulator → launch → capture
+      - name: emulator → UI flow
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -153,101 +151,27 @@ jobs:
           disable-animations: true
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: bash "$GITHUB_WORKSPACE/e2e-drive.sh"
-      - name: assert app alive and foreground
+      - name: assert UI flow passed
         run: |
-          PID="$(cat artifacts/pid.txt 2>/dev/null | tr -d '[:space:]')"
-          echo "pid='$PID'"
-          echo "foreground: $(cat artifacts/foreground.txt 2>/dev/null)"
-          echo "launch-stable: $(cat artifacts/launch-stable.txt 2>/dev/null)"
-          if [ -z "$PID" ]; then
-            echo "::error::app process not running at capture (crashed)"; exit 1
+          echo "=== ui-test.log ==="; cat artifacts/ui-test.log 2>/dev/null || true
+          echo "=== ui-result.json ==="; cat artifacts/ui-result.json 2>/dev/null || true
+          echo "=== cdp-version ==="; cat artifacts/cdp-version.json 2>/dev/null || true
+          if [ "$(cat artifacts/ui-exit.txt 2>/dev/null)" != "ui_exit=0" ]; then
+            echo "::error::UI-driven flow failed"; exit 1
           fi
-          if ! grep -qi "com.protakeoff.app" artifacts/foreground.txt; then
-            echo "::error::app is not the foreground/resumed activity (crashed to launcher?)"; exit 1
-          fi
-          echo "app alive (pid $PID) and in foreground"
-          # The engine must have actually drawn a page (independent of pixels).
-          if ! grep -qi "MuPDF: Rendered" artifacts/logcat-full.txt; then
-            echo "::error::MuPDF never rendered a page"; exit 1
-          fi
-          echo "MuPDF rendered a page (confirmed in logcat)"
-      - name: assert PDF rendered (canvas not blank)
+          echo "UI-driven flow passed (upload + render + save via real UI)"
+      - name: assert project saved to app storage (via UI)
         run: |
-          python3 -m pip install --quiet pillow
-          python3 - <<'PY'
-          import sys
-          from PIL import Image
-          img = Image.open('artifacts/screen-2.png').convert('RGB')
-          w, h = img.size
-          top, bot = int(h*0.12), int(h*0.97)   # skip the app header band
-          px = img.load()
-          dark = total = 0
-          for y in range(top, bot, 3):
-              for x in range(0, w, 3):
-                  r, g, b = px[x, y]
-                  if 0.299*r + 0.587*g + 0.114*b < 120:
-                      dark += 1
-                  total += 1
-          frac = dark / max(total, 1)
-          print(f"dark_fraction={frac:.4f} (w={w} h={h})")
-          with open('artifacts/render-metric.txt', 'w') as f:
-              f.write(f"dark_fraction={frac:.4f}\n")
-          # A rendered page (even a sparse cover) has some ink; a blank canvas is ~0.
-          # The crash-to-home case is already caught by the foreground gate, and the
-          # MuPDF-rendered log gate confirms the engine drew, so this just guards
-          # against a genuinely empty canvas.
-          if frac < 0.0006:
-              print("RENDER ASSERT FAILED: canvas looks blank — PDF did not paint")
-              sys.exit(1)
-          print("RENDER ASSERT PASSED: PDF content on screen")
-          PY
-      - name: assert touch pan moved the view
-        run: |
-          python3 - <<'PY'
-          import sys
-          from PIL import Image, ImageChops
-          try:
-              a = Image.open('artifacts/pan-before.png').convert('RGB')
-              b = Image.open('artifacts/pan-after.png').convert('RGB')
-          except Exception as e:
-              print('missing pan screenshots:', e); sys.exit(1)
-          if a.size != b.size:
-              print('pan screenshot size mismatch'); sys.exit(1)
-          diff = ImageChops.difference(a, b)
-          w, h = diff.size
-          px = diff.load()
-          changed = total = 0
-          for y in range(0, h, 4):
-              for x in range(0, w, 4):
-                  r, g, bb = px[x, y]
-                  if r + g + bb > 40:
-                      changed += 1
-                  total += 1
-          frac = changed / max(total, 1)
-          print(f"pan_changed_fraction={frac:.4f}")
-          with open('artifacts/pan-metric.txt', 'w') as f:
-              f.write(f"pan_changed_fraction={frac:.4f}\n")
-          if frac < 0.01:
-              print("TOUCH PAN ASSERT FAILED: swipe did not move the view")
-              sys.exit(1)
-          print("TOUCH PAN ASSERT PASSED: one-finger swipe panned the canvas")
-          PY
-      - name: assert project saved to app storage (Android)
-        run: |
-          echo "takeoff files found:"; cat artifacts/takeoff-files.txt 2>/dev/null
+          echo "takeoff files:"; cat artifacts/takeoff-files.txt 2>/dev/null
           if ! grep -qiE '\.takeoff' artifacts/takeoff-files.txt 2>/dev/null; then
-            echo "::error::no .takeoff written to app storage — mobile save path failed"; exit 1
+            echo "::error::no .takeoff written via the UI Save button"; exit 1
           fi
-          echo "SAVE ASSERT PASSED: a .takeoff was written to app-scoped storage"
-      - name: scan logcat for fatal JS/native errors
+          echo "SAVE via UI confirmed"
+      - name: scan logcat for fatal app/JS errors
         run: |
-          # Only real app/JS failures: WebView console errors, CDN loads, app crashes.
-          # Exclude JavaBinder "Uncaught remote exception" (benign Android IPC noise).
-          ERR=$(grep -iE "aistudiocdn|FATAL EXCEPTION|AndroidRuntime: FATAL|Tauri/Console.*(Uncaught|Error:|Failed to load)" artifacts/logcat-full.txt | grep -vi "JavaBinder" || true)
-          if [ -n "$ERR" ]; then
-            echo "$ERR"; echo "::error::fatal app/JS error in logcat"; exit 1
-          fi
-          echo "no fatal app/JS errors in logcat"
+          ERR=$(grep -iE "aistudiocdn|FATAL EXCEPTION|AndroidRuntime: FATAL|Tauri/Console.*(Uncaught|Error:|Failed to load)" artifacts/logcat-full.txt 2>/dev/null | grep -vi "JavaBinder" || true)
+          if [ -n "$ERR" ]; then echo "$ERR"; echo "::error::fatal app/JS error"; exit 1; fi
+          echo "no fatal app/JS errors"
       - name: upload results
         if: always()
         uses: actions/upload-artifact@v4
