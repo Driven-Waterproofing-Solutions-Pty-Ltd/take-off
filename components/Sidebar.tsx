@@ -50,6 +50,8 @@ interface SidebarProps {
     activeTool: ToolType;
     onOpenExportModal: () => void;
     onOpenHelp: () => void;
+    /** Mobile drawer open state (ignored on >=md where the sidebar is static). */
+    isMobileOpen?: boolean;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({
@@ -83,6 +85,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     activeTool,
     onOpenExportModal,
     onOpenHelp,
+    isMobileOpen = false,
 }) => {
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
     const [expandedPages, setExpandedPages] = useState<Set<number>>(new Set());
@@ -263,8 +266,11 @@ const Sidebar: React.FC<SidebarProps> = ({
 
     return (
         <div
-            className="bg-background border-r border-border flex flex-col h-full z-20 flex-shrink-0 relative font-sans text-sm shadow-xl shadow-black/5 min-w-[370px]"
-            style={{ width: `${sidebarWidth}px`, minWidth: '370px' }}
+            className={`bg-background border-r border-border flex flex-col h-full font-sans text-sm shadow-xl shadow-black/5 z-40
+                fixed md:relative top-0 left-0 max-w-[88vw] transition-transform duration-200
+                md:translate-x-0 md:flex-shrink-0 md:min-w-[370px] md:max-w-none
+                ${isMobileOpen ? 'translate-x-0' : '-translate-x-full'}`}
+            style={{ width: `${sidebarWidth}px` }}
         >
             {/* Resize handle */}
             <div

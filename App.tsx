@@ -81,6 +81,8 @@ const AppContent: React.FC = () => {
 
   const [showNewItemModal, setShowNewItemModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
+  // Mobile-only: off-canvas sidebar drawer. On >=md the sidebar is always visible.
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [helpModalTab, setHelpModalTab] = useState<'guide' | 'shortcuts' | 'properties'>('guide');
   const [editingItem, setEditingItem] = useState<TakeoffItem | null>(null);
@@ -807,10 +809,15 @@ const AppContent: React.FC = () => {
 
   return (
     <div className="flex h-screen w-screen bg-slate-50 overflow-hidden font-sans">
+      {/* Mobile drawer backdrop */}
+      {sidebarOpen && (
+        <div className="fixed inset-0 bg-black/40 z-30 md:hidden" onClick={() => setSidebarOpen(false)} aria-hidden="true" />
+      )}
       <Sidebar
+        isMobileOpen={sidebarOpen}
         items={items} activeTakeoffId={activeTakeoffId} selectedShapes={selectedShapes} onDelete={handleDeleteItem} onResume={handleResumeTakeoff} onStop={handleStopTakeoff}
-        onSelect={setActiveTakeoffId} onOpenUploadModal={() => setShowUploadModal(true)} planSets={planSets} pageIndex={pageIndex}
-        setPageIndex={setPageIndex} totalPages={totalPages} projectData={projectData}
+        onSelect={(id) => { setActiveTakeoffId(id); setSidebarOpen(false); }} onOpenUploadModal={() => setShowUploadModal(true)} planSets={planSets} pageIndex={pageIndex}
+        setPageIndex={(i) => { setPageIndex(i); setSidebarOpen(false); }} totalPages={totalPages} projectData={projectData}
         scaleInfo={{ isSet: currentScale.isSet, unit: currentScale.unit, ppu: currentScale.pixelsPerUnit }}
         onToggleVisibility={handleToggleItemVisibility}
         onShowEstimates={() => { handleStopTakeoff(); setViewMode('estimates'); }}
@@ -830,6 +837,17 @@ const AppContent: React.FC = () => {
         onDeleteShapes={handleDeleteShapes}
       />
       <main className="flex-1 relative flex flex-col h-full overflow-hidden">
+        {/* Mobile-only: open the sidebar drawer (plans, items, project actions). */}
+        <button
+          type="button"
+          onClick={() => setSidebarOpen(true)}
+          aria-label="Open menu"
+          className="md:hidden absolute top-2 left-2 z-20 bg-white/95 border border-slate-300 rounded-md p-2 shadow active:bg-slate-100"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        </button>
         {viewMode === 'estimates' ? (
           <EstimatesView items={items} onBack={() => setViewMode('canvas')} onDeleteItem={handleDeleteItem} onUpdateItem={handleUpdateItem}
             onReorderItems={(newItems) => setHistory(draft => { draft.items = newItems; })} onEditItem={setEditingItem} />

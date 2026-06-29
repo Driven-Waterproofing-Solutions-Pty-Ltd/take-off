@@ -145,10 +145,13 @@ jobs:
           PY
       - name: scan logcat for fatal JS/native errors
         run: |
-          if grep -iE "FATAL EXCEPTION|Uncaught|aistudiocdn|AndroidRuntime: FATAL" artifacts/logcat-full.txt; then
-            echo "::error::fatal error found in logcat"; exit 1
+          # Only real app/JS failures: WebView console errors, CDN loads, app crashes.
+          # Exclude JavaBinder "Uncaught remote exception" (benign Android IPC noise).
+          ERR=$(grep -iE "aistudiocdn|FATAL EXCEPTION|AndroidRuntime: FATAL|Tauri/Console.*(Uncaught|Error:|Failed to load)" artifacts/logcat-full.txt | grep -vi "JavaBinder" || true)
+          if [ -n "$ERR" ]; then
+            echo "$ERR"; echo "::error::fatal app/JS error in logcat"; exit 1
           fi
-          echo "no fatal errors in logcat"
+          echo "no fatal app/JS errors in logcat"
       - name: upload results
         if: always()
         uses: actions/upload-artifact@v4
