@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseAustralianAddress } from '../src/shared/address-parse';
 import { lookupLGA } from '../src/shared/qld-lga';
 import { buildPrefillData, parseScopeForAreas } from '../src/modules/form43/prefill';
+import { buildForm43Pdf } from '../src/modules/form43/pdf';
 
 describe('parseAustralianAddress', () => {
   it('splits a Lot N + street + suburb + state + postcode line', () => {
@@ -55,5 +56,29 @@ describe('buildPrefillData', () => {
     expect(data.areas).toEqual(['Bathroom', 'Ensuite']);
     expect(data.certdate).toBe('2026-07-15');
     expect(data.membranes.length).toBeGreaterThan(0);
+  });
+});
+
+describe('buildForm43Pdf', () => {
+  const base = {
+    street_address: '1 Lamont Rd',
+    suburb: 'Wilston',
+    state: 'QLD',
+    postcode: '4051',
+    lga: 'Brisbane City Council',
+    areas_waterproofed: ['All internal wet areas'],
+    cert_date: '2026-06-28',
+  };
+
+  it('produces a valid unsigned PDF', async () => {
+    const bytes = await buildForm43Pdf(base);
+    expect(bytes.length).toBeGreaterThan(1000);
+    expect(new TextDecoder().decode(bytes.subarray(0, 5))).toBe('%PDF-');
+  });
+
+  it('produces a valid PDF when signed', async () => {
+    const bytes = await buildForm43Pdf({ ...base, signatory: 'Andrew Brett Driver' });
+    expect(bytes.length).toBeGreaterThan(1000);
+    expect(new TextDecoder().decode(bytes.subarray(0, 5))).toBe('%PDF-');
   });
 });

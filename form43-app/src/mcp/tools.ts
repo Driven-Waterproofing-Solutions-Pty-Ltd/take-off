@@ -101,6 +101,8 @@ export const TOOLS: ToolDef[] = [
         contact_name: { type: 'string', description: 'On-site competent person for Driven (defaults to the licensee, Andrew Brett Driver).' },
         contact_phone: { type: 'string' },
         notes: { type: 'string' },
+        signatory: { type: 'string', description: 'When set, SIGNS the certificate — draws this name on the page-3 "Signature of QBCC licensee" line. For Driven, pass "Andrew Brett Driver". Omit for an unsigned cert.' },
+        signature_date: { type: 'string', description: 'Signing date (DD/MM/YYYY or YYYY-MM-DD); defaults to cert_date.' },
       },
       required: ['street_address'],
     },

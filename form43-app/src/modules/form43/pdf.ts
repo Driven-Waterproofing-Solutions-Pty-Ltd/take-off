@@ -11,7 +11,7 @@
  * Pure pdf-lib — runs in both the Worker and the local Node build.
  */
 
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { QBCC_FORM43_TEMPLATE_B64 } from './qbcc-template';
 
 export interface Form43PdfData {
@@ -36,6 +36,14 @@ export interface Form43PdfData {
   contact_phone?: string;
   notes?: string;
   refdocs?: string;
+  /**
+   * When set, draws this name on the page-3 "Signature of QBCC licensee"
+   * line (the licensee's signature). For Driven this is "Andrew Brett Driver".
+   * Leave unset to produce an unsigned certificate.
+   */
+  signatory?: string;
+  /** Optional signing date (DD/MM/YYYY or YYYY-MM-DD); defaults to cert_date. */
+  signature_date?: string;
 }
 
 // Official QBCC AcroForm field names (verbatim from standalone.ts FM map).
@@ -154,7 +162,8 @@ export async function buildForm43Pdf(data: Form43PdfData): Promise<Uint8Array> {
     [FM.licclass]: LICENSEE.licclass,
     [FM.licnum]: LICENSEE.licnum,
     [FM.inspdate]: fmtDate(data.insp_date),
-    [FM.certdate]: fmtDate(data.cert_date),
+    // Page-3 Date sits beside the signature line; use the signing date when given.
+    [FM.certdate]: fmtDate(data.signature_date || data.cert_date),
   };
 
   for (const [fname, fval] of Object.entries(textFields)) {
@@ -175,6 +184,24 @@ export async function buildForm43Pdf(data: Form43PdfData): Promise<Uint8Array> {
   try { form.getDropdown(FM.state2).select(LICENSEE.state2); } catch { /* noop */ }
 
   form.flatten();
+
+  // Signature — the official template has no AcroForm signature field; the
+  // page-3 "9. Signature of QBCC licensee" line is a drawn underline. When a
+  // signatory is supplied, draw the name on that line (italic, like a signature).
+  if (data.signatory) {
+    const sigFont = await doc.embedFont(StandardFonts.TimesRomanItalic);
+    const page3 = doc.getPages()[2];
+    if (page3) {
+      page3.drawText(data.signatory, {
+        x: 226,
+        y: 772,
+        size: 15,
+        font: sigFont,
+        color: rgb(0.05, 0.05, 0.22),
+      });
+    }
+  }
+
   return doc.save();
 }
 
