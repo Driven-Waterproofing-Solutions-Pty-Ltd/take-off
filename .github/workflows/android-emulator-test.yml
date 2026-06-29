@@ -82,9 +82,7 @@ jobs:
             adb shell pidof "$APP_ID" | tee artifacts/pid.txt || true
             # Logs: full + an error-filtered slice for quick triage.
             adb logcat -d > artifacts/logcat-full.txt || true
-            adb logcat -d *:E 2>/dev/null \
-              | grep -iE "protakeoff|tauri|chromium|webview|AndroidRuntime|FATAL|wry" \
-              > artifacts/logcat-errors.txt || true
+            adb logcat -d "*:E" 2>/dev/null | grep -iE "protakeoff|tauri|chromium|webview|AndroidRuntime|FATAL|wry" > artifacts/logcat-errors.txt || true
             echo "---- error log preview ----"
             cat artifacts/logcat-errors.txt || true
 
