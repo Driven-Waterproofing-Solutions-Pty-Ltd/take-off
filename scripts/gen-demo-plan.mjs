@@ -4,7 +4,8 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import fs from 'fs';
 
-const W = 842, H = 1190; // A3 PORTRAIT (pt) — taller than wide, fills a phone screen
+const W = 595, H = 842; // A4 PORTRAIT (pt) — fills a phone screen; small enough pixmap
+                        // that the emulator's software renderer handles it at RENDER_SCALE 2
 const ink = rgb(0.1, 0.12, 0.16);
 const grey = rgb(0.78, 0.81, 0.85);
 const blue = rgb(0.16, 0.39, 0.78);
