@@ -62,7 +62,7 @@ const Tools: React.FC<ToolsProps> = ({
   const displayScale = Math.round(scale * 100);
 
   return (
-    <div className="absolute top-6 left-1/2 transform -translate-x-1/2 flex flex-col items-center gap-3 z-50">
+    <div className="absolute top-2 md:top-6 left-1/2 transform -translate-x-1/2 max-w-[calc(100vw-1rem)] md:max-w-none flex flex-col items-center gap-3 z-50">
 
       {isRecording && (
         <div className="bg-destructive text-destructive-foreground px-4 py-1.5 rounded-full text-xs font-semibold animate-in slide-in-from-top-2 fade-in shadow-lg flex items-center gap-2 ring-2 ring-background">
@@ -71,7 +71,7 @@ const Tools: React.FC<ToolsProps> = ({
         </div>
       )}
 
-      <div className="bg-background/80 backdrop-blur-md shadow-xl shadow-black/5 border border-border rounded-xl p-2 flex items-center gap-2 flex-nowrap">
+      <div className="bg-background/80 backdrop-blur-md shadow-xl shadow-black/5 border border-border rounded-xl p-2 flex items-center gap-2 flex-wrap md:flex-nowrap justify-center">
 
         <TooltipProvider delayDuration={300}>
           {/* Undo/Redo Group */}
