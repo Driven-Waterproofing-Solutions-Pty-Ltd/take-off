@@ -51,6 +51,8 @@ interface SidebarProps {
     activeTool: ToolType;
     onOpenExportModal: () => void;
     onOpenHelp: () => void;
+    /** Mobile drawer open state (ignored on >=md where the sidebar is static). */
+    isMobileOpen?: boolean;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({
@@ -85,6 +87,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     activeTool,
     onOpenExportModal,
     onOpenHelp,
+    isMobileOpen = false,
 }) => {
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
     const [expandedPages, setExpandedPages] = useState<Set<number>>(new Set());
@@ -265,8 +268,11 @@ const Sidebar: React.FC<SidebarProps> = ({
 
     return (
         <div
-            className="bg-background border-r border-border flex flex-col h-full z-20 flex-shrink-0 relative font-sans text-sm shadow-xl shadow-black/5 min-w-[370px]"
-            style={{ width: `${sidebarWidth}px`, minWidth: '370px' }}
+            className={`bg-background border-r border-border flex flex-col h-full font-sans text-sm shadow-xl shadow-black/5 z-40
+                fixed md:relative top-0 left-0 max-w-[88vw] transition-transform duration-200
+                md:translate-x-0 md:flex-shrink-0 md:min-w-[370px] md:max-w-none
+                ${isMobileOpen ? 'translate-x-0' : '-translate-x-full'}`}
+            style={{ width: `${sidebarWidth}px` }}
         >
             {/* Resize handle */}
             <div
@@ -304,7 +310,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
                         <Tooltip>
                             <TooltipTrigger asChild>
-                                <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" onClick={onSaveProject}>
+                                <Button data-testid="save-project" variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" onClick={onSaveProject}>
                                     <Save size={16} />
                                 </Button>
                             </TooltipTrigger>
@@ -336,7 +342,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 <Button onClick={onShowXero} variant="outline" className="flex-1 h-8 text-xs font-medium border-dashed border-border hover:border-primary/50 hover:bg-primary/5 text-muted-foreground hover:text-primary">
                     <Receipt size={14} className="mr-2" /> Xero
                 </Button>
-                <Button onClick={onOpenExportModal} variant="outline" className="flex-1 h-8 text-xs font-medium border-dashed border-border hover:border-primary/50 hover:bg-primary/5 text-muted-foreground hover:text-primary">
+                <Button data-testid="open-export" onClick={onOpenExportModal} variant="outline" className="flex-1 h-8 text-xs font-medium border-dashed border-border hover:border-primary/50 hover:bg-primary/5 text-muted-foreground hover:text-primary">
                     <FileDown size={14} className="mr-2" /> Export
                 </Button>
             </div>
@@ -362,7 +368,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 {planSets.length === 0 && (
                     <div className="flex flex-col items-center justify-center h-32 text-center text-muted-foreground text-sm px-4">
                         <p className="mb-2">No plans loaded</p>
-                        <Button variant="outline" size="sm" onClick={onOpenUploadModal} className="h-7 text-xs">
+                        <Button data-testid="open-upload" variant="outline" size="sm" onClick={onOpenUploadModal} className="h-7 text-xs">
                             <Upload size={12} className="mr-2" /> Upload Plans
                         </Button>
                     </div>
@@ -400,6 +406,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                             <div key={globalIdx} className="relative">
                                                 {/* Page Row */}
                                                 <div
+                                                    data-testid={`page-row-${globalIdx}`}
                                                     onClick={() => handlePageClick(globalIdx)}
                                                     className={`group flex items-center justify-between px-2 py-1.5 rounded-md cursor-pointer transition-all ${isPageActive
                                                         ? 'bg-primary/10 text-primary font-medium'

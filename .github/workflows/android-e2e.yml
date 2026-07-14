@@ -1,0 +1,178 @@
+name: 'Android E2E (UI-driven)'
+
+# Builds a debug APK, boots a KVM emulator, then drives the REAL app UI with a
+# page-level CDP client connected to the Tauri WebView (DevTools socket forwarded
+# via adb): open drawer -> upload the bundled sample PDF on the real file input ->
+# Start Project -> assert the plan renders -> Save. No app-side test backdoors.
+#
+# Manual-trigger only. To run on PRs later, add a `pull_request:` trigger.
+
+on:
+  workflow_dispatch:
+
+env:
+  NDK_VERSION: '26.3.11579264'
+  APP_ID: 'com.protakeoff.app'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: setup Android SDK
+        uses: android-actions/setup-android@v3
+      - name: install Android NDK + tools
+        run: |
+          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;${NDK_VERSION}"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+      - name: install Rust + Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+      - name: cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-android-e2e-${{ hashFiles('src-tauri/Cargo.lock') }}
+      - name: install frontend deps
+        run: npm install
+      - name: install Tauri CLI
+        run: npm install -D @tauri-apps/cli@^2
+      - name: initialize Android project
+        run: npx tauri android init
+      - name: build debug APK
+        run: npx tauri android build --apk --debug
+      - name: upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: protakeoff-android-e2e-apk
+          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+
+  emulator:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: install CDP client (page-level; works with Android WebView)
+        run: npm install chrome-remote-interface@latest
+      - name: download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: protakeoff-android-e2e-apk
+          path: apk
+      - name: resolve APK path
+        run: |
+          APK="$(find apk -name '*.apk' | head -1)"
+          test -n "$APK" || { echo 'no apk'; exit 1; }
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+          ls -lh "$APK"
+      - name: enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: write UI-test driver
+        run: |
+          cat > "$GITHUB_WORKSPACE/e2e-drive.sh" <<'DRIVER'
+          #!/usr/bin/env bash
+          set -x
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p artifacts
+          adb wait-for-device
+          adb install -r -g "$APK_PATH" || adb install -r "$APK_PATH"
+          alive() { test -n "$(adb shell pidof "$APP_ID" 2>/dev/null | tr -d '\r\n')"; }
+          adb logcat -c || true
+          STABLE=0
+          for attempt in 1 2 3 4; do
+            echo "=== launch attempt $attempt ==="
+            adb shell monkey -p "$APP_ID" -c android.intent.category.LAUNCHER 1 || true
+            sleep 25
+            if alive; then sleep 6; if alive; then STABLE=1; echo "stable on $attempt"; break; fi; fi
+            adb logcat -d > "artifacts/logcat-attempt-$attempt.txt" || true; adb logcat -c || true
+          done
+          echo "$STABLE" > artifacts/launch-stable.txt
+          sleep 8
+          # Find the WebView DevTools abstract socket and forward it to tcp:9222.
+          SOCK=""
+          for i in 1 2 3 4 5 6 7 8; do
+            SOCK=$(adb shell cat /proc/net/unix 2>/dev/null | grep -o 'webview_devtools_remote_[0-9]*' | head -1 | tr -d '\r\n')
+            [ -n "$SOCK" ] && break
+            sleep 3
+          done
+          echo "socket=$SOCK" | tee artifacts/devtools-socket.txt
+          if [ -n "$SOCK" ]; then
+            adb forward tcp:9222 "localabstract:$SOCK" || true
+            curl -s http://127.0.0.1:9222/json/version > artifacts/cdp-version.json || true
+            cat artifacts/cdp-version.json || true
+          fi
+          # Drive the real UI over CDP.
+          CDP_URL=http://127.0.0.1:9222 ARTIFACTS="$GITHUB_WORKSPACE/artifacts" node "$GITHUB_WORKSPACE/e2e/ui-flow.mjs" > artifacts/ui-test.log 2>&1
+          echo "ui_exit=$?" | tee artifacts/ui-exit.txt
+          cat artifacts/ui-test.log || true
+          # Post-run capture.
+          adb exec-out screencap -p > artifacts/screen-final.png || true
+          adb shell pidof "$APP_ID" | tr -d '\r' > artifacts/pid.txt || true
+          adb shell run-as "$APP_ID" find . -name '*.takeoff' > artifacts/takeoff-files.txt 2>/dev/null || true
+          adb logcat -d > artifacts/logcat-full.txt || true
+          exit 0
+          DRIVER
+          chmod +x "$GITHUB_WORKSPACE/e2e-drive.sh"
+      - name: emulator → UI flow
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disk-size: 8192M
+          ram-size: 4096M
+          force-avd-creation: true
+          disable-animations: true
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: bash "$GITHUB_WORKSPACE/e2e-drive.sh"
+      - name: assert UI flow passed
+        run: |
+          echo "=== ui-test.log ==="; cat artifacts/ui-test.log 2>/dev/null || true
+          echo "=== ui-result.json ==="; cat artifacts/ui-result.json 2>/dev/null || true
+          echo "=== cdp-version ==="; cat artifacts/cdp-version.json 2>/dev/null || true
+          if [ "$(cat artifacts/ui-exit.txt 2>/dev/null)" != "ui_exit=0" ]; then
+            echo "::error::UI-driven flow failed"; exit 1
+          fi
+          echo "UI-driven flow passed (upload + render + save via real UI)"
+      - name: assert project saved to app storage (via UI)
+        run: |
+          echo "takeoff files:"; cat artifacts/takeoff-files.txt 2>/dev/null
+          if ! grep -qiE '\.takeoff' artifacts/takeoff-files.txt 2>/dev/null; then
+            echo "::error::no .takeoff written via the UI Save button"; exit 1
+          fi
+          echo "SAVE via UI confirmed"
+      - name: scan logcat for fatal app/JS errors
+        run: |
+          ERR=$(grep -iE "aistudiocdn|FATAL EXCEPTION|AndroidRuntime: FATAL|Tauri/Console.*(Uncaught|Error:|Failed to load)" artifacts/logcat-full.txt 2>/dev/null | grep -vi "JavaBinder" || true)
+          if [ -n "$ERR" ]; then echo "$ERR"; echo "::error::fatal app/JS error"; exit 1; fi
+          echo "no fatal app/JS errors"
+      - name: upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results
+          path: artifacts/**
+          if-no-files-found: warn

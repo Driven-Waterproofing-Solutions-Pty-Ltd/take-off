@@ -1,0 +1,55 @@
+{
+  "$schema": "https://unpkg.com/wrangler/config-schema.json",
+  "name": "form43-app",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "vars": {
+    "ENV": "production"
+  },
+
+  "triggers": {
+    // Daily memory R2 snapshot at 14:30 UTC (00:30 AEST). No-op if
+    // FORM43_BACKUPS is unbound or DISABLE_R2_BACKUP=1.
+    "crons": ["30 14 * * *"]
+  },
+
+  "d1_databases": [
+    {
+      "binding": "FORM43_DB",
+      "database_name": "form43",
+      "database_id": "29482173-2dd4-40d0-826a-c7ac8af5f08a",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "vectorize": [
+    {
+      "binding": "MEMORY_INDEX",
+      "index_name": "form43-memory"
+    }
+  ],
+
+  "ai": {
+    "binding": "AI"
+  },
+
+  "r2_buckets": [
+    {
+      "binding": "FORM43_BACKUPS",
+      "bucket_name": "form43-backups"
+    }
+  ],
+
+  "kv_namespaces": [
+    {
+      "binding": "RATE_LIMIT_KV",
+      "id": "721ff5eff217497e9f3e65c78e508bd5"
+    }
+  ],
+
+  "observability": {
+    "enabled": true
+  }
+}

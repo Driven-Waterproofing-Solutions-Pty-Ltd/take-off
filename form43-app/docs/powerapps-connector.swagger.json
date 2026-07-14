@@ -1,0 +1,302 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Form 43 (Driven WP)",
+    "description": "QLD Form 43 (Certificate of Compliance for Waterproofing) — standalone Cloudflare Worker. Use this connector from Power Apps / Power Automate flows to pre-fill, save, list, and delete Form 43 certificates; verify Australian addresses via Geoscape G-NAF; and store/recall facts in self-contained memory.",
+    "version": "0.1.0",
+    "contact": {
+      "name": "Driven Waterproofing Solutions",
+      "email": "office@drivenwp.com"
+    }
+  },
+  "host": "form43-app.office-351.workers.dev",
+  "basePath": "/",
+  "schemes": ["https"],
+  "consumes": ["application/json"],
+  "produces": ["application/json"],
+  "securityDefinitions": {
+    "FormToken": {
+      "type": "apiKey",
+      "in": "header",
+      "name": "Authorization",
+      "description": "Bearer token. Enter the full value including the word 'Bearer ' — e.g. 'Bearer abc123...'."
+    }
+  },
+  "security": [{ "FormToken": [] }],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health check",
+        "description": "Liveness probe. No auth required.",
+        "operationId": "Health",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": { "$ref": "#/definitions/Envelope" }
+          }
+        }
+      }
+    },
+    "/api/v1/form43/prefill": {
+      "post": {
+        "summary": "Prefill Form 43 from a job snapshot",
+        "description": "Returns a Form 43 prefill payload: parsed street/suburb/state/postcode/LGA, default membranes, detected wet areas. No DB write.",
+        "operationId": "Form43Prefill",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": { "$ref": "#/definitions/PrefillInput" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Prefill payload", "schema": { "$ref": "#/definitions/Envelope" } },
+          "400": { "description": "Invalid input" },
+          "401": { "description": "Missing or invalid bearer" }
+        }
+      }
+    },
+    "/api/v1/form43/save": {
+      "post": {
+        "summary": "Save a completed Form 43 certificate",
+        "description": "Persists a Form 43 record. Pass confirm:true to commit; pass confirm:false to dry-run.",
+        "operationId": "Form43Save",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": { "$ref": "#/definitions/SaveInput" }
+          }
+        ],
+        "responses": {
+          "201": { "description": "Saved", "schema": { "$ref": "#/definitions/SaveResponse" } },
+          "400": { "description": "Invalid input" }
+        }
+      }
+    },
+    "/api/v1/form43/history": {
+      "get": {
+        "summary": "List Form 43 records",
+        "description": "Returns up to `limit` active Form 43 records, newest first.",
+        "operationId": "Form43List",
+        "parameters": [
+          { "name": "limit", "in": "query", "type": "integer", "minimum": 1, "maximum": 100, "default": 100 }
+        ],
+        "responses": {
+          "200": { "description": "Records", "schema": { "$ref": "#/definitions/Envelope" } }
+        }
+      }
+    },
+    "/api/v1/form43/history/{id}": {
+      "get": {
+        "summary": "Get a single Form 43 record",
+        "operationId": "Form43Get",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "type": "integer" }
+        ],
+        "responses": {
+          "200": { "description": "Record", "schema": { "$ref": "#/definitions/Envelope" } },
+          "404": { "description": "Not found" }
+        }
+      },
+      "delete": {
+        "summary": "Soft-delete a Form 43 record",
+        "description": "Sets is_active = 0. Rows are never hard-deleted.",
+        "operationId": "Form43Delete",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "type": "integer" }
+        ],
+        "responses": {
+          "200": { "description": "Deleted", "schema": { "$ref": "#/definitions/Envelope" } }
+        }
+      }
+    },
+    "/api/v1/address/autocomplete": {
+      "get": {
+        "summary": "Australian address autocomplete",
+        "description": "Geoscape Predictive (G-NAF) when GEOSCAPE_API_KEY is set; OSM Nominatim fallback otherwise.",
+        "operationId": "AddressAutocomplete",
+        "parameters": [
+          { "name": "q", "in": "query", "required": true, "type": "string" },
+          { "name": "limit", "in": "query", "type": "integer", "minimum": 1, "maximum": 10, "default": 10 },
+          { "name": "state", "in": "query", "type": "string", "enum": ["QLD","NSW","VIC","WA","SA","NT","ACT","TAS"] }
+        ],
+        "responses": {
+          "200": { "description": "Candidates", "schema": { "$ref": "#/definitions/Envelope" } }
+        }
+      }
+    },
+    "/api/v1/address/verify": {
+      "get": {
+        "summary": "Verify an Australian address",
+        "description": "Returns a canonical G-NAF record (lat/lng, structured fields, LGA filled for QLD) or the top OSM match.",
+        "operationId": "AddressVerify",
+        "parameters": [
+          { "name": "address", "in": "query", "type": "string" },
+          { "name": "gnaf_pid", "in": "query", "type": "string" }
+        ],
+        "responses": {
+          "200": { "description": "Verified", "schema": { "$ref": "#/definitions/Envelope" } },
+          "404": { "description": "Not found" }
+        }
+      }
+    },
+    "/api/v1/address/parse": {
+      "get": {
+        "summary": "Offline regex address parse",
+        "description": "No network. Returns lot, unit, street1, suburb, state, postcode, plus QLD LGA when applicable.",
+        "operationId": "AddressParse",
+        "parameters": [
+          { "name": "raw", "in": "query", "required": true, "type": "string" }
+        ],
+        "responses": {
+          "200": { "description": "Parsed", "schema": { "$ref": "#/definitions/Envelope" } }
+        }
+      }
+    },
+    "/api/v1/memory/save": {
+      "post": {
+        "summary": "Save a fact/preference/decision to memory",
+        "description": "Persists content into chat_memory and embeds it via Workers AI BGE for semantic recall.",
+        "operationId": "MemorySave",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": { "$ref": "#/definitions/MemorySaveInput" }
+          }
+        ],
+        "responses": {
+          "201": { "description": "Saved", "schema": { "$ref": "#/definitions/Envelope" } }
+        }
+      }
+    },
+    "/api/v1/memory/search": {
+      "get": {
+        "summary": "Search memory (semantic + literal fallback)",
+        "operationId": "MemorySearch",
+        "parameters": [
+          { "name": "q", "in": "query", "required": true, "type": "string" },
+          { "name": "limit", "in": "query", "type": "integer", "minimum": 1, "maximum": 20, "default": 20 },
+          { "name": "semantic", "in": "query", "type": "string", "enum": ["0","1"], "default": "1", "description": "Set to 0 to force literal LIKE search." }
+        ],
+        "responses": {
+          "200": { "description": "Hits", "schema": { "$ref": "#/definitions/Envelope" } }
+        }
+      }
+    },
+    "/api/v1/memory/recent": {
+      "get": {
+        "summary": "Recent memory rows",
+        "operationId": "MemoryRecent",
+        "parameters": [
+          { "name": "limit", "in": "query", "type": "integer", "minimum": 1, "maximum": 50, "default": 50 },
+          { "name": "category", "in": "query", "type": "string", "enum": ["PREFERENCE","FACT","DECISION","BUILDER","GENERAL"] }
+        ],
+        "responses": {
+          "200": { "description": "Rows", "schema": { "$ref": "#/definitions/Envelope" } }
+        }
+      }
+    },
+    "/api/v1/memory/pin/{id}": {
+      "post": {
+        "summary": "Pin a memory row (never expires)",
+        "operationId": "MemoryPin",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "type": "integer" },
+          {
+            "in": "body",
+            "name": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "confirm": { "type": "boolean", "default": true }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Pinned", "schema": { "$ref": "#/definitions/Envelope" } }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "Envelope": {
+      "type": "object",
+      "properties": {
+        "success": { "type": "boolean" },
+        "data": { "type": "object" },
+        "meta": { "type": "object" },
+        "error": { "type": "string" }
+      }
+    },
+    "PrefillInput": {
+      "type": "object",
+      "required": ["site_address"],
+      "properties": {
+        "job_id": { "type": "string" },
+        "site_address": { "type": "string", "description": "Full Australian site address (free-form is fine)." },
+        "scope_of_work": { "type": "string" },
+        "install_date": { "type": "string", "description": "DD/MM/YYYY or YYYY-MM-DD" },
+        "builder_name": { "type": "string" },
+        "lot_number": { "type": "string" },
+        "purchase_order": { "type": "string" },
+        "contact_name": { "type": "string" },
+        "contact_phone": { "type": "string" }
+      }
+    },
+    "SaveInput": {
+      "type": "object",
+      "required": ["street_address"],
+      "properties": {
+        "confirm": { "type": "boolean", "default": true },
+        "job_id": { "type": "string" },
+        "street_address": { "type": "string" },
+        "suburb": { "type": "string" },
+        "postcode": { "type": "string" },
+        "lga": { "type": "string" },
+        "building_class": { "type": "string", "default": "1a" },
+        "building_desc": { "type": "string", "default": "New residential dwelling" },
+        "products_used": { "type": "array", "items": { "type": "string" } },
+        "areas_waterproofed": { "type": "array", "items": { "type": "string" } },
+        "certifier_ref": { "type": "string" },
+        "da_number": { "type": "string" },
+        "insp_date": { "type": "string" },
+        "cert_date": { "type": "string" },
+        "notes": { "type": "string" },
+        "generated_by": { "type": "string", "default": "powerapps" }
+      }
+    },
+    "SaveResponse": {
+      "type": "object",
+      "properties": {
+        "success": { "type": "boolean" },
+        "data": {
+          "type": "object",
+          "properties": { "id": { "type": "integer" } }
+        },
+        "meta": {
+          "type": "object",
+          "properties": { "message": { "type": "string" } }
+        }
+      }
+    },
+    "MemorySaveInput": {
+      "type": "object",
+      "required": ["content"],
+      "properties": {
+        "content": { "type": "string" },
+        "category": { "type": "string", "enum": ["PREFERENCE","FACT","DECISION","BUILDER","GENERAL"], "default": "GENERAL" },
+        "memory_type": { "type": "string", "enum": ["LONG_TERM","SHORT_TERM","PINNED"], "default": "LONG_TERM" },
+        "source_session_id": { "type": "string" },
+        "expires_at": { "type": "string" },
+        "confirm": { "type": "boolean", "default": true }
+      }
+    }
+  }
+}

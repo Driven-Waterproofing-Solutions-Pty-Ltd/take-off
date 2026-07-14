@@ -1,0 +1,13 @@
+# Copy to .dev.vars (gitignored) and fill in.
+# In production, set via: wrangler secret put <NAME>
+
+# 32+ random bytes, hex. Generated with: openssl rand -hex 32
+FORM43_API_TOKEN=dev-token-replace-me
+
+# Optional. If absent, address search falls back to OSM Nominatim.
+# Get a key at https://geoscape.com.au/
+GEOSCAPE_API_KEY=
+
+# Optional. Toggles to disable specific subsystems for tests / local dev.
+DISABLE_RATE_LIMIT=0
+DISABLE_R2_BACKUP=1

@@ -30,7 +30,8 @@ import { savePlanFile } from './utils/storage';
 import { flattenOCG } from './utils/flattenOCG';
 import { mupdfController, SearchHit } from './utils/mupdfController';
 import { save } from '@tauri-apps/plugin-dialog';
-import { writeFile } from '@tauri-apps/plugin-fs';
+import { writeFile, BaseDirectory } from '@tauri-apps/plugin-fs';
+import { isMobilePlatform } from './utils/platform';
 import { LazyStore } from '@tauri-apps/plugin-store';
 
 const AppContent: React.FC = () => {
@@ -82,6 +83,8 @@ const AppContent: React.FC = () => {
 
   const [showNewItemModal, setShowNewItemModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
+  // Mobile-only: off-canvas sidebar drawer. On >=md the sidebar is always visible.
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [helpModalTab, setHelpModalTab] = useState<'guide' | 'shortcuts' | 'properties'>('guide');
   const [editingItem, setEditingItem] = useState<TakeoffItem | null>(null);
@@ -168,9 +171,18 @@ const AppContent: React.FC = () => {
     setExportProgress({ current: 0, total: pageIndices.length });
     try {
       const { pdfBytes } = await generateMarkupPDF(planSets, projectData, items, pageIndices, includeLegend, includeNotes);
-      const sanitizedProjectName = projectName.replace(/[^a-z0-9]/gi, '_');
+      const sanitizedProjectName = projectName.replace(/[^a-z0-9]/gi, '_') || 'project';
       const dateStr = new Date().toISOString().slice(0, 10);
       const defaultFileName = `${sanitizedProjectName}-Markup-${dateStr}.pdf`;
+
+      // Mobile: no native save dialog / writable absolute paths. Write into
+      // app-scoped storage (already in the fs capability scope). A share-sheet
+      // hand-off is a follow-up; this makes export succeed instead of failing.
+      if (isMobilePlatform()) {
+        await writeFile(`protakeoff/pdf_store/${defaultFileName}`, pdfBytes, { baseDir: BaseDirectory.AppLocalData });
+        addToast(`Exported to app storage: ${defaultFileName}`, 'success');
+        return;
+      }
 
       // Use LazyStore to check if we have a saved export directory
       const store = new LazyStore('settings.json');
@@ -787,10 +799,15 @@ const AppContent: React.FC = () => {
 
   return (
     <div className="flex h-screen w-screen bg-slate-50 overflow-hidden font-sans">
+      {/* Mobile drawer backdrop */}
+      {sidebarOpen && (
+        <div className="fixed inset-0 bg-black/40 z-30 md:hidden" onClick={() => setSidebarOpen(false)} aria-hidden="true" />
+      )}
       <Sidebar
+        isMobileOpen={sidebarOpen}
         items={items} activeTakeoffId={activeTakeoffId} selectedShapes={selectedShapes} onDelete={handleDeleteItem} onResume={handleResumeTakeoff} onStop={handleStopTakeoff}
-        onSelect={setActiveTakeoffId} onOpenUploadModal={() => setShowUploadModal(true)} planSets={planSets} pageIndex={pageIndex}
-        setPageIndex={setPageIndex} totalPages={totalPages} projectData={projectData}
+        onSelect={(id) => { setActiveTakeoffId(id); setSidebarOpen(false); }} onOpenUploadModal={() => setShowUploadModal(true)} planSets={planSets} pageIndex={pageIndex}
+        setPageIndex={(i) => { setPageIndex(i); setSidebarOpen(false); }} totalPages={totalPages} projectData={projectData}
         scaleInfo={{ isSet: currentScale.isSet, unit: currentScale.unit, ppu: currentScale.pixelsPerUnit }}
         onToggleVisibility={handleToggleItemVisibility}
         onShowEstimates={() => { handleStopTakeoff(); setViewMode('estimates'); }}
@@ -811,6 +828,18 @@ const AppContent: React.FC = () => {
         onDeleteShapes={handleDeleteShapes}
       />
       <main className="flex-1 relative flex flex-col h-full overflow-hidden">
+        {/* Mobile-only: open the sidebar drawer (plans, items, project actions). */}
+        <button
+          type="button"
+          onClick={() => setSidebarOpen(true)}
+          aria-label="Open menu"
+          data-testid="open-menu"
+          className="md:hidden absolute top-2 left-2 z-20 bg-white/95 border border-slate-300 rounded-md p-2 shadow active:bg-slate-100"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        </button>
         {viewMode === 'estimates' ? (
           <EstimatesView items={items} onBack={() => setViewMode('canvas')} onDeleteItem={handleDeleteItem} onUpdateItem={handleUpdateItem}
             onReorderItems={(newItems) => setHistory(draft => { draft.items = newItems; })} onEditItem={setEditingItem} />

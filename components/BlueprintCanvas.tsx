@@ -990,6 +990,71 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         };
     }, [contextMenu, setZoomLevel]);
 
+    // --- Touch (mobile): one-finger pan (SELECT tool) + two-finger pinch zoom ---
+    const pinchRef = useRef<{ dist: number } | null>(null);
+    const lastTapHandledRef = useRef(0);
+
+    // Coordinates from a mouse OR touch event (Konva taps carry changedTouches).
+    const getEvtClientXY = (evt: MouseEvent | TouchEvent): { clientX: number; clientY: number } => {
+        const te = evt as TouchEvent;
+        if (te.changedTouches && te.changedTouches.length > 0) {
+            return { clientX: te.changedTouches[0].clientX, clientY: te.changedTouches[0].clientY };
+        }
+        if (te.touches && te.touches.length > 0) {
+            return { clientX: te.touches[0].clientX, clientY: te.touches[0].clientY };
+        }
+        const me = evt as MouseEvent;
+        return { clientX: me.clientX, clientY: me.clientY };
+    };
+
+    const handleTouchStart = (e: React.TouchEvent) => {
+        if (contextMenu) setContextMenu(null);
+        if (draggedVertex) return;
+        if (e.touches.length === 2) {
+            const a = e.touches[0], b = e.touches[1];
+            pinchRef.current = { dist: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) };
+            setIsDragging(false);
+        } else if (e.touches.length === 1 && activeTool === ToolType.SELECT) {
+            const t = e.touches[0];
+            setIsDragging(true);
+            dragStart.current = { x: t.clientX, y: t.clientY };
+            transformStart.current = { x: transform.current.x, y: transform.current.y };
+        }
+    };
+
+    const handleTouchMove = (e: React.TouchEvent) => {
+        if (e.touches.length === 2 && pinchRef.current && viewportRef.current) {
+            const a = e.touches[0], b = e.touches[1];
+            const newDist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+            const rect = viewportRef.current.getBoundingClientRect();
+            const mx = (a.clientX + b.clientX) / 2 - rect.left;
+            const my = (a.clientY + b.clientY) / 2 - rect.top;
+            const oldScale = transform.current.scale;
+            const ratio = newDist / (pinchRef.current.dist || newDist);
+            const minScale = 0.1 / RENDER_SCALE;
+            const maxScale = 20 / RENDER_SCALE;
+            const newScale = Math.max(minScale, Math.min(maxScale, oldScale * ratio));
+            // Keep the pinch midpoint anchored (focal zoom), same math as the wheel handler.
+            const cx = (mx - transform.current.x) / oldScale;
+            const cy = (my - transform.current.y) / oldScale;
+            updateTransform(mx - cx * newScale, my - cy * newScale, newScale);
+            setZoomLevel(newScale * RENDER_SCALE);
+            pinchRef.current = { dist: newDist };
+            return;
+        }
+        if (isDragging && e.touches.length === 1) {
+            const t = e.touches[0];
+            const dx = t.clientX - dragStart.current.x;
+            const dy = t.clientY - dragStart.current.y;
+            updateTransform(transformStart.current.x + dx, transformStart.current.y + dy, transform.current.scale);
+        }
+    };
+
+    const handleTouchEnd = (e: React.TouchEvent) => {
+        if (e.touches.length === 0) { setIsDragging(false); pinchRef.current = null; }
+        else if (e.touches.length < 2) { pinchRef.current = null; }
+    };
+
     const handleMouseDown = (e: React.MouseEvent) => {
         if (contextMenu) setContextMenu(null);
 
@@ -1275,12 +1340,24 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     };
 
     const handleStageClick = (e: Konva.KonvaEventObject<MouseEvent>) => {
+        // On touch, Konva fires a 'tap' AND a compatibility 'click'; suppress only the
+        // synthetic click that immediately follows a tap. Desktop mouse clicks ('click'
+        // with no recent 'tap') are never throttled, so rapid clicking (e.g. the COUNT
+        // tool placing many points fast) keeps working.
+        const nowTs = typeof performance !== 'undefined' ? performance.now() : 0;
+        if (e.type === 'tap') {
+            lastTapHandledRef.current = nowTs;
+        } else if (nowTs - lastTapHandledRef.current < 700) {
+            return;
+        }
         // In Select mode, only trigger clicks on the stage background (to deselect)
         // In other modes (Area, Linear, etc.), allow clicking anywhere including on existing shapes
         if (activeTool === ToolType.SELECT && e.target !== e.target.getStage()) {
             return;
         }
         const mouseEvent = e.evt;
+        // Works for both mouse clicks and touch taps (touch coords live on changedTouches).
+        const { clientX: evtClientX, clientY: evtClientY } = getEvtClientXY(mouseEvent as unknown as MouseEvent | TouchEvent);
 
         if (contextMenu) {
             setContextMenu(null);
@@ -1317,7 +1394,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 
         if (isDragging) return;
 
-        const rawPoint = getInternalCoordinates(mouseEvent.clientX, mouseEvent.clientY);
+        const rawPoint = getInternalCoordinates(evtClientX, evtClientY);
         const point = getClosestSnapPoint(rawPoint) || rawPoint;
 
         if (activeTool === ToolType.SCALE) {
@@ -1843,11 +1920,15 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             <div
                 ref={viewportRef}
                 className={`w-full h-full relative overflow-hidden select-none ${isDragging || draggedShapes.length > 0 ? 'cursor-grabbing' : (activeTool === ToolType.SELECT ? 'cursor-default' : 'cursor-crosshair')}`}
-                style={{ cursor: activeTool !== ToolType.SELECT ? 'crosshair' : undefined }}
+                // touchAction: none lets us own pan/pinch gestures instead of the browser.
+                style={{ cursor: activeTool !== ToolType.SELECT ? 'crosshair' : undefined, touchAction: 'none' }}
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
                 onMouseLeave={() => { handleMouseUp(); setShowLoupe(false); }}
+                onTouchStart={handleTouchStart}
+                onTouchMove={handleTouchMove}
+                onTouchEnd={handleTouchEnd}
                 onContextMenu={handleCanvasContextMenu}
             >
                 {/* PDF Container - Scaled via CSS for performance */}
@@ -1908,6 +1989,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                         height={viewportRef.current?.clientHeight ?? 0}
                         className="absolute top-0 left-0"
                         onClick={handleStageClick}
+                        onTap={handleStageClick}
                     >
                         <Layer ref={konvaLayerRef}>
                             {/* Render cached vector paths for snapping reference */}

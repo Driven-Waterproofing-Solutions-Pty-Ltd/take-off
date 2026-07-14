@@ -7,6 +7,12 @@ edition = "2021"
 rust-version = "1.77.2"
 build = "build.rs"
 
+# Android/iOS link the app as a shared library, which requires cdylib +
+# staticlib crate types. rlib keeps the desktop binary (main.rs) working.
+[lib]
+name = "protakeoff_ai"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
 [build-dependencies]
 tauri-build = { version = "2.0.0", features = [] }
 
@@ -20,8 +26,14 @@ tauri-plugin-fs = "2.0.0"
 tauri-plugin-dialog = "2.0.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-reqwest = { version = "0.11", features = ["json", "blocking"] }
-machine-uid = "0.5"
+# Use rustls instead of the default native-tls (OpenSSL) so the crate
+# cross-compiles to Android (and iOS) without a target OpenSSL build.
+reqwest = { version = "0.11", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 rsa = "0.9"
 base64 = "0.21"
 tokio = { version = "1", features = ["full"] }
+
+# machine-uid (hardware ID for licensing) has no Android backend, so depend
+# on it only for desktop targets. license.rs provides an Android fallback.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+machine-uid = "0.5"

@@ -1,0 +1,41 @@
+name: form43-app CI
+
+on:
+  push:
+    paths:
+      - 'form43-app/**'
+      - '.github/workflows/form43-app-ci.yml'
+  pull_request:
+    paths:
+      - 'form43-app/**'
+      - '.github/workflows/form43-app-ci.yml'
+
+defaults:
+  run:
+    working-directory: form43-app
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Worker deps
+        run: npm ci
+
+      - name: Typecheck Worker
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Install + typecheck stdio adapter
+        working-directory: form43-app/mcp-stdio
+        run: |
+          npm ci
+          npx tsc --noEmit
