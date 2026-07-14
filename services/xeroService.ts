@@ -6,6 +6,7 @@ const KEY_CLIENT_ID = 'xero_client_id';
 const KEY_TOKENS = 'xero_tokens';
 const KEY_TENANT_ID = 'xero_tenant_id';
 const KEY_CODE_VERIFIER = 'xero_code_verifier';
+const KEY_STATE = 'xero_state';
 
 // ── Public types ─────────────────────────────────────────────────────────────
 export interface XeroTokens {
@@ -100,6 +101,7 @@ export const xeroService = {
         await store.delete(KEY_TOKENS);
         await store.delete(KEY_TENANT_ID);
         await store.delete(KEY_CODE_VERIFIER);
+        await store.delete(KEY_STATE);
         await store.save();
     },
 
@@ -120,7 +122,9 @@ export const xeroService = {
     async buildAuthUrl(clientId: string): Promise<string> {
         const verifier = await generateCodeVerifier();
         const challenge = await generateCodeChallenge(verifier);
+        const state = crypto.randomUUID();
         await store.set(KEY_CODE_VERIFIER, verifier);
+        await store.set(KEY_STATE, state);
         await store.save();
 
         const params = new URLSearchParams({
@@ -128,7 +132,7 @@ export const xeroService = {
             client_id: clientId,
             redirect_uri: XERO_REDIRECT_URI,
             scope: 'openid profile email accounting.transactions accounting.contacts.read offline_access',
-            state: crypto.randomUUID(),
+            state,
             code_challenge: challenge,
             code_challenge_method: 'S256',
         });
@@ -143,7 +147,11 @@ export const xeroService = {
     },
 
     /** Exchange the authorization code from Xero for access + refresh tokens. */
-    async exchangeCode(code: string, clientId: string): Promise<XeroTokens> {
+    async exchangeCode(code: string, clientId: string, state: string): Promise<XeroTokens> {
+        const storedState = await store.get<string>(KEY_STATE);
+        if (!storedState) throw new Error('OAuth state missing. Please restart the authorization flow.');
+        if (state !== storedState) throw new Error('OAuth state mismatch. Please restart the authorization flow.');
+
         const verifier = await store.get<string>(KEY_CODE_VERIFIER);
         if (!verifier) throw new Error('Code verifier missing. Please restart the authorization flow.');
 
@@ -175,6 +183,7 @@ export const xeroService = {
 
         await this.setTokens(tokens);
         await store.delete(KEY_CODE_VERIFIER);
+        await store.delete(KEY_STATE);
         await store.save();
         return tokens;
     },
@@ -195,7 +204,10 @@ export const xeroService = {
             body: body.toString(),
         });
 
-        if (!response.ok) throw new Error('Xero token refresh failed');
+        if (!response.ok) {
+            const text = await response.text();
+            throw new Error(`Xero token refresh failed (${response.status}): ${text}`);
+        }
 
         const data = await response.json();
         const newTokens: XeroTokens = {

@@ -26,6 +26,7 @@ Deno.serve(async (req: Request) => {
     // ── Success callback from Xero ────────────────────────────────────────
     if (url.pathname.endsWith('/callback')) {
         const code = url.searchParams.get('code');
+        const state = url.searchParams.get('state');
         const error = url.searchParams.get('error');
         const errorDesc = url.searchParams.get('error_description');
 
@@ -44,7 +45,7 @@ Deno.serve(async (req: Request) => {
             });
         }
 
-        const html = buildSuccessPage(code);
+        const html = buildSuccessPage(code, state || '');
         return new Response(html, {
             headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' },
         });
@@ -58,7 +59,7 @@ Deno.serve(async (req: Request) => {
 
 // ── HTML page builders ────────────────────────────────────────────────────────
 
-function buildSuccessPage(code: string): string {
+function buildSuccessPage(code: string, state: string): string {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -88,7 +89,7 @@ function buildSuccessPage(code: string): string {
     .icon { font-size: 48px; margin-bottom: 16px; }
     h1 { font-size: 22px; font-weight: 700; color: #111827; margin-bottom: 8px; }
     p { font-size: 14px; color: #6b7280; margin-bottom: 24px; line-height: 1.6; }
-    .code-label { font-size: 12px; font-weight: 600; color: #374151; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+    .field-label { font-size: 12px; font-weight: 600; color: #374151; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; text-align: left; }
     .code-box {
       background: #f9fafb;
       border: 1.5px solid #d1d5db;
@@ -101,6 +102,7 @@ function buildSuccessPage(code: string): string {
       margin-bottom: 16px;
       user-select: all;
       cursor: text;
+      text-align: left;
     }
     .btn {
       display: inline-flex;
@@ -115,10 +117,13 @@ function buildSuccessPage(code: string): string {
       font-weight: 600;
       cursor: pointer;
       transition: background 0.15s;
+      margin: 4px;
     }
     .btn:hover { background: #15803d; }
     .btn:active { background: #166534; }
-    .copied { background: #2563eb !important; }
+    .btn-secondary { background: #2563eb; }
+    .btn-secondary:hover { background: #1d4ed8; }
+    .copied { background: #7c3aed !important; }
     .note { margin-top: 20px; font-size: 12px; color: #9ca3af; }
   </style>
 </head>
@@ -127,25 +132,31 @@ function buildSuccessPage(code: string): string {
     <div class="icon">✅</div>
     <h1>Xero Authorization Successful</h1>
     <p>
-      Copy the authorization code below and paste it back into the<br />
+      Copy the <strong>Authorization Code</strong> and <strong>State</strong> below and paste them back into the<br />
       <strong>ProTakeoff</strong> app to complete the connection.
     </p>
-    <div class="code-label">Authorization Code</div>
+    <div class="field-label">Authorization Code</div>
     <div class="code-box" id="code">${escapeHtml(code)}</div>
-    <button class="btn" id="copyBtn" onclick="copyCode()">
+    ${state ? `<div class="field-label">State</div>
+    <div class="code-box" id="state">${escapeHtml(state)}</div>` : ''}
+    <button class="btn" id="copyCodeBtn" onclick="copyField('code', 'copyCodeBtn')">
       📋 Copy Code
     </button>
-    <p class="note">You can close this tab after copying the code.</p>
+    ${state ? `<button class="btn btn-secondary" id="copyStateBtn" onclick="copyField('state', 'copyStateBtn')">
+      📋 Copy State
+    </button>` : ''}
+    <p class="note">You can close this tab after copying both values.</p>
   </div>
   <script>
-    function copyCode() {
-      const code = document.getElementById('code').textContent;
-      navigator.clipboard.writeText(code).then(() => {
-        const btn = document.getElementById('copyBtn');
+    function copyField(fieldId, btnId) {
+      const text = document.getElementById(fieldId).textContent;
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = document.getElementById(btnId);
+        const original = btn.innerHTML;
         btn.textContent = '✓ Copied!';
         btn.classList.add('copied');
         setTimeout(() => {
-          btn.innerHTML = '📋 Copy Code';
+          btn.innerHTML = original;
           btn.classList.remove('copied');
         }, 2000);
       });

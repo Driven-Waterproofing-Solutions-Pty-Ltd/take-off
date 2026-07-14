@@ -101,15 +101,9 @@ function computeLineItems(items: TakeoffItem[]): ComputedLineItem[] {
                 });
             }
 
-            let totalCost: number;
-            let unitPrice: number;
-            if ((!item.price || item.price === 0) && subTotal > 0 && calculated > 0) {
-                totalCost = subTotal;
-                unitPrice = totalCost / calculated;
-            } else {
-                totalCost = calculated * (item.price || 0);
-                unitPrice = item.price || 0;
-            }
+            const baseTotal = calculated * (item.price || 0);
+            const totalCost = baseTotal + subTotal;
+            const unitPrice = calculated > 0 ? totalCost / calculated : item.price || 0;
 
             rows.push({
                 group: item.group || 'General',
@@ -181,6 +175,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
     const [isConnected, setIsConnected] = useState(false);
     const [isConnecting, setIsConnecting] = useState(false);
     const [authCode, setAuthCode] = useState('');
+    const [authState, setAuthState] = useState('');
     const [awaitingCode, setAwaitingCode] = useState(false);
     const [tenants, setTenants] = useState<XeroTenant[]>([]);
     const [selectedTenant, setSelectedTenant] = useState('');
@@ -245,9 +240,13 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
             addToast('Please paste the authorization code', 'error');
             return;
         }
+        if (!authState.trim()) {
+            addToast('Please paste the state value from the authorization page', 'error');
+            return;
+        }
         setIsConnecting(true);
         try {
-            await xeroService.exchangeCode(authCode.trim(), clientId.trim());
+            await xeroService.exchangeCode(authCode.trim(), clientId.trim(), authState.trim());
             const token = await xeroService.getValidToken(clientId.trim());
             const fetchedTenants = await xeroService.getTenants(token);
             setTenants(fetchedTenants);
@@ -258,6 +257,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
             setIsConnected(true);
             setAwaitingCode(false);
             setAuthCode('');
+            setAuthState('');
             addToast('Connected to Xero successfully!', 'success');
         } catch (e: any) {
             addToast(`Connection failed: ${e.message}`, 'error');
@@ -276,6 +276,8 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
         setSelectedContact('');
         setSelectedAccount('');
         setAwaitingCode(false);
+        setAuthCode('');
+        setAuthState('');
         addToast('Disconnected from Xero', 'info');
     };
 
@@ -357,7 +359,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                     row.unitPrice.toFixed(2),
                     '',
                     selectedAccount ? (accounts.find((a) => a.AccountID === selectedAccount)?.Code || '') : '',
-                    'NOTAX',
+                    'OUTPUT2',
                     '0',
                     'AUD',
                 ]);
@@ -399,7 +401,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                     AccountCode: selectedAccount
                         ? (accounts.find((a) => a.AccountID === selectedAccount)?.Code)
                         : undefined,
-                    TaxType: 'NOTAX',
+                    TaxType: 'OUTPUT2',
                 }));
 
             const result = await xeroService.createInvoice(token, selectedTenant, {
@@ -410,7 +412,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                 DueDate: dueDate,
                 Reference: reference || projectName,
                 Status: 'DRAFT',
-                LineAmountTypes: 'NOTAX',
+                LineAmountTypes: 'EXCLUSIVE',
             });
 
             addToast(`Invoice ${result.InvoiceNumber} created in Xero!`, 'success');
@@ -578,8 +580,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                             <span>{fmt.format(groupTotal)}</span>
                                         </div>
 
-                                        {!isCollapsed && (
-                                            <table className="w-full text-sm mt-2">
+                                        <table className={`w-full text-sm mt-2 ${isCollapsed ? 'hidden print:table' : ''}`}>
                                                 <thead>
                                                     <tr className="text-xs text-gray-400 uppercase tracking-wider border-b border-gray-100">
                                                         <th className="text-left py-2 font-medium">Description</th>
@@ -616,7 +617,6 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                                         ))}
                                                 </tbody>
                                             </table>
-                                        )}
                                     </div>
                                 );
                             })}
@@ -712,23 +712,34 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                     <div className="space-y-3">
                                         <div className="bg-amber-50 rounded-lg p-3 text-xs text-amber-700">
                                             <div className="font-semibold mb-1">Your browser has opened the Xero login page.</div>
-                                            After authorizing, you will see a page with an authorization code.
-                                            Copy it and paste it below.
+                                            After authorizing, copy the <strong>Authorization Code</strong> and <strong>State</strong> shown on the page and paste them below.
                                         </div>
-                                        <div className="flex gap-2">
+                                        <div>
+                                            <label className="text-xs font-medium text-muted-foreground mb-1 block">Authorization Code</label>
                                             <Input
                                                 value={authCode}
                                                 onChange={(e) => setAuthCode(e.target.value)}
                                                 placeholder="Paste authorization code here"
-                                                className="h-8 text-sm flex-1 font-mono text-xs"
+                                                className="h-8 text-sm font-mono text-xs"
                                             />
-                                            <Button onClick={handleSubmitCode} disabled={isConnecting || !authCode.trim()} className="h-8 text-xs shrink-0">
+                                        </div>
+                                        <div>
+                                            <label className="text-xs font-medium text-muted-foreground mb-1 block">State</label>
+                                            <Input
+                                                value={authState}
+                                                onChange={(e) => setAuthState(e.target.value)}
+                                                placeholder="Paste state value here"
+                                                className="h-8 text-sm font-mono text-xs"
+                                            />
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <Button onClick={handleSubmitCode} disabled={isConnecting || !authCode.trim() || !authState.trim()} className="h-8 text-xs">
                                                 {isConnecting ? <Loader2 size={13} className="animate-spin" /> : 'Confirm'}
                                             </Button>
+                                            <Button variant="ghost" size="sm" className="text-xs" onClick={() => { setAwaitingCode(false); setAuthCode(''); setAuthState(''); }}>
+                                                Cancel
+                                            </Button>
                                         </div>
-                                        <Button variant="ghost" size="sm" className="text-xs" onClick={() => setAwaitingCode(false)}>
-                                            Cancel
-                                        </Button>
                                     </div>
                                 )}
 
