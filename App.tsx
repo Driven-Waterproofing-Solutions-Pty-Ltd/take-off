@@ -15,6 +15,7 @@ import ExportModal from './components/ExportModal';
 import ConfirmModal from './components/ConfirmModal';
 import EstimatesView from './components/EstimatesView';
 import ThreeDView from './components/ThreeDView';
+import XeroView from './components/XeroView';
 import PDFSearch from './components/PDFSearch';
 import { ToolType, ProjectData, TakeoffItem, Shape, Unit, PlanSet, LegendSettings } from './types';
 import { PresetScale, getAreaUnitFromLinear, isPointInPolygon } from './utils/geometry';
@@ -776,7 +777,7 @@ const AppContent: React.FC = () => {
     zoomIn: () => setZoomLevel(z => Math.min(10, z + 0.25)), zoomOut: () => setZoomLevel(z => Math.max(0.1, z - 0.25)),
     saveProject: handleSaveProject, nextPage: () => pageIndex < totalPages - 1 && setPageIndex(p => p + 1),
     prevPage: () => pageIndex > 0 && setPageIndex(p => p - 1), zoomToFit: () => setZoomLevel(1.0),
-    toggleRecord: () => activeTakeoffId && handleStopTakeoff(), toggleViewMode: () => setViewMode(viewMode === 'canvas' ? 'estimates' : viewMode === 'estimates' ? '3d' : 'canvas'),
+    toggleRecord: () => activeTakeoffId && handleStopTakeoff(), toggleViewMode: () => setViewMode(viewMode === 'canvas' ? 'estimates' : viewMode === 'estimates' ? '3d' : viewMode === '3d' ? 'xero' : 'canvas'),
     finishShape: () => activeTakeoffId && handleStopTakeoff(), copyItem: () => { }, pasteItem: () => { },
     openSearch: () => setShowPDFSearch(prev => !prev)
   });
@@ -811,6 +812,7 @@ const AppContent: React.FC = () => {
         onToggleVisibility={handleToggleItemVisibility}
         onShowEstimates={() => { handleStopTakeoff(); setViewMode('estimates'); }}
         onShow3D={() => { handleStopTakeoff(); setViewMode('3d'); }}
+        onShowXero={() => { handleStopTakeoff(); setViewMode('xero'); }}
         onRenamePage={(i, n) => setHistory(draft => {
           if (!draft.projectData[i]) {
             draft.projectData[i] = { scale: { isSet: false, pixelsPerUnit: 1, unit: Unit.FEET } };
@@ -843,6 +845,8 @@ const AppContent: React.FC = () => {
             onReorderItems={(newItems) => setHistory(draft => { draft.items = newItems; })} onEditItem={setEditingItem} />
         ) : viewMode === '3d' ? (
           <ThreeDView items={items} onBack={() => setViewMode('canvas')} planSets={planSets} pageIndex={pageIndex} />
+        ) : viewMode === 'xero' ? (
+          <XeroView items={items} projectName={projectName} onBack={() => setViewMode('canvas')} />
         ) : (
           <>
             {planSets.length > 0 && (
