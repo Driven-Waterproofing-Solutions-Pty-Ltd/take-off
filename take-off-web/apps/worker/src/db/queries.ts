@@ -1,0 +1,307 @@
+import type { D1Database } from '@cloudflare/workers-types';
+import { ToolType, getLinearBase } from '@takeoff/shared';
+import type {
+  Shape,
+  TakeoffItem,
+  ScaleCalibration,
+  Unit,
+} from '@takeoff/shared';
+
+export interface ProjectRow {
+  id: string;
+  name: string;
+  customer_id: string | null;
+  meta_json: string;
+  created_at: number;
+  updated_at: number;
+  snoozed_until?: number | null;
+}
+
+export interface PageRow {
+  project_id: string;
+  page_index: number;
+  scale_json: string;
+  vector_cache_json: string | null;
+  name: string | null;
+  legend_json: string | null;
+}
+
+export interface ItemRow {
+  id: string;
+  project_id: string;
+  label: string;
+  type: string;
+  color: string;
+  unit: string;
+  total_value: number;
+  group_name: string | null;
+  properties_json: string | null;
+  price: number | null;
+  formula: string | null;
+  sub_items_json: string | null;
+  visible: number;
+  hidden_pages_json: string | null;
+  depth: number | null;
+  assembly_id: string | null;
+}
+
+export interface ShapeRow {
+  id: string;
+  item_id: string;
+  page_index: number;
+  points_json: string;
+  bulges_json: string | null;
+  value: number;
+  deduction: number;
+  text: string | null;
+}
+
+export async function getProject(db: D1Database, projectId: string): Promise<ProjectRow | null> {
+  return (await db
+    .prepare('SELECT * FROM projects WHERE id = ?')
+    .bind(projectId)
+    .first()) as ProjectRow | null;
+}
+
+export async function upsertPage(
+  db: D1Database,
+  projectId: string,
+  pageIndex: number,
+  fields: Partial<{
+    scale: ScaleCalibration;
+    vectorCache: unknown;
+    name: string;
+    legend: unknown;
+  }>
+): Promise<PageRow> {
+  const existing = await getPage(db, projectId, pageIndex);
+  const scale_json = fields.scale ? JSON.stringify(fields.scale) : existing?.scale_json ?? null;
+  const vector_cache_json =
+    fields.vectorCache !== undefined
+      ? JSON.stringify(fields.vectorCache)
+      : existing?.vector_cache_json ?? null;
+  const name = fields.name ?? existing?.name ?? null;
+  const legend_json =
+    fields.legend !== undefined
+      ? JSON.stringify(fields.legend)
+      : existing?.legend_json ?? null;
+
+  if (existing) {
+    await db
+      .prepare(
+        `UPDATE pages SET scale_json = COALESCE(?, scale_json),
+                          vector_cache_json = ?,
+                          name = ?,
+                          legend_json = ?
+         WHERE project_id = ? AND page_index = ?`
+      )
+      .bind(scale_json, vector_cache_json, name, legend_json, projectId, pageIndex)
+      .run();
+  } else {
+    await db
+      .prepare(
+        `INSERT INTO pages (project_id, page_index, scale_json, vector_cache_json, name, legend_json)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        projectId,
+        pageIndex,
+        scale_json ?? '{"isSet":false,"pixelsPerUnit":0,"unit":"m"}',
+        vector_cache_json,
+        name,
+        legend_json
+      )
+      .run();
+  }
+  return (await getPage(db, projectId, pageIndex))!;
+}
+
+export async function getPage(
+  db: D1Database,
+  projectId: string,
+  pageIndex: number
+): Promise<PageRow | null> {
+  return (await db
+    .prepare('SELECT * FROM pages WHERE project_id = ? AND page_index = ?')
+    .bind(projectId, pageIndex)
+    .first()) as PageRow | null;
+}
+
+export function parseScale(row: PageRow | null): ScaleCalibration {
+  if (!row) return { isSet: false, pixelsPerUnit: 0, unit: 'm' as Unit };
+  return JSON.parse(row.scale_json) as ScaleCalibration;
+}
+
+export async function insertShape(
+  db: D1Database,
+  shape: Shape & { itemId: string }
+): Promise<void> {
+  // INSERT OR IGNORE makes the create idempotent across useShapeSync
+  // retries. The hook supplies client-side UUIDs and only snapshots a
+  // shape as "synced" on a successful POST; if the original POST committed
+  // but the response was lost, the retry sent the same id and a plain
+  // INSERT hit the PK constraint with a 500. The hook then never
+  // snapshotted, and future edits/deletes either re-ran the create or
+  // were skipped — the row was stuck until the user reloaded the project.
+  // Same id + same caller = "already saved", return success.
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO shapes (id, item_id, page_index, points_json, bulges_json, value, deduction, text, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      shape.id,
+      shape.itemId,
+      shape.pageIndex,
+      JSON.stringify(shape.points),
+      shape.bulges ? JSON.stringify(shape.bulges) : null,
+      shape.value,
+      shape.deduction ? 1 : 0,
+      shape.text ?? null,
+      Date.now()
+    )
+    .run();
+}
+
+// Measurement families that share a value unit and can land shapes on the
+// same item without re-labeling totals/quotes:
+//   AREA/FILL/VOLUME            -> polygon area (VOLUME folds in item.depth)
+//   LINEAR/SEGMENT/DIMENSION/ARC-> linear length (ARC shares the family
+//     because multi-vertex arcs are stored as straight-chord polylines and
+//     persisted through the LINEAR endpoint — see useShapeSync's create
+//     branch. Single-segment bulged arcs still go through /shapes/arc.)
+//   COUNT, NOTE                 -> distinct families of their own
+// Mixing families silently labels e.g. an area-valued polygon as metres,
+// so refuse to reuse an existing row whose type is in a different family.
+export function itemFamily(type: ToolType): string {
+  switch (type) {
+    case ToolType.AREA:
+    case ToolType.FILL:
+    case ToolType.VOLUME:
+      return 'area';
+    case ToolType.LINEAR:
+    case ToolType.SEGMENT:
+    case ToolType.DIMENSION:
+    case ToolType.ARC:
+      return 'linear';
+    case ToolType.COUNT:
+      return 'count';
+    case ToolType.NOTE:
+      return 'note';
+    default:
+      return 'unknown';
+  }
+}
+
+export async function getOrCreateItem(
+  db: D1Database,
+  projectId: string,
+  hint: { id?: string; label?: string; type: ToolType; unit: string; color: string }
+): Promise<ItemRow> {
+  if (hint.id) {
+    const existing = (await db
+      .prepare('SELECT * FROM items WHERE id = ? AND project_id = ?')
+      .bind(hint.id, projectId)
+      .first()) as ItemRow | null;
+    if (existing) {
+      const existingFamily = itemFamily(existing.type as ToolType);
+      const requestedFamily = itemFamily(hint.type);
+      if (existingFamily !== requestedFamily) {
+        throw new Error(
+          `Item ${hint.id} is ${existing.type} (${existingFamily}-family); a ${hint.type} shape (${requestedFamily}-family) can't land on it — totals/quotes would label the value with the wrong unit.`
+        );
+      }
+      // Compare linear bases so AREA shapes can land on VOLUME items
+      // (both derive from the same linear unit) while a "sq m" item still
+      // rejects a "sq ft" shape from a differently-calibrated page.
+      // Unit values are SPACE-separated ("sq ft", "cu m") — getLinearBase
+      // handles the space prefix plus the acres/hectares special cases.
+      if (getLinearBase(existing.unit) !== getLinearBase(hint.unit)) {
+        throw new Error(
+          `Item ${hint.id} has unit "${existing.unit}"; the destination page measures in "${hint.unit}" (different linear base). Recalibrate the page or use a separate item — mixing units silently corrupts totals.`
+        );
+      }
+      return existing;
+    }
+  }
+  const id = hint.id ?? crypto.randomUUID();
+  const now = Date.now();
+  await db
+    .prepare(
+      `INSERT INTO items (id, project_id, label, type, color, unit, total_value, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`
+    )
+    .bind(
+      id,
+      projectId,
+      hint.label ?? `${hint.type} item`,
+      hint.type,
+      hint.color,
+      hint.unit,
+      now,
+      now
+    )
+    .run();
+  return (await db
+    .prepare('SELECT * FROM items WHERE id = ?')
+    .bind(id)
+    .first()) as ItemRow;
+}
+
+export async function recalcItemTotal(db: D1Database, itemId: string): Promise<number> {
+  const result = (await db
+    .prepare(
+      `SELECT COALESCE(SUM(CASE WHEN deduction = 1 THEN -value ELSE value END), 0) AS total
+       FROM shapes WHERE item_id = ?`
+    )
+    .bind(itemId)
+    .first()) as { total: number } | null;
+  const total = result?.total ?? 0;
+  await db
+    .prepare('UPDATE items SET total_value = ?, updated_at = ? WHERE id = ?')
+    .bind(total, Date.now(), itemId)
+    .run();
+  return total;
+}
+
+export function rowToTakeoffItem(row: ItemRow, shapes: Shape[]): TakeoffItem {
+  const type = row.type as ToolType;
+  const depth = row.depth ?? undefined;
+  // total_value stores the raw shape-sum (polygon area for VOLUME). The canvas
+  // treats item.totalValue as the FINAL quantity though — area×depth for
+  // VOLUME items — so hydrate that final number here. Without this, after a
+  // cloud reload the Estimates/Properties UI would show the area number
+  // labeled as cubic and underprice the item until the user edits a shape.
+  const totalValue =
+    type === ToolType.VOLUME && depth != null ? row.total_value * depth : row.total_value;
+  return {
+    id: row.id,
+    label: row.label,
+    type,
+    color: row.color,
+    unit: row.unit as Unit,
+    shapes,
+    totalValue,
+    group: row.group_name ?? undefined,
+    properties: row.properties_json ? JSON.parse(row.properties_json) : undefined,
+    price: row.price ?? undefined,
+    formula: row.formula ?? undefined,
+    subItems: row.sub_items_json ? JSON.parse(row.sub_items_json) : undefined,
+    visible: row.visible === 1,
+    hiddenPages: row.hidden_pages_json ? JSON.parse(row.hidden_pages_json) : undefined,
+    depth,
+    assemblyId: row.assembly_id ?? undefined,
+  };
+}
+
+export function rowToShape(row: ShapeRow): Shape {
+  return {
+    id: row.id,
+    pageIndex: row.page_index,
+    points: JSON.parse(row.points_json),
+    bulges: row.bulges_json ? JSON.parse(row.bulges_json) : undefined,
+    value: row.value,
+    deduction: row.deduction === 1,
+    text: row.text ?? undefined,
+  };
+}

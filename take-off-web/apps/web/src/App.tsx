@@ -1,0 +1,1100 @@
+import React, { useState, useRef, useEffect } from 'react';
+
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import Sidebar from './components/Sidebar';
+import AgentPanel from './components/AgentPanel';
+import BlueprintCanvas, { BlueprintCanvasRef } from './components/BlueprintCanvas';
+import Tools from './components/Tools';
+import HelpModal from './components/HelpModal';
+import NewItemModal from './components/NewItemModal';
+import UploadModal from './components/UploadModal';
+import PropertiesModal from './components/PropertiesModal';
+import PromptModal from './components/PromptModal';
+import ExportModal from './components/ExportModal';
+import ConfirmModal from './components/ConfirmModal';
+import EstimatesView from './components/EstimatesView';
+import ReadyToInvoiceView from './components/ReadyToInvoiceView';
+import ThreeDView from './components/ThreeDView';
+import PDFSearch from './components/PDFSearch';
+import { ToolType, ProjectData, TakeoffItem, Shape, Unit, PlanSet, LegendSettings } from './types';
+import {
+  PresetScale,
+  getAreaUnitFromLinear,
+  getVolumeUnitFromLinear,
+  convertLinearUnit,
+  isPointInPolygon,
+  calculatePolygonArea,
+  calculatePolylineLength,
+  calculateArcLength,
+  getScaledArea,
+  getScaledValue,
+} from './utils/geometry';
+import { useToast } from './contexts/ToastContext';
+import { generateMarkupPDF } from './utils/pdfExport';
+import { Loader2, Bot } from 'lucide-react';
+import { useProjectManager } from './hooks/useProjectManagerWeb';
+import { useShapeSync } from './hooks/useShapeSync';
+import { useScaleSync } from './hooks/useScaleSync';
+import { usePlanSetSync } from './hooks/usePlanSetSync';
+import { useSession } from './hooks/useSession';
+import { LoginPage } from './pages/Login';
+import { RamCacheProvider, useRamCache } from './contexts/RamCacheContext';
+import { savePlanFile } from './utils/storage';
+import { flattenOCG } from './utils/flattenOCG';
+import { mupdfController, SearchHit } from './utils/mupdfController';
+
+// Web port: license is implicit (the canvas is gated by useSession at the
+// App boundary); view mode is local state (no router needed for v1).
+const useLicense = () => ({ isLicensed: true });
+
+const AppContent: React.FC = () => {
+  const { addToast } = useToast();
+  const { isLicensed } = useLicense();
+  const [viewMode, setViewMode] = useState<'canvas' | 'estimates' | '3d' | 'invoices'>('canvas');
+  const [showAgent, setShowAgent] = useState(false);
+  // When set, EstimatesView auto-opens the Send-to-Xero modal on mount —
+  // driven by the Ready-to-Invoice queue's "Open & invoice" action.
+  const [autoOpenXero, setAutoOpenXero] = useState(false);
+
+  const {
+    projectName,
+    items,
+    projectData,
+    planSets,
+    totalPages,
+    isSaving,
+    lastSavedAt,
+    isInitializing,
+    loadingMessage,
+    showImportConfirm,
+    showNewProjectPrompt,
+    setShowNewProjectPrompt,
+    setProjectName,
+    setHistory,
+    setHistoryTransient,
+    commitHistory,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+    handleNewProjectRequest,
+    handleNewProjectConfirmed,
+    handleSaveProject,
+    handleLoadProjectClick,
+    handleImportConfirmed,
+    setShowImportConfirm,
+    setPendingImportPath,
+    currentFilePath: projectId,
+    openProjectById,
+    refreshProject,
+  } = useProjectManager(isLicensed);
+
+  // Ready-to-Invoice queue → load the project, then drop the user on
+  // Estimates with the Xero modal pre-opened. Modeled on the ?project=
+  // bootstrap path so cross-project navigation stays inside the SPA.
+  const handleOpenAndInvoice = async (id: string) => {
+    setAutoOpenXero(true);
+    setViewMode('estimates');
+    await openProjectById(id);
+  };
+
+  // Persist every local state change back to D1 + R2.
+  useShapeSync(projectId, items);
+  useScaleSync(projectId, projectData);
+  usePlanSetSync(projectId, planSets, (planSetId, fileKey) => {
+    // Stamp the resolved R2 key onto the plan set in history state so
+    // exportProjectToZip can serialize r2_key for plans uploaded mid-session
+    // (without this, Save Project loses the reference and a re-imported
+    // snapshot opens the drawing as a placeholder).
+    setHistory((draft) => {
+      const planSet = draft.planSets.find((p) => p.id === planSetId);
+      if (planSet) (planSet as PlanSet & { __r2_key?: string }).__r2_key = fileKey;
+    });
+  });
+
+  const historyState = { items, projectData, planSets, totalPages };
+
+  const [pageIndex, setPageIndex] = useState<number>(0);
+  const [zoomLevel, setZoomLevel] = useState<number>(1.0);
+
+  const [activeTool, setActiveTool] = useState<ToolType>(ToolType.SELECT);
+  const [activeTakeoffId, setActiveTakeoffId] = useState<string | null>(null);
+  const [selectedShapes, setSelectedShapes] = useState<{ itemId: string, shapeId: string }[]>([]);
+
+  const [isDeductionMode, setIsDeductionMode] = useState(false);
+  const [pendingPreset, setPendingPreset] = useState<PresetScale | null>(null);
+
+  const [showNewItemModal, setShowNewItemModal] = useState(false);
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [showHelpModal, setShowHelpModal] = useState(false);
+  const [helpModalTab, setHelpModalTab] = useState<'guide' | 'shortcuts' | 'properties'>('guide');
+  const [editingItem, setEditingItem] = useState<TakeoffItem | null>(null);
+  const [pendingTool, setPendingTool] = useState<ToolType | null>(null);
+
+  const [showDeletePageConfirm, setShowDeletePageConfirm] = useState(false);
+  const [pageToDelete, setPageToDelete] = useState<number | null>(null);
+
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState({ current: 0, total: 0 });
+
+  // PDF Search state
+  const [showPDFSearch, setShowPDFSearch] = useState(false);
+  const [searchHighlights, setSearchHighlights] = useState<SearchHit[]>([]);
+  const [currentSearchHitIndex, setCurrentSearchHitIndex] = useState<number | null>(null);
+
+  const [isUploadingPdf, setIsUploadingPdf] = useState(false);
+  const [uploadLoadingMessage, setUploadLoadingMessage] = useState("Uploading PDF Plans...");
+
+  const canvasRef = useRef<BlueprintCanvasRef>(null);
+
+  useEffect(() => {
+    // Only clear selection if it's no longer valid for the current page
+    if (selectedShapes.length > 0) {
+      const validSelectedShapes = selectedShapes.filter(sel => {
+        const item = items.find(i => i.id === sel.itemId);
+        const shape = item?.shapes.find(s => s.id === sel.shapeId);
+        // Only keep shapes that exist on the CURRENT page
+        return shape && shape.pageIndex === pageIndex;
+      });
+
+      // If we have selected shapes that are not on this page, clear them
+      // This happens when switching pages while shapes are selected
+      if (validSelectedShapes.length !== selectedShapes.length) {
+        setSelectedShapes(validSelectedShapes);
+
+        // Note: We deliberately DO NOT clear activeTakeoffId here.
+        // We want to persist the "Active Recording Item" across pages so the user
+        // can continue measuring the same item on the new page.
+      }
+    }
+  }, [pageIndex, selectedShapes, items]);
+
+  const { preloadPage } = useRamCache();
+
+  // RAM Cache Preload Effect
+  useEffect(() => {
+    const uniquePages = new Set<string>();
+    const pagesToLoad: { fileId: string, index: number }[] = [];
+
+    items.forEach(item => {
+      item.shapes.forEach(shape => {
+        // Find plan set for this global page index
+        const globalIndex = shape.pageIndex;
+        const planSet = planSets.find(ps => globalIndex >= ps.startPageIndex && globalIndex < ps.startPageIndex + ps.pageCount);
+
+        if (planSet) {
+          const localIdx = globalIndex - planSet.startPageIndex;
+          // Accounting for remapped pages
+          let finalLocalIdx = localIdx;
+          if (planSet.pages && planSet.pages[localIdx] !== undefined) {
+            finalLocalIdx = planSet.pages[localIdx];
+          } else if (planSet.pages && planSet.pages.length <= localIdx) {
+            // Fallback for safety, though activePlanDetails logic suggests this:
+            finalLocalIdx = localIdx;
+          }
+
+          const key = `${planSet.id}_${finalLocalIdx}`;
+          if (!uniquePages.has(key)) {
+            uniquePages.add(key);
+            pagesToLoad.push({ fileId: planSet.id, index: finalLocalIdx });
+          }
+        }
+      });
+    });
+
+    // Execute preloads
+    pagesToLoad.forEach(p => preloadPage(p.fileId, p.index));
+  }, [items, planSets, preloadPage]);
+
+  const handleExportPDF = async (pageIndices: number[], includeLegend: boolean, includeNotes: boolean) => {
+    setIsExporting(true);
+    setExportProgress({ current: 0, total: pageIndices.length });
+    try {
+      const { pdfBytes } = await generateMarkupPDF(planSets, projectData, items, pageIndices, includeLegend, includeNotes);
+      const sanitizedProjectName = projectName.replace(/[^a-z0-9]/gi, '_');
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const filename = `${sanitizedProjectName}-Markup-${dateStr}.pdf`;
+
+      // Web: trigger browser download. (Desktop used a Tauri save dialog + writeFile.)
+      // Cast through ArrayBuffer to satisfy TS 5.8's stricter Uint8Array<ArrayBufferLike>.
+      const blob = new Blob([pdfBytes as BlobPart], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      addToast("PDF Export downloaded!", 'success');
+    } catch (e) {
+      console.error("Export Error:", e);
+      addToast("Export failed. See console.", 'error');
+    } finally {
+      setIsExporting(false);
+      setShowExportModal(false);
+    }
+  };
+
+  const getCurrentPageScale = () => projectData[pageIndex]?.scale || { isSet: false, pixelsPerUnit: 0, unit: Unit.FEET };
+
+  const getActivePlanDetails = () => {
+    if (planSets.length === 0) return null;
+    for (const set of planSets) {
+      if (pageIndex >= set.startPageIndex && pageIndex < set.startPageIndex + set.pageCount) {
+        const localIdx = pageIndex - set.startPageIndex;
+        let pdfPageIndex = localIdx;
+        if (set.pages && set.pages[localIdx] !== undefined) {
+          pdfPageIndex = set.pages[localIdx];
+        } else if (set.pages && set.pages.length <= localIdx) {
+          pdfPageIndex = localIdx;
+        }
+        return { file: set.file, localPageIndex: pdfPageIndex, name: set.name, id: set.id, startPageIndex: set.startPageIndex };
+      }
+    }
+    return null;
+  };
+
+  const handleUpload = async (files: File[], names: string[]) => {
+    // Sync hooks (planSet/shape/scale) all short-circuit when projectId is
+    // null, so uploading into an empty workspace would create local-only
+    // state that's silently lost on reload. Force project creation first.
+    if (!projectId) {
+      setShowUploadModal(false);
+      addToast('Create or open a project before uploading plans', 'error');
+      handleNewProjectRequest();
+      return;
+    }
+    setShowUploadModal(false);
+    setIsUploadingPdf(true);
+    setIsUploadingPdf(true);
+    setUploadLoadingMessage("Optimizing PDF Plans (this may take a moment)...");
+    try {
+      let newPlanSets = [...planSets];
+      let currentTotalPages = totalPages;
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const name = names[i];
+
+        const fileBlob = new Blob([file], { type: 'application/pdf' });
+        const fileCopy = new File([fileBlob], file.name, { type: 'application/pdf', lastModified: file.lastModified });
+
+        const buffer = await fileCopy.arrayBuffer();
+        const bufferCopy = buffer.slice(0);
+
+        // Flatten OCGs for performance
+        let finalBuffer = bufferCopy;
+        try {
+          const flattened = await flattenOCG(new Uint8Array(bufferCopy));
+          finalBuffer = flattened.buffer as ArrayBuffer;
+        } catch (e) {
+          console.warn(`Failed to flatten ${name}, using original`, e);
+        }
+
+        // const pdf = await pdfjs.getDocument(finalBuffer.slice(0) as ArrayBuffer).promise;
+        const numPages = await mupdfController.countPagesTransient(new Uint8Array(finalBuffer));
+
+        // Re-create file from flattened buffer
+        // Use Uint8Array view for Blob to avoid ArrayBuffer/SharedArrayBuffer mismatch
+        const flattenedBlob = new Blob([new Uint8Array(finalBuffer)], { type: 'application/pdf' });
+        const flattenedFile = new File([flattenedBlob], file.name, { type: 'application/pdf', lastModified: Date.now() });
+
+        const newPlanSet: PlanSet = {
+          id: crypto.randomUUID(),
+          file: flattenedFile,
+          name,
+          pageCount: numPages,
+          startPageIndex: currentTotalPages,
+          pages: Array.from({ length: numPages }, (_, i) => i)
+        };
+        await savePlanFile(newPlanSet.id, flattenedFile);
+        newPlanSets.push(newPlanSet);
+        currentTotalPages += numPages;
+      }
+      setHistory(draft => {
+        draft.planSets = newPlanSets;
+        draft.totalPages = currentTotalPages;
+      });
+      if (planSets.length === 0 && newPlanSets.length > 0) {
+        setPageIndex(0);
+        setZoomLevel(1.0);
+        setActiveTakeoffId(null);
+        setViewMode('canvas');
+      }
+      addToast(`Added ${files.length} plan(s)`, 'success');
+    } catch (error) {
+      console.error("Error loading PDF metadata:", error);
+      addToast("Failed to load PDF file", 'error');
+    } finally {
+      setIsUploadingPdf(false);
+      setUploadLoadingMessage("Loading Project...");
+    }
+  };
+
+  const handleInitiateTool = (tool: ToolType) => {
+    // VOLUME requires scale for two reasons: shape persistence (the worker
+    // add_area path needs ppu) AND the depth-input UI + item unit are
+    // derived from the page's linear unit. Without this guard, a user could
+    // make a volume item on an uncalibrated page with the default ft-based
+    // unit/depth, get a calibration error on every placement attempt, then
+    // later calibrate to metric and end up with a cu-ft item on a metric page.
+    if ([ToolType.LINEAR, ToolType.ARC, ToolType.AREA, ToolType.VOLUME, ToolType.FILL, ToolType.SEGMENT, ToolType.DIMENSION].includes(tool)) {
+      const scale = getCurrentPageScale();
+      if (!scale.isSet) {
+        addToast("Please set the scale for this page first", 'error');
+        return;
+      }
+    }
+    setPendingTool(tool);
+    setShowNewItemModal(true);
+  };
+
+  const handleEnableDeductionMode = (itemId: string) => {
+    const item = items.find(i => i.id === itemId);
+    if (!item) return;
+    setActiveTakeoffId(itemId);
+    setActiveTool(item.type);
+    setIsDeductionMode(true);
+    addToast("Cutout mode enabled. Draw to subtract.", 'info');
+  };
+
+  const handleCreateTakeoffItem = (data: Partial<TakeoffItem>) => {
+    if (!pendingTool) return;
+    const scale = getCurrentPageScale();
+    let unit = data.unit;
+    if (!unit) {
+      if (pendingTool === ToolType.COUNT) { unit = Unit.EACH; }
+      // Derive volume unit from the page's calibrated linear unit (metric →
+      // cu m, imperial → cu ft) instead of hardcoding feet — otherwise a
+      // metric page ends up labelling cubic-metre quantities as "cu ft".
+      else if (pendingTool === ToolType.VOLUME) { unit = getVolumeUnitFromLinear(scale.unit); }
+      else if (pendingTool === ToolType.AREA || pendingTool === ToolType.FILL) { unit = getAreaUnitFromLinear(scale.unit); }
+      else { unit = scale.unit; }
+    }
+    if (pendingTool === ToolType.AREA || pendingTool === ToolType.FILL) { unit = getAreaUnitFromLinear(unit); }
+    const newItem: TakeoffItem = {
+      id: crypto.randomUUID(),
+      label: data.label || 'New Item',
+      type: pendingTool,
+      color: data.color || '#3b82f6',
+      unit: unit,
+      shapes: [],
+      totalValue: 0,
+      visible: true,
+      properties: data.properties || [],
+      formula: data.formula || 'Qty',
+      price: data.price,
+      group: data.group || 'General',
+      subItems: data.subItems || [],
+      depth: data.depth
+    };
+    setHistory(draft => {
+      draft.items.push(newItem);
+    });
+    setActiveTakeoffId(newItem.id);
+    setActiveTool(pendingTool);
+    setIsDeductionMode(false);
+    setShowNewItemModal(false);
+    setPendingTool(null);
+    addToast(`Created item: ${newItem.label}`, 'success');
+  };
+
+  const calculateTotalValue = (shapes: Shape[], item: TakeoffItem) => {
+    const baseValue = shapes.reduce((sum, s) => s.deduction ? sum - s.value : sum + s.value, 0);
+    // depth != null (not truthy) so an explicit depth of 0 yields 0 volume
+    // rather than silently falling back to the raw polygon area.
+    return item.type === ToolType.VOLUME && item.depth != null ? baseValue * item.depth : baseValue;
+  };
+
+  const handleBatchCreateItems = (itemsToCreate: { newItemId?: string, sourceItemId: string, shapes: Shape[] }[]) => {
+    const newItemsList: TakeoffItem[] = [];
+    let lastItemId = activeTakeoffId;
+
+    itemsToCreate.forEach(({ newItemId, sourceItemId, shapes }) => {
+      const sourceItem = items.find(i => i.id === sourceItemId);
+      if (!sourceItem) return;
+
+      const newItem: TakeoffItem = {
+        ...sourceItem,
+        id: newItemId || crypto.randomUUID(),
+        label: `${sourceItem.label} (Copy)`,
+        shapes: shapes,
+        totalValue: calculateTotalValue(shapes, sourceItem)
+      };
+      newItemsList.push(newItem);
+      lastItemId = newItem.id;
+    });
+
+    if (newItemsList.length > 0) {
+      setHistory(draft => {
+        draft.items.push(...newItemsList);
+      });
+      setActiveTakeoffId(lastItemId);
+      addToast(`Created ${newItemsList.length} new item(s)`, 'success');
+    }
+  };
+
+  const handleBatchAddShapes = (shapesToAdd: { itemId: string, shape: Shape }[]) => {
+    const shapesByItem = shapesToAdd.reduce((acc, { itemId, shape }) => {
+      if (!acc[itemId]) acc[itemId] = [];
+      acc[itemId].push(shape);
+      return acc;
+    }, {} as Record<string, Shape[]>);
+
+    setHistory(draft => {
+      draft.items.forEach(item => {
+        if (shapesByItem[item.id]) {
+          item.shapes.push(...shapesByItem[item.id]);
+          item.totalValue = calculateTotalValue(item.shapes, item);
+        }
+      });
+    });
+    addToast(`Added ${shapesToAdd.length} shapes`, 'success');
+  };
+
+  const handleShapeCreated = (shape: Shape) => {
+    if (!activeTakeoffId) return;
+    if (isDeductionMode) shape.deduction = true;
+    // Unit-mismatch guard: shape.value is in the CURRENT page's scale unit
+    // (e.g. metres for an m-calibrated page). The active item was created
+    // against another page whose linear unit may differ (e.g. ft). Summing
+    // a metre-valued shape into a ft-typed item silently mislabels the total
+    // in legends/estimates/quotes. Refuse the shape rather than corrupt the
+    // running total — COUNT/NOTE bypass since they don't carry a scale unit.
+    const item = items.find(i => i.id === activeTakeoffId);
+    if (item && shape.value !== 0 && item.type !== ToolType.COUNT && item.type !== ToolType.NOTE) {
+      const pageLinearUnit = currentScale.unit;
+      const expectedUnit =
+        item.type === ToolType.AREA || item.type === ToolType.FILL
+          ? getAreaUnitFromLinear(pageLinearUnit)
+          : item.type === ToolType.VOLUME
+            ? getVolumeUnitFromLinear(pageLinearUnit)
+            : pageLinearUnit;
+      if (expectedUnit !== item.unit) {
+        addToast(
+          `This page measures in "${expectedUnit}" but "${item.label}" is in "${item.unit}". Create a separate item on this page, or recalibrate.`,
+          'error'
+        );
+        return;
+      }
+    }
+    setHistory(draft => {
+      const draftItem = draft.items.find(i => i.id === activeTakeoffId);
+      if (draftItem) {
+        draftItem.shapes.push(shape);
+        draftItem.totalValue = calculateTotalValue(draftItem.shapes, draftItem);
+      }
+    });
+    if (isDeductionMode) {
+      setIsDeductionMode(false);
+      addToast("Cutout added", 'success');
+    }
+  };
+
+  const handleUpdateShape = (itemId: string, shapeId: string, updates: Partial<Shape>) => {
+    setHistory(draft => {
+      const item = draft.items.find(i => i.id === itemId);
+      if (item) {
+        const shape = item.shapes.find(s => s.id === shapeId);
+        if (shape) {
+          Object.assign(shape, updates);
+          item.totalValue = calculateTotalValue(item.shapes, item);
+        }
+      }
+    });
+  };
+
+  const handleUpdateShapeTransient = (itemId: string, updatedShape: Shape) => {
+    setHistoryTransient(draft => {
+      const item = draft.items.find(i => i.id === itemId);
+      if (item) {
+        const index = item.shapes.findIndex(s => s.id === updatedShape.id);
+        if (index !== -1) {
+          item.shapes[index] = updatedShape;
+          item.totalValue = calculateTotalValue(item.shapes, item);
+        }
+      }
+    });
+  };
+
+  const handleBatchUpdateShapesTransient = (updates: { itemId: string, shape: Shape }[]) => {
+    const updatesByItemId = updates.reduce((acc, { itemId, shape }) => {
+      if (!acc[itemId]) {
+        acc[itemId] = [];
+      }
+      acc[itemId].push(shape);
+      return acc;
+    }, {} as Record<string, Shape[]>);
+
+    setHistoryTransient(draft => {
+      draft.items.forEach(item => {
+        if (updatesByItemId[item.id]) {
+          const itemUpdates = updatesByItemId[item.id];
+          itemUpdates.forEach(updatedShape => {
+            const index = item.shapes.findIndex(s => s.id === updatedShape.id);
+            if (index !== -1) {
+              item.shapes[index] = updatedShape;
+            }
+          });
+        }
+      });
+    });
+  };
+
+  const handleSplitShape = (itemId: string, updatedShape: Shape, newShape: Shape) => {
+    setHistory(draft => {
+      const item = draft.items.find(i => i.id === itemId);
+      if (item) {
+        const index = item.shapes.findIndex(s => s.id === updatedShape.id);
+        if (index !== -1) {
+          item.shapes[index] = updatedShape;
+          item.shapes.push(newShape);
+          item.totalValue = calculateTotalValue(item.shapes, item);
+        }
+      }
+    });
+  };
+
+  const handleUpdateItem = (itemId: string, updates: Partial<TakeoffItem>) => {
+    setHistory(draft => {
+      const item = draft.items.find(i => i.id === itemId);
+      if (item) {
+        Object.assign(item, updates);
+      }
+    });
+  };
+
+  const handleDeleteItem = (id: string) => {
+    if (activeTakeoffId === id) { setActiveTakeoffId(null); setActiveTool(ToolType.SELECT); setIsDeductionMode(false); }
+    setHistory(draft => {
+      draft.items = draft.items.filter(i => i.id !== id);
+    });
+    addToast("Item deleted", 'info');
+  };
+
+  const handleToggleItemVisibility = (itemId: string, pageIndex: number) => {
+    setHistory(draft => {
+      const item = draft.items.find(i => i.id === itemId);
+      if (item) {
+        // Migration: If globally hidden, unhide globally so we can manage per-page
+        if (item.visible === false) {
+          item.visible = true;
+        }
+
+        if (!item.hiddenPages) {
+          item.hiddenPages = [];
+        }
+
+        const idx = item.hiddenPages.indexOf(pageIndex);
+        if (idx >= 0) {
+          item.hiddenPages.splice(idx, 1);
+        } else {
+          item.hiddenPages.push(pageIndex);
+        }
+      }
+    });
+  };
+
+  const handleDeleteShape = (itemId: string, shapeId: string) => {
+    setHistory(draft => {
+      const item = draft.items.find(i => i.id === itemId);
+      if (item) {
+        item.shapes = item.shapes.filter(s => s.id !== shapeId);
+        item.totalValue = calculateTotalValue(item.shapes, item);
+      }
+    });
+  };
+
+  const handleDeleteShapes = (shapesToDelete: { itemId: string, shapeId: string }[]) => {
+    // Expand deletion to include contained cutouts
+    const allShapesToDelete = [...shapesToDelete];
+    const processedIds = new Set(shapesToDelete.map(s => s.shapeId));
+
+    shapesToDelete.forEach(({ itemId, shapeId }) => {
+      const item = items.find(i => i.id === itemId);
+      if (!item) return;
+      const shape = item.shapes.find(s => s.id === shapeId);
+
+      // Cutout cascade: when a parent polygon is deleted, take its contained
+      // deduction shapes with it. Two earlier bugs:
+      //   1. Only AREA was handled — VOLUME and FILL also support cutouts
+      //      via the context menu, so deleting their parent left orphan
+      //      negative shapes that synced to the server (under-quotes).
+      //   2. The containment check didn't compare pages, so a parent on
+      //      page 1 could pull a deduction with matching coordinates off
+      //      page 2.
+      const supportsCutouts =
+        item.type === ToolType.AREA ||
+        item.type === ToolType.VOLUME ||
+        item.type === ToolType.FILL;
+      if (supportsCutouts && shape && !shape.deduction) {
+        const childCutouts = item.shapes.filter(other =>
+          other.deduction &&
+          other.pageIndex === shape.pageIndex &&
+          !processedIds.has(other.id) &&
+          other.points.length > 0 &&
+          isPointInPolygon(other.points[0], shape.points)
+        );
+
+        childCutouts.forEach(child => {
+          allShapesToDelete.push({ itemId: item.id, shapeId: child.id });
+          processedIds.add(child.id);
+        });
+      }
+    });
+
+    const shapeIdSet = new Set(allShapesToDelete.map(s => s.shapeId));
+    setHistory(draft => {
+      draft.items.forEach(item => {
+        const originalLength = item.shapes.length;
+        item.shapes = item.shapes.filter(shape => !shapeIdSet.has(shape.id));
+        if (item.shapes.length !== originalLength) {
+          item.totalValue = calculateTotalValue(item.shapes, item);
+        }
+      });
+    });
+  };
+
+  const handleMoveShapesToItem = (shapesToMove: { itemId: string, shapeId: string }[], targetItemId: string) => {
+    const targetItem = items.find(item => item.id === targetItemId);
+    if (!targetItem) {
+      addToast("Target item not found", 'error');
+      return;
+    }
+
+    const shapesBySource = shapesToMove.reduce((acc, shape) => {
+      if (!acc[shape.itemId]) {
+        acc[shape.itemId] = [];
+      }
+      acc[shape.itemId].push(shape.shapeId);
+      return acc;
+    }, {} as Record<string, string[]>);
+
+    const sourceItemIds = Object.keys(shapesBySource);
+    const movedShapes: Shape[] = [];
+
+    let newItems = items.map(item => {
+      if (sourceItemIds.includes(item.id)) {
+        const shapeIdsToRemove = new Set(shapesBySource[item.id]);
+        const itemShapesToMove = item.shapes.filter(s => shapeIdsToRemove.has(s.id));
+        movedShapes.push(...itemShapesToMove);
+
+        const remainingShapes = item.shapes.filter(s => !shapeIdsToRemove.has(s.id));
+        return {
+          ...item,
+          shapes: remainingShapes,
+          totalValue: calculateTotalValue(remainingShapes, item)
+        };
+      }
+      return item;
+    });
+
+    newItems = newItems.map(item => {
+      if (item.id === targetItemId) {
+        const updatedShapes = [...item.shapes, ...movedShapes];
+        return {
+          ...item,
+          shapes: updatedShapes,
+          totalValue: calculateTotalValue(updatedShapes, item)
+        };
+      }
+      return item;
+    });
+
+    const sourceItemsAfterChange = newItems.filter(item => sourceItemIds.includes(item.id));
+    const emptySourceItemIds = new Set<string>();
+    sourceItemsAfterChange.forEach(item => {
+      if (item.shapes.length === 0) {
+        emptySourceItemIds.add(item.id);
+      }
+    });
+
+    if (emptySourceItemIds.size > 0) {
+      newItems = newItems.filter(item => !emptySourceItemIds.has(item.id));
+      if (activeTakeoffId && emptySourceItemIds.has(activeTakeoffId)) {
+        setActiveTakeoffId(null);
+        setActiveTool(ToolType.SELECT);
+      }
+    }
+
+    const movedShapeIdSet = new Set(shapesToMove.map(s => s.shapeId));
+    setSelectedShapes(prev => prev.filter(sel => !movedShapeIdSet.has(sel.shapeId)));
+
+    setHistory(draft => {
+      // Remove shapes from source items
+      sourceItemIds.forEach(sourceId => {
+        const sourceItem = draft.items.find(i => i.id === sourceId);
+        if (sourceItem) {
+          const shapeIdsToRemove = new Set(shapesBySource[sourceId]);
+          sourceItem.shapes = sourceItem.shapes.filter(s => !shapeIdsToRemove.has(s.id));
+          sourceItem.totalValue = calculateTotalValue(sourceItem.shapes, sourceItem);
+        }
+      });
+
+      // Add to target item
+      const targetDraftItem = draft.items.find(i => i.id === targetItemId);
+      if (targetDraftItem) {
+        targetDraftItem.shapes.push(...movedShapes);
+        targetDraftItem.totalValue = calculateTotalValue(targetDraftItem.shapes, targetDraftItem);
+      }
+
+      // Remove empty source items
+      if (emptySourceItemIds.size > 0) {
+        draft.items = draft.items.filter(item => !emptySourceItemIds.has(item.id));
+      }
+    });
+
+    addToast(`Moved ${shapesToMove.length} shape(s) to ${targetItem.label}`, 'success');
+  };
+
+  const handleResumeTakeoff = (id: string) => {
+    const item = items.find(i => i.id === id);
+    if (item) {
+      if ([ToolType.LINEAR, ToolType.AREA, ToolType.SEGMENT, ToolType.DIMENSION].includes(item.type)) {
+        const scale = getCurrentPageScale();
+        if (!scale.isSet) { addToast("Please set the scale first", 'error'); return; }
+      }
+      setActiveTakeoffId(id); setActiveTool(item.type); setIsDeductionMode(false); setViewMode('canvas');
+    }
+  };
+
+  const handleStopTakeoff = () => { setActiveTakeoffId(null); setActiveTool(ToolType.SELECT); setIsDeductionMode(false); };
+
+  const handleUpdateScale = (pixels: number, realValue: number, unit: Unit) => {
+    const ppu = pixels / realValue;
+    // Pre-scan: refuse recalibration entirely if any shared item has shapes
+    // on OTHER pages whose scale unit differs from the requested unit.
+    // Mutating only this page's shape values would otherwise leave page-B
+    // shapes in their old unit while the global item.unit either flips to
+    // the new one (corrupted label) or stays put (corrupted values on this
+    // page). The previous guard skipped only the unit retag and still
+    // rewrote the shape values; this aborts the whole operation and tells
+    // the user to recalibrate the other pages or split the item first.
+    const conflictItem = items.find((item) =>
+      item.shapes.some((s) => s.pageIndex === pageIndex) &&
+      item.shapes.some((s) => {
+        if (s.pageIndex === pageIndex) return false;
+        const otherScale = projectData[s.pageIndex]?.scale;
+        return !otherScale?.isSet || otherScale.unit !== unit;
+      })
+    );
+    if (conflictItem) {
+      addToast(
+        `Can't recalibrate to ${unit}: "${conflictItem.label}" also has shapes on other pages with a different unit. Recalibrate those pages first, or split the item.`,
+        'error'
+      );
+      return;
+    }
+    setHistory(draft => {
+      if (!draft.projectData[pageIndex]) {
+        draft.projectData[pageIndex] = { scale: { isSet: false, pixelsPerUnit: 1, unit: Unit.FEET } };
+      }
+      // Capture the previous linear unit BEFORE we overwrite the scale, so we
+      // can convert any per-item depth (stored in the old scale's unit) into
+      // the new unit below. Without this, a 1 ft depth survived a ft→m
+      // recalibration as "1 m" and quadrupled the resulting cu m volume.
+      const prevUnit = draft.projectData[pageIndex].scale.isSet
+        ? draft.projectData[pageIndex].scale.unit
+        : null;
+      draft.projectData[pageIndex].scale = { isSet: true, pixelsPerUnit: ppu, unit };
+
+      // Recalibration: existing shape values + item units were computed
+      // against the OLD scale. Walk every shape on this page and recompute
+      // its value with the new ppu; the pre-scan above already guaranteed
+      // no item has shapes on differently-calibrated pages, so retagging
+      // item.unit is now safe.
+      const areaUnit = getAreaUnitFromLinear(unit);
+      const volumeUnit = getVolumeUnitFromLinear(unit);
+      for (const item of draft.items) {
+        let touched = false;
+        for (const shape of item.shapes) {
+          if (shape.pageIndex !== pageIndex) continue;
+          touched = true;
+          if (item.type === ToolType.AREA || item.type === ToolType.FILL || item.type === ToolType.VOLUME) {
+            shape.value = getScaledArea(calculatePolygonArea(shape.points), ppu);
+          } else if (item.type === ToolType.ARC && shape.points.length >= 2) {
+            // Multi-vertex ARCs are polylines of straight chords (the
+            // useShapeSync create branch makes the same call). Without the
+            // length branch we only measured the first chord and the item
+            // silently undercounted on every recalibration.
+            shape.value =
+              shape.points.length > 2
+                ? getScaledValue(calculatePolylineLength(shape.points), ppu)
+                : getScaledValue(
+                    calculateArcLength(shape.points[0], shape.points[1], shape.bulges?.[0] ?? 0),
+                    ppu
+                  );
+          } else if (item.type === ToolType.LINEAR || item.type === ToolType.SEGMENT || item.type === ToolType.DIMENSION) {
+            shape.value = getScaledValue(calculatePolylineLength(shape.points), ppu);
+          }
+          // NOTE / COUNT shapes carry annotation/count semantics independent of scale.
+        }
+        if (touched) {
+          if (item.type === ToolType.AREA || item.type === ToolType.FILL) item.unit = areaUnit;
+          else if (item.type === ToolType.VOLUME) item.unit = volumeUnit;
+          else if (item.type === ToolType.LINEAR || item.type === ToolType.ARC || item.type === ToolType.SEGMENT || item.type === ToolType.DIMENSION) item.unit = unit;
+          // Convert VOLUME depth into the new linear unit before folding it
+          // into totalValue; otherwise an item depth of "1" silently changes
+          // meaning (1 ft → 1 m) and over/under-states the cubic quantity.
+          if (item.type === ToolType.VOLUME && item.depth != null && prevUnit && prevUnit !== unit) {
+            item.depth = convertLinearUnit(item.depth, prevUnit, unit);
+          }
+          // totalValue mirrors calculateTotalValue: shape sum, with depth fold for VOLUME.
+          const baseValue = item.shapes.reduce(
+            (sum, s) => (s.deduction ? sum - s.value : sum + s.value),
+            0
+          );
+          item.totalValue = item.type === ToolType.VOLUME && item.depth != null
+            ? baseValue * item.depth
+            : baseValue;
+        }
+      }
+    });
+    addToast("Scale calibrated", 'success');
+  };
+
+  const handleUpdateLegend = (updates: Partial<LegendSettings>) => {
+    setHistoryTransient(draft => {
+      if (!draft.projectData[pageIndex]) {
+        draft.projectData[pageIndex] = { scale: { isSet: false, pixelsPerUnit: 1, unit: Unit.FEET } };
+      }
+      const currentLegend = draft.projectData[pageIndex].legend || { x: 50, y: 50, scale: 1, visible: true };
+      draft.projectData[pageIndex].legend = { ...currentLegend, ...updates };
+    });
+  };
+
+  // Desktop menu events removed on web — the same actions are reachable
+  // through the in-app UI (sidebar + toolbar buttons).
+
+  // Check for Stripe success return
+  useEffect(() => {
+    const checkSubscriptionSuccess = async () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const sessionId = urlParams.get('session_id');
+
+      if (sessionId) {
+        // Clear the param immediately so we don't re-trigger on reload
+        window.history.replaceState({}, document.title, window.location.pathname);
+
+        addToast("Purchase completed!", 'success');
+      }
+    };
+
+    checkSubscriptionSuccess();
+  }, [addToast]);
+
+  useKeyboardShortcuts({
+    undo, redo, setTool: (t) => {
+      if (t === ToolType.SELECT) {
+        setActiveTool(ToolType.SELECT);
+        setActiveTakeoffId(null);
+        return;
+      }
+      // SCALE is a calibration mode, not a measurement item — mirror the
+      // toolbar's Calibrate Scale action, which sets the tool directly. If
+      // we routed this through handleInitiateTool, the New Item modal would
+      // open and a bogus SCALE-typed item could be created.
+      if (t === ToolType.SCALE) {
+        setActiveTool(ToolType.SCALE);
+        return;
+      }
+      // If there's already an ACTIVE item AND its type matches the shortcut,
+      // continue measuring under it (matches the toolbar's "resume" semantics).
+      // Otherwise route through handleInitiateTool so the New Item modal runs
+      // and the resulting shape has a compatible item to land on. Without
+      // this, a number-key shortcut would either drop the shape (no active
+      // item) or record it under the wrong item type.
+      const activeItem = activeTakeoffId ? items.find(i => i.id === activeTakeoffId) : null;
+      if (activeItem && activeItem.type === t) {
+        setActiveTool(t);
+      } else {
+        handleInitiateTool(t);
+      }
+    },
+    toggleDeductionMode: () => { if (activeTakeoffId) setIsDeductionMode(p => !p); },
+    deleteSelectedItem: () => {
+      if (activeTakeoffId) {
+        // Context-aware delete:
+        // If shapes exist on current page, delete only those (Clear from Page)
+        // If NO shapes on current page, delete the entire item (Delete Item)
+        const item = items.find(i => i.id === activeTakeoffId);
+        if (item) {
+          const shapesOnPage = item.shapes.filter(s => s.pageIndex === pageIndex);
+          if (shapesOnPage.length > 0) {
+            handleDeleteShapes(shapesOnPage.map(s => ({ itemId: item.id, shapeId: s.id })));
+            addToast(`Cleared ${shapesOnPage.length} measurement(s) from this page`, 'info');
+          } else {
+            handleDeleteItem(activeTakeoffId);
+          }
+        }
+      }
+    },
+    cancelAction: () => { setActiveTakeoffId(null); setActiveTool(ToolType.SELECT); },
+    zoomIn: () => setZoomLevel(z => Math.min(10, z + 0.25)), zoomOut: () => setZoomLevel(z => Math.max(0.1, z - 0.25)),
+    saveProject: handleSaveProject, nextPage: () => pageIndex < totalPages - 1 && setPageIndex(p => p + 1),
+    prevPage: () => pageIndex > 0 && setPageIndex(p => p - 1), zoomToFit: () => setZoomLevel(1.0),
+    toggleRecord: () => activeTakeoffId && handleStopTakeoff(), toggleViewMode: () => setViewMode(viewMode === 'canvas' ? 'estimates' : viewMode === 'estimates' ? '3d' : 'canvas'),
+    // 'C' shortcut: commit the in-progress shape (close polygon / polyline)
+    // via the canvas's finalize path, NOT a tool-switch that would discard
+    // drawingPoints. Falls back to stopping the active item if there's
+    // nothing being drawn so the muscle-memory of "C" still feels sensible.
+    finishShape: () => {
+      if (canvasRef.current) canvasRef.current.finishShape();
+      if (activeTakeoffId) handleStopTakeoff();
+    }, copyItem: () => { }, pasteItem: () => { },
+    openSearch: () => setShowPDFSearch(prev => !prev)
+  });
+
+  if (isInitializing || isUploadingPdf) {
+    return (
+      <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 gap-6">
+        <div className="relative">
+          <div className="w-16 h-16 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin"></div>
+        </div>
+        <div className="text-center space-y-2"><h2 className="text-xl font-semibold text-slate-800">{isUploadingPdf ? uploadLoadingMessage : loadingMessage}</h2></div>
+      </div>
+    );
+  }
+
+  const currentScale = getCurrentPageScale();
+  const currentLegend = projectData[pageIndex]?.legend || { x: 50, y: 50, scale: 1, visible: true };
+  const activePlan = getActivePlanDetails();
+
+  return (
+    <div className="flex h-screen w-screen bg-slate-50 overflow-hidden font-sans">
+      <Sidebar
+        items={items} activeTakeoffId={activeTakeoffId} selectedShapes={selectedShapes} onDelete={handleDeleteItem} onResume={handleResumeTakeoff} onStop={handleStopTakeoff}
+        onSelect={setActiveTakeoffId} onOpenUploadModal={() => setShowUploadModal(true)} planSets={planSets} pageIndex={pageIndex}
+        setPageIndex={setPageIndex} totalPages={totalPages} projectData={projectData}
+        scaleInfo={{ isSet: currentScale.isSet, unit: currentScale.unit, ppu: currentScale.pixelsPerUnit }}
+        onToggleVisibility={handleToggleItemVisibility}
+        onShowEstimates={() => { handleStopTakeoff(); setViewMode('estimates'); }}
+        onShow3D={() => { handleStopTakeoff(); setViewMode('3d'); }}
+        onShowInvoices={() => { handleStopTakeoff(); setViewMode('invoices'); }}
+        onRenamePage={(i, n) => setHistory(draft => {
+          if (!draft.projectData[i]) {
+            draft.projectData[i] = { scale: { isSet: false, pixelsPerUnit: 1, unit: Unit.FEET } };
+          }
+          draft.projectData[i].name = n;
+        })}
+        onDeletePage={(i) => { setPageToDelete(i); setShowDeletePageConfirm(true); }}
+        onEditItem={setEditingItem} onRenameItem={(id, n) => handleUpdateItem(id, { label: n })}
+        onMoveShapesToItem={handleMoveShapesToItem}
+        projectName={projectName} onNewProject={handleNewProjectRequest} onSaveProject={handleSaveProject} onLoadProject={handleLoadProjectClick}
+        isSaving={isSaving} lastSavedAt={lastSavedAt} activeTool={activeTool} onOpenExportModal={() => setShowExportModal(true)}
+        onOpenHelp={() => setShowHelpModal(true)}
+        onDeleteShapes={handleDeleteShapes}
+      />
+      <main className="flex-1 relative flex flex-col h-full overflow-hidden">
+        {viewMode === 'estimates' ? (
+          <EstimatesView items={items} onBack={() => setViewMode('canvas')} onDeleteItem={handleDeleteItem} onUpdateItem={handleUpdateItem}
+            onReorderItems={(newItems) => setHistory(draft => { draft.items = newItems; })} onEditItem={setEditingItem}
+            projectId={projectId} projectName={projectName}
+            autoOpenXero={autoOpenXero}
+            onAutoOpenXeroHandled={() => setAutoOpenXero(false)} />
+        ) : viewMode === '3d' ? (
+          <ThreeDView items={items} onBack={() => setViewMode('canvas')} planSets={planSets} pageIndex={pageIndex} />
+        ) : viewMode === 'invoices' ? (
+          <ReadyToInvoiceView
+            onBack={() => setViewMode('canvas')}
+            onOpenAndInvoice={handleOpenAndInvoice}
+          />
+        ) : (
+          <>
+            {planSets.length > 0 && (
+              <Tools activeTool={activeTool} setTool={(t) => { setActiveTool(t); if (t === ToolType.SELECT) setActiveTakeoffId(null); setIsDeductionMode(false); }}
+                onInitiateTool={handleInitiateTool} scale={zoomLevel} setScale={setZoomLevel} onSetPresetScale={setPendingPreset}
+                isRecording={!!activeTakeoffId && activeTool !== ToolType.SELECT} onUndo={undo} onRedo={redo} canUndo={canUndo} canRedo={canRedo}
+                isLegendVisible={currentLegend.visible ?? true} onToggleLegend={() => handleUpdateLegend({ visible: !(currentLegend.visible ?? true) })}
+                isPageScaled={currentScale.isSet}
+                onOpenSearch={() => setShowPDFSearch(prev => !prev)}
+                isSearchOpen={showPDFSearch} />
+            )}
+            <BlueprintCanvas
+              key={pageIndex}
+              ref={canvasRef}
+              projectId={projectId}
+              planStartPageIndex={activePlan?.startPageIndex ?? 0}
+              file={activePlan?.file || null}
+              fileId={activePlan?.id || ''}
+              localPageIndex={activePlan?.localPageIndex || 0}
+              globalPageIndex={pageIndex}
+              onPageWidthChange={() => { }} activeTool={activeTool} items={items} activeTakeoffId={activeTakeoffId} isDeductionMode={isDeductionMode}
+              onEnableDeduction={handleEnableDeductionMode} onSelectTakeoffItem={setActiveTakeoffId} onSelectionChanged={setSelectedShapes} onShapeCreated={handleShapeCreated}
+              onUpdateShape={handleUpdateShape} onUpdateShapeTransient={handleUpdateShapeTransient} onBatchUpdateShapesTransient={handleBatchUpdateShapesTransient} onSplitShape={handleSplitShape}
+              onUpdateScale={handleUpdateScale} onUpdateLegend={handleUpdateLegend} legendSettings={currentLegend} onDeleteShape={handleDeleteShape} onDeleteShapes={handleDeleteShapes}
+              onBatchCreateItems={handleBatchCreateItems}
+              onBatchAddShapes={handleBatchAddShapes}
+              onMoveShapesToItem={handleMoveShapesToItem}
+              onStopRecording={handleStopTakeoff} onInteractionEnd={commitHistory}
+              scaleInfo={{ isSet: currentScale.isSet, ppu: currentScale.pixelsPerUnit, unit: currentScale.unit }}
+              zoomLevel={zoomLevel} setZoomLevel={setZoomLevel} pendingPreset={pendingPreset} clearPendingPreset={() => setPendingPreset(null)}
+              searchHighlights={searchHighlights}
+              currentSearchHitIndex={currentSearchHitIndex} />
+            <PDFSearch
+              isOpen={showPDFSearch}
+              onClose={() => setShowPDFSearch(false)}
+              onNavigateToPage={setPageIndex}
+              currentPageIndex={pageIndex}
+              activePlanStartPageIndex={activePlan?.startPageIndex ?? 0}
+              onHighlightsChange={setSearchHighlights}
+              onCurrentHitChange={setCurrentSearchHitIndex}
+            />
+          </>
+        )}
+      </main>
+      {showAgent && (
+        <AgentPanel
+          projectId={projectId}
+          planSets={planSets}
+          activePlanSetId={activePlan?.id ?? null}
+          onAgentDone={refreshProject}
+          onClose={() => setShowAgent(false)}
+        />
+      )}
+      {/* Agent toggle — floating, unobtrusive; opens the conversational
+          takeoff agent panel. Only meaningful with a project + plans loaded. */}
+      {!showAgent && (
+        <button
+          onClick={() => setShowAgent(true)}
+          title="Takeoff Agent"
+          className="fixed bottom-5 right-5 z-40 flex items-center gap-2 rounded-full bg-blue-600 text-white px-4 py-3 shadow-lg hover:bg-blue-700"
+        >
+          <Bot className="w-5 h-5" />
+          <span className="text-sm font-medium">Agent</span>
+        </button>
+      )}
+      {showUploadModal && <UploadModal onUpload={handleUpload} onCancel={() => setShowUploadModal(false)} isFirstUpload={planSets.length === 0} />}
+      {showNewItemModal && pendingTool && <NewItemModal toolType={pendingTool} existingCount={items.length} scaleUnit={currentScale.unit} onCreate={handleCreateTakeoffItem} onCancel={() => { setShowNewItemModal(false); setPendingTool(null); }} />}
+      {editingItem && <PropertiesModal item={editingItem} items={items} onSave={handleUpdateItem} onClose={() => setEditingItem(null)} />}
+      <HelpModal isOpen={showHelpModal} onClose={() => setShowHelpModal(false)} initialTab={helpModalTab} />
+      <ExportModal isOpen={showExportModal} planSets={planSets} projectData={projectData} currentPageIndex={pageIndex} isExporting={isExporting} progress={exportProgress} onClose={() => setShowExportModal(false)} onExport={handleExportPDF} />
+      <PromptModal isOpen={showNewProjectPrompt} title="Create New Project" message="Enter a name for the new project." placeholder="My Project" onConfirm={(name) => handleNewProjectConfirmed(name).then(() => setViewMode('canvas'))} onCancel={() => setShowNewProjectPrompt(false)} confirmText="Create Project" />
+      <ConfirmModal isOpen={showImportConfirm} title="Import Project?" message="Loading a project will replace the current workspace." onConfirm={() => handleImportConfirmed().then(() => setViewMode('canvas'))} onCancel={() => { setShowImportConfirm(false); setPendingImportPath(null); }} confirmText="Import Project" isDestructive />
+      <ConfirmModal isOpen={showDeletePageConfirm} title="Delete Page?" message="Are you sure you want to delete this page?" onConfirm={() => { /* Logic to be implemented */ setShowDeletePageConfirm(false); }} onCancel={() => setShowDeletePageConfirm(false)} confirmText="Delete Page" isDestructive />
+    </div>
+  );
+};
+
+const AuthGate: React.FC = () => {
+  const session = useSession();
+
+  if (session.status === 'loading') {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center bg-slate-50">
+        <div className="w-12 h-12 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin" />
+      </div>
+    );
+  }
+  if (session.status === 'unauthenticated') {
+    return <LoginPage />;
+  }
+  return (
+    <RamCacheProvider>
+      <AppContent />
+    </RamCacheProvider>
+  );
+};
+
+export default AuthGate;
