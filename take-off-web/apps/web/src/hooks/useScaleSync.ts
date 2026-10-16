@@ -111,6 +111,34 @@ export function useScaleSync(
       else backoff.failed(key);
     };
 
+    // A failed key whose diff has since disappeared (e.g. the user undid a
+    // recalibration the worker refused) has nothing left to retry; forget it
+    // so isIdle() can clear, and let a repeat of the same refusal toast again.
+    const forgotten = backoff.prune((key) => {
+      const [kind, index] = key.split(':');
+      const pageIndex = Number(index);
+      const page = projectData[pageIndex];
+      if (!page) return false;
+      if (kind === 'scale') {
+        if (scaleInflight.has(pageIndex)) return true;
+        if (page.scale?.isSet) return scaleSnaps.get(pageIndex) !== scaleKey(page.scale);
+        const prevKey = scaleSnaps.get(pageIndex);
+        return !!page.scale && prevKey !== undefined && prevKey !== 'unset';
+      }
+      if (kind === 'legend') {
+        if (legendInflightSet.has(pageIndex)) return true;
+        return !!page.legend && legendSnaps.get(pageIndex) !== legendKey(page.legend);
+      }
+      if (kind === 'name') {
+        if (nameInflightSet.has(pageIndex)) return true;
+        return (page.name ?? '') !== (nameSnaps.get(pageIndex) ?? '');
+      }
+      return true;
+    });
+    for (const key of forgotten) {
+      if (key.startsWith('scale:')) lastRejection.current.delete(Number(key.slice('scale:'.length)));
+    }
+
     for (const k of Object.keys(projectData)) {
       const pageIndex = Number(k);
       const page = projectData[pageIndex];

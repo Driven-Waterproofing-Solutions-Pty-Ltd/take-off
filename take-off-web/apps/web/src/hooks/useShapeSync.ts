@@ -97,6 +97,16 @@ function itemChanged(a: ItemSnapshot, b: ItemSnapshot): boolean {
   );
 }
 
+function shapeChanged(a: ShapeSnapshot, b: ShapeSnapshot): boolean {
+  return (
+    a.itemId !== b.itemId ||
+    a.pointsHash !== b.pointsHash ||
+    a.deduction !== b.deduction ||
+    a.value !== b.value ||
+    a.text !== b.text
+  );
+}
+
 function pickItemPatch(item: TakeoffItem): Parameters<typeof api.items.update>[1] {
   return {
     label: item.label,
@@ -190,6 +200,28 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): Sy
       nextItems.set(item.id, item);
       for (const shape of item.shapes) nextShapes.set(shape.id, { item, shape });
     }
+
+    // A failed key whose diff has since disappeared has nothing left to
+    // retry; forget it so isIdle() can clear.
+    backoff.prune((key) => {
+      if (inflightOps.has(key)) return true;
+      const sep = key.indexOf(':');
+      const kind = key.slice(0, sep);
+      const id = key.slice(sep + 1);
+      if (kind === 'item') {
+        const next = nextItems.get(id);
+        const prev = itemSnaps.get(id);
+        if (!next) return prev !== undefined;
+        return !prev || itemChanged(prev, snapshotItem(next));
+      }
+      if (kind === 'shape') {
+        const next = nextShapes.get(id);
+        const prev = shapeSnaps.get(id);
+        if (!next) return prev !== undefined;
+        return !prev || shapeChanged(prev, snapshotShape(next.item, next.shape));
+      }
+      return true;
+    });
 
     // --- ITEMS: create / update / delete ----------------------------------
 
@@ -391,13 +423,7 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): Sy
             return false;
           })
           .then((ok) => settle(`shape:${shapeId}`, ok));
-      } else if (
-        prev.itemId !== nextSnap.itemId ||
-        prev.pointsHash !== nextSnap.pointsHash ||
-        prev.deduction !== nextSnap.deduction ||
-        prev.value !== nextSnap.value ||
-        prev.text !== nextSnap.text
-      ) {
+      } else if (shapeChanged(prev, nextSnap)) {
         // Reparenting (itemId), geometry edit (pointsHash, value), deduction
         // toggle, or NOTE text edit. Send all fields the worker accepts; on
         // a reparent the worker recalcs both old and new item totals.

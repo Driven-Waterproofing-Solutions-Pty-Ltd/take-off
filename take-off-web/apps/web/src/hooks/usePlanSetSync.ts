@@ -73,6 +73,13 @@ export function usePlanSetSync(
     const pendingById = pendingKeys.current;
     const isCurrent = () => seenIds === seen.current;
 
+    // Forget failed uploads for plan sets that were removed meanwhile.
+    const liveIds = new Set(planSets.map((p) => p.id));
+    backoff.prune((key) => {
+      const id = key.slice('plan:'.length);
+      return inflightIds.has(id) || (liveIds.has(id) && !seenIds.has(id));
+    });
+
     for (const set of planSets) {
       if (seenIds.has(set.id)) continue;
       if (inflightIds.has(set.id)) continue;

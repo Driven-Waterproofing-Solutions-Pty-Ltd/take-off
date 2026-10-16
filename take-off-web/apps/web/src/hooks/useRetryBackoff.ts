@@ -29,6 +29,14 @@ export interface RetryBackoff {
   reset: () => void;
   /** True while any key has an unresolved failure (waiting to retry). */
   hasPendingFailures: () => boolean;
+  /**
+   * Forget the failure of every key for which `stillPending` is false, i.e.
+   * keys with nothing left to send (the user undid a refused edit, or
+   * deleted an item whose create kept failing). Such a key would otherwise
+   * never see a success, so hasPendingFailures() — and the hooks' isIdle()
+   * — stayed true until reload. Returns the forgotten keys.
+   */
+  prune: (stillPending: (key: string) => boolean) => string[];
 }
 
 export function useRetryBackoff(): RetryBackoff {
@@ -87,5 +95,16 @@ export function useRetryBackoff(): RetryBackoff {
 
   const hasPendingFailures = useCallback(() => failures.current.size > 0, []);
 
-  return { tick, isBackingOff, succeeded, failed, wake, reset, hasPendingFailures };
+  const prune = useCallback((stillPending: (key: string) => boolean) => {
+    const forgotten: string[] = [];
+    for (const key of [...failures.current.keys()]) {
+      if (stillPending(key)) continue;
+      failures.current.delete(key);
+      retryAt.current.delete(key);
+      forgotten.push(key);
+    }
+    return forgotten;
+  }, []);
+
+  return { tick, isBackingOff, succeeded, failed, wake, reset, hasPendingFailures, prune };
 }
