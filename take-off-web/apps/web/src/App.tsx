@@ -332,14 +332,15 @@ const AppContent: React.FC = () => {
     }
   };
 
+  // Tools whose shape values depend on the page scale. The worker's area /
+  // linear / arc endpoints reject uncalibrated pages and the canvas computes
+  // 0 for every placement (ppu = 0), so starting OR resuming one of these
+  // without a scale would only produce unsaved, zero-valued shapes.
+  // VOLUME also derives its depth-input UI + item unit from the page unit.
+  const SCALED_TOOLS: ToolType[] = [ToolType.LINEAR, ToolType.ARC, ToolType.AREA, ToolType.VOLUME, ToolType.FILL, ToolType.SEGMENT, ToolType.DIMENSION];
+
   const handleInitiateTool = (tool: ToolType) => {
-    // VOLUME requires scale for two reasons: shape persistence (the worker
-    // add_area path needs ppu) AND the depth-input UI + item unit are
-    // derived from the page's linear unit. Without this guard, a user could
-    // make a volume item on an uncalibrated page with the default ft-based
-    // unit/depth, get a calibration error on every placement attempt, then
-    // later calibrate to metric and end up with a cu-ft item on a metric page.
-    if ([ToolType.LINEAR, ToolType.ARC, ToolType.AREA, ToolType.VOLUME, ToolType.FILL, ToolType.SEGMENT, ToolType.DIMENSION].includes(tool)) {
+    if (SCALED_TOOLS.includes(tool)) {
       const scale = getCurrentPageScale();
       if (!scale.isSet) {
         addToast("Please set the scale for this page first", 'error');
@@ -751,7 +752,7 @@ const AppContent: React.FC = () => {
   const handleResumeTakeoff = (id: string) => {
     const item = items.find(i => i.id === id);
     if (item) {
-      if ([ToolType.LINEAR, ToolType.AREA, ToolType.SEGMENT, ToolType.DIMENSION].includes(item.type)) {
+      if (SCALED_TOOLS.includes(item.type)) {
         const scale = getCurrentPageScale();
         if (!scale.isSet) { addToast("Please set the scale first", 'error'); return; }
       }
@@ -771,7 +772,11 @@ const AppContent: React.FC = () => {
     // page). The previous guard skipped only the unit retag and still
     // rewrote the shape values; this aborts the whole operation and tells
     // the user to recalibrate the other pages or split the item first.
+    // COUNT / NOTE values don't depend on scale, so they never conflict
+    // (same rule as the worker's assertNoMixedUnitItems).
     const conflictItem = items.find((item) =>
+      item.type !== ToolType.COUNT &&
+      item.type !== ToolType.NOTE &&
       item.shapes.some((s) => s.pageIndex === pageIndex) &&
       item.shapes.some((s) => {
         if (s.pageIndex === pageIndex) return false;

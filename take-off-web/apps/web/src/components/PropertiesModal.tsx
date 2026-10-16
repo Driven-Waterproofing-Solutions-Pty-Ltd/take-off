@@ -163,7 +163,9 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
     const [group, setGroup] = useState(item.group || 'General');
     const [color, setColor] = useState(item.color);
     const [unit, setUnit] = useState<Unit>(item.unit);
-    const [price, setPrice] = useState<string>(item.price ? item.price.toString() : '');
+    // `!= null`, not truthiness: an explicit price of 0 must survive a
+    // reopen + save instead of being blanked to "unpriced".
+    const [price, setPrice] = useState<string>(item.price != null ? item.price.toString() : '');
     const [properties, setProperties] = useState<ItemProperty[]>(item.properties || []);
     const [formula, setFormula] = useState(item.formula || 'Qty');
 
@@ -422,6 +424,12 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
         console.log('[MOUSE-DRAG] SubItem reorder completed');
     };
 
+    const parsePrice = (raw: string): number | undefined => {
+        if (raw.trim() === '') return undefined;
+        const n = parseFloat(raw);
+        return Number.isFinite(n) ? n : undefined;
+    };
+
     const handleSave = () => {
         const withVars = replaceLabelsWithVars(formula, variableSuggestions);
         const finalFormula = sanitizeFormula(withVars);
@@ -431,7 +439,7 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
             group: group.trim() || 'General',
             color,
             unit,
-            price: price ? parseFloat(price) : undefined,
+            price: parsePrice(price),
             properties,
             formula: finalFormula,
             subItems
@@ -450,7 +458,7 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
             unit,
             properties,
             subItems,
-            price: price ? parseFloat(price) : undefined,
+            price: parsePrice(price),
             formula: sanitizeFormula(withVars),
             group: group.trim() || 'General',
             // VOLUME templates need depth too, otherwise items spawned from

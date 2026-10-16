@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { TakeoffItem, ToolType, Unit } from '../types';
-import { generateColor, getAreaUnitFromLinear, getVolumeUnitFromLinear } from '../utils/geometry';
+import { generateColor, getAreaUnitFromLinear, getVolumeUnitFromLinear, convertLinearUnit } from '../utils/geometry';
 import TemplateManager from './TemplateManager';
 import { Tag, Edit3 } from 'lucide-react';
 import {
@@ -30,6 +30,17 @@ interface NewItemModalProps {
 // linear unit as the area calculation so volume = area × depth is
 // unit-consistent regardless of calibration.
 const USE_FEET_INCHES_DEPTH = (unit: Unit) => unit === Unit.FEET;
+
+// Linear unit a VOLUME item's depth is expressed in, read off its cubic unit
+// ("cu ft" → ft). Null when the unit isn't a cubic linear unit.
+const LINEAR_UNIT_VALUES = new Set<string>([
+    Unit.FEET, Unit.INCHES, Unit.YARDS, Unit.MILES,
+    Unit.METERS, Unit.CENTIMETERS, Unit.MILLIMETERS, Unit.KILOMETERS,
+]);
+const depthUnitOfVolume = (unit: string): Unit | null => {
+    const base = unit.startsWith('cu ') ? unit.slice(3) : null;
+    return base && LINEAR_UNIT_VALUES.has(base) ? (base as Unit) : null;
+};
 
 const NewItemModal: React.FC<NewItemModalProps> = ({ toolType, existingCount, scaleUnit, onCreate, onCancel }) => {
     // Basic Form State
@@ -179,11 +190,20 @@ const NewItemModal: React.FC<NewItemModalProps> = ({ toolType, existingCount, sc
                                     // keep the template's unit (always EACH).
                                     const pageLinearUnit = scaleUnit;
                                     let rebasedUnit = template.unit;
+                                    let depth = template.depth;
                                     if (pageLinearUnit) {
                                         if (toolType === ToolType.AREA || toolType === ToolType.FILL) {
                                             rebasedUnit = getAreaUnitFromLinear(pageLinearUnit);
                                         } else if (toolType === ToolType.VOLUME) {
                                             rebasedUnit = getVolumeUnitFromLinear(pageLinearUnit);
+                                            // The template's depth is in ITS linear unit
+                                            // (a "cu ft" template stores feet). Carrying the
+                                            // raw number onto an m-page item would read 1 ft
+                                            // as 1 m and overstate every volume ~3.28×.
+                                            const templateDepthUnit = depthUnitOfVolume(template.unit);
+                                            if (depth != null && templateDepthUnit && templateDepthUnit !== pageLinearUnit) {
+                                                depth = convertLinearUnit(depth, templateDepthUnit, pageLinearUnit);
+                                            }
                                         } else if (
                                             toolType === ToolType.LINEAR ||
                                             toolType === ToolType.SEGMENT ||
@@ -202,7 +222,7 @@ const NewItemModal: React.FC<NewItemModalProps> = ({ toolType, existingCount, sc
                                         price: template.price,
                                         group: template.group,
                                         subItems: template.subItems,
-                                        depth: template.depth,
+                                        depth,
                                     });
                                 }}
                             />

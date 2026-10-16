@@ -1092,7 +1092,14 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 } else if (selectedShape) {
                     e.preventDefault();
                     e.stopPropagation();
-                    onDeleteShape(selectedShape.itemId, selectedShape.shapeId);
+                    // Batch path so App's cutout cascade runs (same as the
+                    // context-menu Delete Shape): deleting a parent polygon
+                    // must take its contained deductions with it.
+                    if (onDeleteShapes) {
+                        onDeleteShapes([{ itemId: selectedShape.itemId, shapeId: selectedShape.shapeId }]);
+                    } else {
+                        onDeleteShape(selectedShape.itemId, selectedShape.shapeId);
+                    }
                     setSelectedShape(null);
                 }
             }
@@ -1780,7 +1787,10 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                 id: crypto.randomUUID(),
                 pageIndex: globalPageIndex,
                 points: part2Points,
-                value: val2
+                value: val2,
+                // Both halves of a deducted path stay deductions — otherwise
+                // the split subtracts one half and ADDS the other.
+                deduction: shape.deduction
             };
 
             onSplitShape(itemId, updatedOriginalShape, newShape);

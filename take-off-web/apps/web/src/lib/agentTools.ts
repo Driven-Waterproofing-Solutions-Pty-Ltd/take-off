@@ -48,12 +48,26 @@ interface PngResult {
   downscale: number; // out/in factor; < 1 when image was shrunk to fit MAX_IMAGE_EDGE
 }
 
+// Upper bound on the full-page raster we ask MuPDF for. get_page_image takes
+// a dpi of up to 300; an A0 sheet at 300 dpi would be ~140 MP (~560 MB RGBA),
+// so the effective render scale is capped and reported back to the model.
+const MAX_RENDER_PIXELS = 24_000_000;
+
+interface PixelRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 function pixelsToPngBase64(
   pixels: Uint8ClampedArray,
   width: number,
-  height: number
+  height: number,
+  crop: PixelRect = { x: 0, y: 0, width, height }
 ): PngResult {
-  // Draw the RGBA pixmap to an offscreen canvas, downscale if needed, export PNG.
+  // Draw the RGBA pixmap to an offscreen canvas, crop to `crop`, downscale if
+  // needed, export PNG.
   const src = document.createElement('canvas');
   src.width = width;
   src.height = height;
@@ -65,21 +79,16 @@ function pixelsToPngBase64(
   rgba.set(pixels);
   sctx.putImageData(new ImageData(rgba, width, height), 0, 0);
 
-  const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(width, height));
-  let out = src;
-  let outWidth = width;
-  let outHeight = height;
-  if (scale < 1) {
-    outWidth = Math.round(width * scale);
-    outHeight = Math.round(height * scale);
-    out = document.createElement('canvas');
-    out.width = outWidth;
-    out.height = outHeight;
-    const octx = out.getContext('2d');
-    if (!octx) throw new Error('2d context unavailable');
-    octx.imageSmoothingQuality = 'high';
-    octx.drawImage(src, 0, 0, outWidth, outHeight);
-  }
+  const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(crop.width, crop.height));
+  const outWidth = Math.max(1, Math.round(crop.width * scale));
+  const outHeight = Math.max(1, Math.round(crop.height * scale));
+  const out = document.createElement('canvas');
+  out.width = outWidth;
+  out.height = outHeight;
+  const octx = out.getContext('2d');
+  if (!octx) throw new Error('2d context unavailable');
+  octx.imageSmoothingQuality = 'high';
+  octx.drawImage(src, crop.x, crop.y, crop.width, crop.height, 0, 0, outWidth, outHeight);
   const dataUrl = out.toDataURL('image/png');
   return {
     base64: dataUrl.slice(dataUrl.indexOf(',') + 1),
@@ -126,27 +135,64 @@ export async function executeAgentTool(
             true
           );
         }
-        // Default to 1× = PDF-point space, which matches the coordinate
-        // space the worker expects for add_area / add_linear / add_count /
-        // add_arc / set_scale_manual. Rendering at 2× and forwarding raw
-        // pixel coords (the previous default) overstated quantities 4× on
-        // preset scales and double-sized the saved geometry on reload
-        // (the canvas multiplies stored points by shapeRenderScale=2).
-        const renderScale = Number(input.render_scale ?? 1.0);
+        // Honour the tool contract (tool-schemas get_page_image): `dpi`
+        // (72–300, default 150; 72 dpi = 1 image px per PDF point) and an
+        // optional `viewport` {x, y, width, height} in PDF points to crop to.
+        // Every coordinate the model reads off the delivered image is mapped
+        // back to PDF points with the offset + factor reported below, which is
+        // the space add_area / add_linear / add_count / add_arc /
+        // set_scale_manual expect.
+        const dims = mupdfController.getPageDimensions(resolved.localIndex);
+        if (!(dims.width > 0 && dims.height > 0)) {
+          return textResult(id, `Page ${pageIndex} has no renderable area`, true);
+        }
+        const dpiInput = Number(input.dpi ?? 150);
+        const dpi = Number.isFinite(dpiInput) ? Math.min(300, Math.max(72, dpiInput)) : 150;
+        const maxScale = Math.sqrt(MAX_RENDER_PIXELS / (dims.width * dims.height));
+        const renderScale = Math.min(dpi / 72, maxScale);
+
+        // Viewport in PDF points, clamped to the page.
+        const vp = input.viewport as Partial<Record<'x' | 'y' | 'width' | 'height', unknown>> | undefined;
+        let region = { x: 0, y: 0, width: dims.width, height: dims.height };
+        if (vp) {
+          const vx = Math.max(0, Math.min(dims.width, Number(vp.x)));
+          const vy = Math.max(0, Math.min(dims.height, Number(vp.y)));
+          const vw = Math.min(dims.width - vx, Number(vp.width));
+          const vh = Math.min(dims.height - vy, Number(vp.height));
+          if (![vx, vy, vw, vh].every(Number.isFinite) || vw <= 0 || vh <= 0) {
+            return textResult(
+              id,
+              `viewport must lie within the page (0..${dims.width.toFixed(1)} × 0..${dims.height.toFixed(1)} PDF points) and have a positive width/height`,
+              true
+            );
+          }
+          region = { x: vx, y: vy, width: vw, height: vh };
+        }
+
         const { pixels, width, height } = mupdfController.renderPageToImageData(
           resolved.localIndex,
           renderScale
         );
-        const png = pixelsToPngBase64(pixels, width, height);
-        // Effective scale = mupdf renderScale × any downscale applied to fit
-        // MAX_IMAGE_EDGE. A1/A0 sheets at any DPI commonly trigger the
-        // downscale; without telling the model, coordinates read off the
-        // delivered image landed too small (areas by the factor squared)
-        // because the model only knew to divide by renderScale.
+        const crop: PixelRect = {
+          x: Math.floor(region.x * renderScale),
+          y: Math.floor(region.y * renderScale),
+          width: 0,
+          height: 0,
+        };
+        crop.width = Math.max(1, Math.min(width - crop.x, Math.ceil(region.width * renderScale)));
+        crop.height = Math.max(1, Math.min(height - crop.y, Math.ceil(region.height * renderScale)));
+        const png = pixelsToPngBase64(pixels, width, height, crop);
+        // Effective image-px-per-PDF-point factor = render scale × any
+        // downscale applied to fit MAX_IMAGE_EDGE. The crop origin (in PDF
+        // points) is the offset to add back.
         const effectiveScale = renderScale * png.downscale;
-        const downscaleNote = png.downscale < 1
-          ? ` (original ${width}x${height} downscaled by ${png.downscale.toFixed(4)} to fit vision input)`
-          : '';
+        const originX = crop.x / renderScale;
+        const originY = crop.y / renderScale;
+        const notes = [
+          renderScale < dpi / 72 ? `rendered at ${(renderScale * 72).toFixed(0)} dpi (capped from ${dpi})` : `rendered at ${dpi} dpi`,
+          png.downscale < 1 ? `downscaled by ${png.downscale.toFixed(4)} to fit vision input` : null,
+          vp ? `cropped to viewport x=${originX.toFixed(2)} y=${originY.toFixed(2)} w=${region.width.toFixed(2)} h=${region.height.toFixed(2)} (PDF points)` : null,
+        ].filter((n): n is string => n !== null);
         return {
           type: 'tool_result',
           tool_use_id: id,
@@ -154,10 +200,9 @@ export async function executeAgentTool(
             {
               type: 'text',
               text:
-                `Page ${pageIndex} delivered at ${png.outWidth}x${png.outHeight}px${downscaleNote}. ` +
-                `Image-pixel coordinates relate to PDF-point space by the factor ${effectiveScale.toFixed(6)} ` +
-                `(renderScale=${renderScale} × downscale=${png.downscale.toFixed(6)}). ` +
-                `Divide every (x, y) you read off the image by ${effectiveScale.toFixed(6)} before passing it to ` +
+                `Page ${pageIndex} (${dims.width.toFixed(1)}×${dims.height.toFixed(1)} PDF points) delivered at ${png.outWidth}x${png.outHeight}px; ${notes.join('; ')}. ` +
+                `To convert an image pixel (u, v) to PDF points use x = ${originX.toFixed(4)} + u / ${effectiveScale.toFixed(6)}, ` +
+                `y = ${originY.toFixed(4)} + v / ${effectiveScale.toFixed(6)}, and pass PDF points to ` +
                 `add_area / add_linear / add_count / add_arc / set_scale_manual.`,
             },
             { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png.base64 } },

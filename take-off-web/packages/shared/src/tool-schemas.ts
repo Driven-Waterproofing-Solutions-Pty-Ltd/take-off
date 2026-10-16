@@ -114,8 +114,17 @@ export const tools = {
     input: z.object({
       project_id: z.string(),
       page_index: z.number().int().min(0),
-      viewport: ViewportZ.optional(),
-      dpi: z.number().int().min(72).max(300).optional().default(150),
+      viewport: ViewportZ.optional().describe(
+        'Optional crop region in PDF points (origin top-left of the page). The result text gives the offset + factor to map image pixels back to PDF points.'
+      ),
+      dpi: z
+        .number()
+        .int()
+        .min(72)
+        .max(300)
+        .optional()
+        .default(150)
+        .describe('Render resolution; 72 dpi = 1 image pixel per PDF point. Very large sheets may be capped.'),
     }),
     output: z.object({
       png_base64: z.string(),
