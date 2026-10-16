@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Loader2, Send, Inbox, RefreshCw, MoreHorizontal, BellOff, Bell } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -65,22 +65,34 @@ const ReadyToInvoiceView: React.FC<ReadyToInvoiceViewProps> = ({
 }) => {
   const { addToast } = useToast();
   const [tab, setTab] = useState<Tab>('active');
-  const [rows, setRows] = useState<ReadyToInvoiceRow[]>([]);
+  // Rows are tagged with the tab they were loaded for and only shown under
+  // that tab, so Active rows (openable for invoicing) never appear under
+  // Snoozed while its list loads, or vice versa.
+  const [list, setList] = useState<{ tab: Tab; rows: ReadyToInvoiceRow[] }>({ tab: 'active', rows: [] });
+  const rows = list.tab === tab ? list.rows : [];
+  const updateRows = (update: (prev: ReadyToInvoiceRow[]) => ReadyToInvoiceRow[]) =>
+    setList((prev) => ({ ...prev, rows: update(prev.rows) }));
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Only the latest load may update the list: switching tabs (or Refresh)
+  // while a request is in flight must not let the older response land last.
+  const loadSeq = useRef(0);
 
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     setLoading(true);
     try {
       const data = await api.projects.readyToInvoice({
         includeSnoozed: tab === 'snoozed',
       });
-      setRows(data);
+      if (seq !== loadSeq.current) return;
+      setList({ tab, rows: data });
     } catch (e) {
+      if (seq !== loadSeq.current) return;
       const msg = e instanceof Error ? e.message : String(e);
       addToast(`Could not load invoice queue: ${msg}`, 'error');
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
   }, [addToast, tab]);
 
@@ -96,7 +108,7 @@ const ReadyToInvoiceView: React.FC<ReadyToInvoiceViewProps> = ({
       const until =
         durationMs === null ? Number.MAX_SAFE_INTEGER : Date.now() + durationMs;
       await api.projects.snooze(projectId, until);
-      setRows((prev) => prev.filter((r) => r.id !== projectId));
+      updateRows((prev) => prev.filter((r) => r.id !== projectId));
       addToast('Snoozed', 'success');
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -110,7 +122,7 @@ const ReadyToInvoiceView: React.FC<ReadyToInvoiceViewProps> = ({
     setBusyId(projectId);
     try {
       await api.projects.snooze(projectId, null);
-      setRows((prev) => prev.filter((r) => r.id !== projectId));
+      updateRows((prev) => prev.filter((r) => r.id !== projectId));
       addToast('Un-snoozed', 'success');
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

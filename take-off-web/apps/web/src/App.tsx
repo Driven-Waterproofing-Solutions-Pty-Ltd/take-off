@@ -1086,6 +1086,7 @@ const AppContent: React.FC = () => {
           activePlanSetId={activePlan?.id ?? null}
           onAgentDone={refreshProject}
           onClose={() => setShowAgent(false)}
+          isSyncIdle={isSyncIdle}
         />
       )}
       {/* Agent toggle — floating, unobtrusive; opens the conversational

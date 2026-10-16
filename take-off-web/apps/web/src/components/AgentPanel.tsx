@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { Bot, Loader2, Send, Square, AlertCircle, Wrench, CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -23,7 +23,15 @@ interface AgentPanelProps {
   // agent-created shapes even though the review quote includes them.
   onAgentDone: () => void | Promise<void>;
   onClose: () => void;
+  // True when every local edit has reached the worker (nothing in flight or
+  // waiting to retry). The agent reads and writes D1 directly and
+  // onAgentDone replaces local state with the server's, so a run must not
+  // start, or refresh the canvas, over edits that haven't synced.
+  isSyncIdle?: () => boolean;
 }
+
+const SYNC_WAIT_MS = 15_000;
+const SYNC_POLL_MS = 300;
 
 // Resolve a project-wide page index to its plan set + local index within
 // that PDF — mirrors getActivePlanDetails in App.tsx. Returning the
@@ -42,10 +50,27 @@ function makeResolveLocalPageIndex(planSets: PlanSet[]) {
   };
 }
 
-const AgentPanel: React.FC<AgentPanelProps> = ({ projectId, planSets, activePlanSetId, onAgentDone, onClose }) => {
+const AgentPanel: React.FC<AgentPanelProps> = ({ projectId, planSets, activePlanSetId, onAgentDone, onClose, isSyncIdle }) => {
   const { addToast } = useToast();
   const { state, run, abort } = useTakeoffAgent();
   const [instruction, setInstruction] = useState('');
+  const isSyncIdleRef = useRef(isSyncIdle);
+  isSyncIdleRef.current = isSyncIdle;
+  const [waitingForSync, setWaitingForSync] = useState(false);
+
+  // Resolves true once local edits have synced, false if they still haven't
+  // after SYNC_WAIT_MS.
+  const waitForSync = async (): Promise<boolean> => {
+    const idle = () => isSyncIdleRef.current?.() ?? true;
+    if (idle()) return true;
+    setWaitingForSync(true);
+    const deadline = Date.now() + SYNC_WAIT_MS;
+    while (!idle() && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, SYNC_POLL_MS));
+    }
+    setWaitingForSync(false);
+    return idle();
+  };
 
   // Review gate: after the agent stops, we fetch the current quote draft and
   // present it for human approval. The agent never pushes to Xero itself.
@@ -69,7 +94,14 @@ const AgentPanel: React.FC<AgentPanelProps> = ({ projectId, planSets, activePlan
   );
 
   const start = async () => {
-    if (!ctx || !instruction.trim()) return;
+    if (!ctx || !instruction.trim() || waitingForSync || state.running) return;
+    if (!(await waitForSync())) {
+      addToast(
+        "Some changes haven't saved to the server yet, so the agent can't start. Try again in a moment.",
+        'error'
+      );
+      return;
+    }
     setQuote(null);
     setPushed(null);
     setCustomers([]);
@@ -84,7 +116,15 @@ const AgentPanel: React.FC<AgentPanelProps> = ({ projectId, planSets, activePlan
     }
     // Re-hydrate App's local items/projectData so the canvas, markup export
     // and saved snapshot see the agent-created shapes. Runs after the quote
-    // fetch so we never block the review gate on this.
+    // fetch so we never block the review gate on this. Edits made during the
+    // run must reach the server first, or the refresh would overwrite them.
+    if (!(await waitForSync())) {
+      addToast(
+        "The agent finished, but some of your edits haven't saved yet, so the canvas wasn't refreshed with its changes. Reopen the project once they have.",
+        'error'
+      );
+      return;
+    }
     try {
       await onAgentDone();
     } catch (e) {
@@ -161,8 +201,21 @@ const AgentPanel: React.FC<AgentPanelProps> = ({ projectId, planSets, activePlan
               <Square className="w-4 h-4 mr-1" /> Stop
             </Button>
           ) : (
-            <Button size="sm" onClick={start} disabled={!projectId || !instruction.trim()} className="flex-1">
-              <Send className="w-4 h-4 mr-1" /> Run
+            <Button
+              size="sm"
+              onClick={start}
+              disabled={!projectId || !instruction.trim() || waitingForSync}
+              className="flex-1"
+            >
+              {waitingForSync ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-1 animate-spin" /> Saving changes…
+                </>
+              ) : (
+                <>
+                  <Send className="w-4 h-4 mr-1" /> Run
+                </>
+              )}
             </Button>
           )}
         </div>
