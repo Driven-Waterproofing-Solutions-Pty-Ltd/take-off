@@ -134,9 +134,6 @@ let tokenEpoch = 0;
 /** Xero only remembers an idempotency key for a few minutes. */
 const IDEMPOTENCY_WINDOW_MS = 5 * 60 * 1000;
 
-/** Pending sends older than this are forgotten. */
-const PENDING_RETENTION_MS = 24 * 60 * 60 * 1000;
-
 type PendingRecord = { key: string; createdAt: number };
 
 async function sha256Hex(text: string): Promise<string> {
@@ -145,13 +142,12 @@ async function sha256Hex(text: string): Promise<string> {
 }
 
 async function readPendingSends(): Promise<Record<string, PendingRecord>> {
+    // Unconfirmed sends are kept however old they are: only a confirmed send
+    // or the user's explicit retry after the stale warning removes one.
     const raw = (await store.get<Record<string, PendingRecord>>(KEY_PENDING_SEND)) ?? {};
-    const now = Date.now();
     const kept: Record<string, PendingRecord> = {};
     for (const [id, rec] of Object.entries(raw)) {
-        if (rec && typeof rec.key === 'string' && typeof rec.createdAt === 'number' && now - rec.createdAt <= PENDING_RETENTION_MS) {
-            kept[id] = rec;
-        }
+        if (rec && typeof rec.key === 'string' && typeof rec.createdAt === 'number') kept[id] = rec;
     }
     return kept;
 }
@@ -373,11 +369,16 @@ export const xeroService = {
         return res.json();
     },
 
-    async getContacts(accessToken: string, tenantId: string): Promise<XeroContact[]> {
+    /**
+     * One page (up to 100, by name) of active contacts, optionally matching
+     * `searchTerm` (name, contact number or email). IsCustomer is not used as a
+     * filter: it only becomes true after a contact's first sales invoice.
+     */
+    async getContacts(accessToken: string, tenantId: string, searchTerm = ''): Promise<XeroContact[]> {
+        const params = new URLSearchParams({ page: '1', order: 'Name', summaryOnly: 'true' });
+        if (searchTerm.trim()) params.set('searchTerm', searchTerm.trim());
         const res = await fetch(
-            // All active contacts: IsCustomer only becomes true after a contact's
-            // first sales invoice, so filtering on it would hide new customers.
-            'https://api.xero.com/api.xro/2.0/Contacts?order=Name',
+            `https://api.xero.com/api.xro/2.0/Contacts?${params}`,
             {
                 headers: {
                     Authorization: `Bearer ${accessToken}`,
@@ -387,7 +388,7 @@ export const xeroService = {
             }
         );
         if (!res.ok) throw new Error('Failed to fetch Xero contacts');
-        const data = await res.json();
+        const data: { Contacts?: XeroContact[] } = await res.json();
         return data.Contacts ?? [];
     },
 

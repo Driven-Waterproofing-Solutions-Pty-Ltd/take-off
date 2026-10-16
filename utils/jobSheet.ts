@@ -99,7 +99,8 @@ export function computeLineItems(items: TakeoffItem[]): ComputedLineItem[] {
                 unit: String(item.unit),
                 unitPrice,
                 total: centsToDollars(toCents(totalCost)),
-                invalid: !Number.isFinite(calculated) || !Number.isFinite(totalCost),
+                // A broken sub-item formula makes its parent unbillable too.
+                invalid: !Number.isFinite(calculated) || !Number.isFinite(totalCost) || subRows.some((r) => r.invalid),
             });
             rows.push(...subRows);
         });

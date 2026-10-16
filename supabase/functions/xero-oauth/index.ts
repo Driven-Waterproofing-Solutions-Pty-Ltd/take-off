@@ -15,21 +15,28 @@
  *
  *   supabase functions deploy xero-oauth --no-verify-jwt
  *
+ * The page is plain text on purpose: Supabase Edge Functions rewrite GET
+ * responses served as text/html to text/plain, so an HTML page would show up
+ * as raw source. Plain text also leaves nothing for injected markup to do.
+ *
  * The page is only ever a top-level navigation target, so it sends no CORS
  * headers (other origins must not be able to read the code) and asks browsers
  * not to cache, frame or leak it via the Referer header.
  */
 
 const pageHeaders = {
-    'Content-Type': 'text/html; charset=utf-8',
+    'Content-Type': 'text/plain; charset=utf-8',
     'Cache-Control': 'no-store',
     'Referrer-Policy': 'no-referrer',
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
-    'Content-Security-Policy':
-        "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; " +
-        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
 };
+
+/** Keeps a query value on one line so it can't fake other lines of the page. */
+function oneLine(value: string, max = 2048): string {
+    return value.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, max);
+}
 
 Deno.serve((req: Request) => {
     if (req.method !== 'GET') {
@@ -46,17 +53,17 @@ Deno.serve((req: Request) => {
         const errorDesc = url.searchParams.get('error_description');
 
         if (error) {
-            const html = buildErrorPage(error, errorDesc || '');
-            return new Response(html, { headers: pageHeaders });
+            return new Response(buildErrorPage(error, errorDesc || ''), { headers: pageHeaders });
         }
 
         if (!code) {
-            const html = buildErrorPage('Missing Code', 'No authorization code was returned by Xero.');
-            return new Response(html, { headers: pageHeaders, status: 400 });
+            return new Response(buildErrorPage('Missing Code', 'No authorization code was returned by Xero.'), {
+                headers: pageHeaders,
+                status: 400,
+            });
         }
 
-        const html = buildSuccessPage(code, state || '');
-        return new Response(html, { headers: pageHeaders });
+        return new Response(buildSuccessPage(code, state || ''), { headers: pageHeaders });
     }
 
     return new Response(JSON.stringify({ error: 'Not found' }), {
@@ -65,173 +72,31 @@ Deno.serve((req: Request) => {
     });
 });
 
-// ── HTML page builders ────────────────────────────────────────────────────────
+// ── Page builders ─────────────────────────────────────────────────────────────
 
 function buildSuccessPage(code: string, state: string): string {
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ProTakeoff – Xero Connected</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #f0fdf4;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 24px;
-    }
-    .card {
-      background: white;
-      border-radius: 16px;
-      box-shadow: 0 4px 24px rgba(0,0,0,0.08);
-      padding: 40px;
-      max-width: 520px;
-      width: 100%;
-      text-align: center;
-    }
-    .icon { font-size: 48px; margin-bottom: 16px; }
-    h1 { font-size: 22px; font-weight: 700; color: #111827; margin-bottom: 8px; }
-    p { font-size: 14px; color: #6b7280; margin-bottom: 24px; line-height: 1.6; }
-    .field-label { font-size: 12px; font-weight: 600; color: #374151; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; text-align: left; }
-    .code-box {
-      background: #f9fafb;
-      border: 1.5px solid #d1d5db;
-      border-radius: 10px;
-      padding: 14px 18px;
-      font-family: "SF Mono", "Fira Code", monospace;
-      font-size: 13px;
-      color: #111827;
-      word-break: break-all;
-      margin-bottom: 16px;
-      user-select: all;
-      cursor: text;
-      text-align: left;
-    }
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      background: #16a34a;
-      color: white;
-      border: none;
-      border-radius: 8px;
-      padding: 10px 24px;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.15s;
-      margin: 4px;
-    }
-    .btn:hover { background: #15803d; }
-    .btn:active { background: #166534; }
-    .btn-secondary { background: #2563eb; }
-    .btn-secondary:hover { background: #1d4ed8; }
-    .copied { background: #7c3aed !important; }
-    .note { margin-top: 20px; font-size: 12px; color: #9ca3af; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <div class="icon">✅</div>
-    <h1>Xero Authorization Successful</h1>
-    <p>
-      Copy the <strong>Authorization Code</strong> and <strong>State</strong> below and paste them back into the<br />
-      <strong>ProTakeoff</strong> app to complete the connection.
-    </p>
-    <div class="field-label">Authorization Code</div>
-    <div class="code-box" id="code">${escapeHtml(code)}</div>
-    ${state ? `<div class="field-label">State</div>
-    <div class="code-box" id="state">${escapeHtml(state)}</div>` : ''}
-    <button class="btn" id="copyCodeBtn" onclick="copyField('code', 'copyCodeBtn')">
-      📋 Copy Code
-    </button>
-    ${state ? `<button class="btn btn-secondary" id="copyStateBtn" onclick="copyField('state', 'copyStateBtn')">
-      📋 Copy State
-    </button>` : ''}
-    <p class="note">You can close this tab after copying both values.</p>
-  </div>
-  <script>
-    function copyField(fieldId, btnId) {
-      const text = document.getElementById(fieldId).textContent;
-      navigator.clipboard.writeText(text).then(() => {
-        const btn = document.getElementById(btnId);
-        const original = btn.innerHTML;
-        btn.textContent = '✓ Copied!';
-        btn.classList.add('copied');
-        setTimeout(() => {
-          btn.innerHTML = original;
-          btn.classList.remove('copied');
-        }, 2000);
-      });
-    }
-  </script>
-</body>
-</html>`;
+    return [
+        'ProTakeoff - Xero authorization successful',
+        '',
+        'Copy the Authorization Code and the State below and paste them into',
+        'ProTakeoff to finish connecting. You can close this tab afterwards.',
+        '',
+        'Authorization Code:',
+        oneLine(code),
+        '',
+        'State:',
+        state ? oneLine(state) : '(none returned)',
+        '',
+    ].join('\n');
 }
 
 function buildErrorPage(error: string, description: string): string {
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ProTakeoff – Xero Error</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #fef2f2;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 24px;
-    }
-    .card {
-      background: white;
-      border-radius: 16px;
-      box-shadow: 0 4px 24px rgba(0,0,0,0.08);
-      padding: 40px;
-      max-width: 480px;
-      width: 100%;
-      text-align: center;
-    }
-    .icon { font-size: 48px; margin-bottom: 16px; }
-    h1 { font-size: 22px; font-weight: 700; color: #111827; margin-bottom: 8px; }
-    p { font-size: 14px; color: #6b7280; line-height: 1.6; }
-    .error-detail {
-      margin-top: 16px;
-      background: #fef2f2;
-      border: 1px solid #fecaca;
-      border-radius: 8px;
-      padding: 12px;
-      font-size: 13px;
-      color: #991b1b;
-      font-family: monospace;
-    }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <div class="icon">❌</div>
-    <h1>Authorization Failed</h1>
-    <p>Xero returned an error during the authorization process. Please close this tab and try again in ProTakeoff.</p>
-    ${description ? `<div class="error-detail">${escapeHtml(error)}: ${escapeHtml(description)}</div>` : ''}
-  </div>
-</body>
-</html>`;
-}
-
-function escapeHtml(str: string): string {
-    return str
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
+    return [
+        'ProTakeoff - Xero authorization failed',
+        '',
+        'Xero returned an error during authorization. Close this tab and try again in ProTakeoff.',
+        '',
+        description ? `${oneLine(error, 200)}: ${oneLine(description, 1000)}` : oneLine(error, 200),
+        '',
+    ].join('\n');
 }

@@ -158,6 +158,8 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
     const [selectedTenant, setSelectedTenant] = useState('');
     const [contacts, setContacts] = useState<XeroContact[]>([]);
     const [selectedContact, setSelectedContact] = useState('');
+    const [contactSearch, setContactSearch] = useState('');
+    const [searchingContacts, setSearchingContacts] = useState(false);
     const [accounts, setAccounts] = useState<XeroAccount[]>([]);
     const [selectedAccount, setSelectedAccount] = useState('');
     const [taxRates, setTaxRates] = useState<XeroTaxRate[]>([]);
@@ -272,6 +274,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
     /** Contacts, accounts and tax rates belong to one organisation: drop them on switch. */
     const clearTenantData = useCallback(() => {
         setContacts([]);
+        setContactSearch('');
         setAccounts([]);
         setTaxRates([]);
         setSelectedContact('');
@@ -314,6 +317,26 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
             fetchedTaxRates.some((r) => r.TaxType === prev) ? prev : defaultTaxType(fetchedTaxRates)
         );
     }, []);
+
+    /** Searches the organisation's contacts; the current selection stays in the list. */
+    const handleSearchContacts = async () => {
+        if (!selectedTenant) return;
+        const seq = tenantLoadSeq.current;
+        setSearchingContacts(true);
+        try {
+            const token = await xeroService.getValidToken(clientId);
+            const found = await xeroService.getContacts(token, selectedTenant, contactSearch);
+            if (seq !== tenantLoadSeq.current) return;
+            setContacts((prev) => {
+                const current = prev.find((c) => c.ContactID === selectedContact);
+                return current && !found.some((c) => c.ContactID === current.ContactID) ? [current, ...found] : found;
+            });
+        } catch (e: unknown) {
+            addToast(`Contact search failed: ${errorMessage(e)}`, 'error');
+        } finally {
+            setSearchingContacts(false);
+        }
+    };
 
     const handleTenantSelect = async (tenantId: string) => {
         const seq = ++tenantLoadSeq.current;
@@ -883,6 +906,21 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                     <>
                                         <div>
                                             <label className="text-xs font-medium text-muted-foreground mb-1 block">Contact (Customer)</label>
+                                            <form
+                                                className="flex gap-2 mb-2"
+                                                onSubmit={(e) => { e.preventDefault(); void handleSearchContacts(); }}
+                                            >
+                                                <Input
+                                                    value={contactSearch}
+                                                    onChange={(e) => setContactSearch(e.target.value)}
+                                                    placeholder="Search name, number or email"
+                                                    className="h-8 text-sm flex-1"
+                                                    disabled={!selectedTenant}
+                                                />
+                                                <Button type="submit" variant="outline" className="h-8 text-xs shrink-0" disabled={!selectedTenant || searchingContacts}>
+                                                    {searchingContacts ? <Loader2 size={13} className="animate-spin" /> : 'Search'}
+                                                </Button>
+                                            </form>
                                             {loadingXero ? (
                                                 <div className="flex items-center gap-2 text-xs text-muted-foreground h-8"><Loader2 size={12} className="animate-spin" /> Loading contacts…</div>
                                             ) : (
@@ -896,6 +934,9 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                                         <option key={c.ContactID} value={c.ContactID}>{c.Name}</option>
                                                     ))}
                                                 </select>
+                                            )}
+                                            {contacts.length >= 100 && (
+                                                <p className="text-[11px] text-muted-foreground mt-1">Showing the first 100 contacts; search to find others.</p>
                                             )}
                                         </div>
                                         <div>
