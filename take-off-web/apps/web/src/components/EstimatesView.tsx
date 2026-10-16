@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { TakeoffItem, ToolType, Unit } from '../types';
 import { evaluateFormula, convertValue, toVariableName } from '../utils/math';
 import { FileSpreadsheet, ArrowLeft, Trash2, GripVertical, Plus, ChevronDown, ChevronRight, Edit2, CornerDownRight, FileText, Tag, Loader2, Send } from 'lucide-react';
@@ -49,6 +49,8 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
     // ignored there). Mirror those totals here so this screen and its Excel
     // export match the draft quote/invoice the Xero action creates, instead
     // of showing an assembly-priced item as $0 or as its stale parent price.
+    const isSyncIdleRef = useRef(isSyncIdle);
+    isSyncIdleRef.current = isSyncIdle;
     const [assemblyTotals, setAssemblyTotals] = useState<Map<string, number>>(new Map());
     // 'ready' only once the totals reflect the CURRENT items; while loading
     // (or after a failed refresh) assembly items show as pending instead of
@@ -63,8 +65,22 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
         }
         let cancelled = false;
         setAssemblyStatus('loading');
-        // Debounced: the sync hooks push local edits first.
-        const timer = setTimeout(() => {
+        // The server quote only reflects edits that have synced, and a sync
+        // finishing doesn't change `items`, so poll the sync status and fetch
+        // once it is idle (a fixed delay could read the pre-edit state and
+        // then sit "ready" with stale totals). Give up after ~15 s.
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const deadline = Date.now() + 15_000;
+        const fetchWhenSynced = () => {
+            if (cancelled) return;
+            if (isSyncIdleRef.current && !isSyncIdleRef.current()) {
+                if (Date.now() > deadline) {
+                    setAssemblyStatus('error');
+                    return;
+                }
+                timer = setTimeout(fetchWhenSynced, 400);
+                return;
+            }
             api.memory.quote(projectId)
                 .then((quote) => {
                     if (cancelled) return;
@@ -81,10 +97,12 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                     console.warn('assembly pricing fetch failed', e);
                     setAssemblyStatus('error');
                 });
-        }, 800);
+        };
+        // Short debounce so the sync hooks dispatch the edit first.
+        timer = setTimeout(fetchWhenSynced, 300);
         return () => {
             cancelled = true;
-            clearTimeout(timer);
+            if (timer) clearTimeout(timer);
         };
     }, [projectId, hasAssemblies, items]);
     // undefined = not assembly-priced; null = assembly total not known yet.
