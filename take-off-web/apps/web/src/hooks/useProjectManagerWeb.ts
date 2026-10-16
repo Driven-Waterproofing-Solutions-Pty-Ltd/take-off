@@ -217,16 +217,18 @@ export const useProjectManager = (_isLicensed = true) => {
   // the on-mount ?project= bootstrap (line 131) but without a page reload,
   // so cross-project navigation (Ready-to-Invoice queue → Open) keeps the
   // SPA state. URL is updated so a refresh reopens the same project.
+  // Resolves true only when `id` is now the open project, so callers can
+  // gate follow-up actions (e.g. auto-opening the Xero modal) on it.
   const openProjectById = useCallback(
-    async (id: string) => {
-      if (!id) return;
+    async (id: string): Promise<boolean> => {
+      if (!id) return false;
       setIsInitializing(true);
       setLoadingMessage('Loading project…');
       try {
         const snap = await fetchProject(id);
         if (!snap) {
           addToast('Project not found', 'error');
-          return;
+          return false;
         }
         const patched = snap.items.map((item) => {
           if (item.type === ToolType.AREA) {
@@ -248,9 +250,11 @@ export const useProjectManager = (_isLicensed = true) => {
         const url = new URL(window.location.href);
         url.searchParams.set('project', id);
         window.history.replaceState({}, '', url.toString());
+        return true;
       } catch (e) {
         console.error('openProjectById failed', e);
         addToast('Failed to open project', 'error');
+        return false;
       } finally {
         setIsInitializing(false);
       }

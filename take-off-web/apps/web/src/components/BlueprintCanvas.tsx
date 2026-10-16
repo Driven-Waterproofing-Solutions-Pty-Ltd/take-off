@@ -211,6 +211,12 @@ const extractVectorPaths = async (file: File): Promise<CachedVectorData[]> => {
     }));
 };
 
+// Upper bound for an uploaded vector cache's serialised size. D1's maximum
+// string/row size is 2,000,000 bytes and the page row also holds scale, name
+// and legend JSON, so leave headroom. (The cache is ASCII JSON, so characters
+// ≈ bytes.)
+const MAX_VECTOR_CACHE_CHARS = 1_900_000;
+
 const renderPdfAsImage = async (file: File): Promise<string> => {
     // For now, we'll use the existing MuPDF rendering
     // In a full implementation, this would render the PDF page to an image
@@ -872,8 +878,21 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                     }
                 }
 
+                // D1 caps a row at ~2 MB, so a dense CAD page whose cache
+                // serialises larger can never be stored; uploading it anyway
+                // just failed and re-sent multiple MB every retry tick, for as
+                // long as the page stayed open. Skip it (server-side snapping
+                // stays unavailable for that page; canvas snapping uses the
+                // local vectors either way).
+                const cache = { vertices, segments };
+                if (JSON.stringify(cache).length > MAX_VECTOR_CACHE_CHARS) {
+                    console.warn('vector cache too large for server storage; skipping upload', dedupKey);
+                    uploadedVectorPages.current.add(dedupKey);
+                    continue;
+                }
+
                 promises.push(
-                    api.vectorCache.upload(projectId, globalIdx, { vertices, segments })
+                    api.vectorCache.upload(projectId, globalIdx, cache)
                         .then(() => { uploadedVectorPages.current.add(dedupKey); return true; })
                         .catch((e) => {
                             console.warn('vector-cache upload failed', dedupKey, e);

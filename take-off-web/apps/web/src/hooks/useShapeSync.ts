@@ -128,16 +128,20 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
   //      arriving before the scale POST) gets retried — after an exponential
   //      backoff, so a persistent 4xx can't become a tight request loop.
   const backoff = useRetryBackoff();
-  // Run the success/failure bookkeeping AFTER the inflight lock is released
-  // so the woken effect sees the key as free.
-  const settle = (key: string, ok: boolean) => {
-    inflight.current.delete(key);
-    if (ok) backoff.succeeded(key);
-    else backoff.failed(key);
-  };
 
   useEffect(() => {
-    if (!projectId) return;
+    if (!projectId) {
+      // Detached (e.g. a local import). Forget the old project so that
+      // re-opening it later re-primes from the server instead of diffing
+      // against stale snapshots, and orphan any in-flight completions.
+      if (lastProjectId.current !== null) {
+        lastProjectId.current = null;
+        itemSnapshots.current = new Map();
+        shapeSnapshots.current = new Map();
+        inflight.current = new Map();
+      }
+      return;
+    }
 
     // Project switched (or initial load): the items array represents the
     // server's current truth, so prime snapshots without sending any writes.
@@ -156,6 +160,24 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
       return;
     }
 
+    // Bind this pass (and every completion it schedules) to THIS project's
+    // maps. A project switch replaces the refs with fresh maps, so a request
+    // for the previous project that settles later only touches the discarded
+    // maps. Writing it into the new project's snapshots made the next pass
+    // treat that id as "removed locally" and DELETE it — from the previous
+    // project, via the unscoped DELETE route.
+    const itemSnaps = itemSnapshots.current;
+    const shapeSnaps = shapeSnapshots.current;
+    const inflightOps = inflight.current;
+    // Run the success/failure bookkeeping AFTER the inflight lock is released
+    // so the woken effect sees the key as free; stale completions are dropped.
+    const settle = (key: string, ok: boolean) => {
+      if (inflightOps !== inflight.current) return;
+      inflightOps.delete(key);
+      if (ok) backoff.succeeded(key);
+      else backoff.failed(key);
+    };
+
     // Build the next-state maps so we can diff against the previous snapshot.
     const nextItems = new Map<string, TakeoffItem>();
     const nextShapes = new Map<string, { item: TakeoffItem; shape: Shape }>();
@@ -167,13 +189,13 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
     // --- ITEMS: create / update / delete ----------------------------------
 
     for (const [itemId, item] of nextItems) {
-      if (inflight.current.has(`item:${itemId}`)) continue;
+      if (inflightOps.has(`item:${itemId}`)) continue;
       if (backoff.isBackingOff(`item:${itemId}`)) continue;
-      const prev = itemSnapshots.current.get(itemId);
+      const prev = itemSnaps.get(itemId);
       if (!prev) {
         // New item — POST it. Snapshot is set ONLY on success so a transient
         // failure leaves no "marked synced" state and the next diff retries.
-        inflight.current.set(`item:${itemId}`, 'creating');
+        inflightOps.set(`item:${itemId}`, 'creating');
         const snap = snapshotItem(item);
         api.items
           .create({
@@ -194,7 +216,7 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
             hidden_pages: item.hiddenPages, // preserve per-page hides on copy/paste
           })
           .then(() => {
-            itemSnapshots.current.set(itemId, snap);
+            itemSnaps.set(itemId, snap);
             return true;
           })
           .catch((e) => {
@@ -206,12 +228,12 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
           .then((ok) => settle(`item:${itemId}`, ok));
       } else if (itemChanged(prev, snapshotItem(item))) {
         // Mutated item — PUT it. Same snapshot-on-success rule.
-        inflight.current.set(`item:${itemId}`, 'updating');
+        inflightOps.set(`item:${itemId}`, 'updating');
         const newSnap = snapshotItem(item);
         api.items
           .update(itemId, pickItemPatch(item))
           .then(() => {
-            itemSnapshots.current.set(itemId, newSnap);
+            itemSnaps.set(itemId, newSnap);
             return true;
           })
           .catch((e) => {
@@ -222,9 +244,9 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
       }
     }
 
-    for (const itemId of [...itemSnapshots.current.keys()]) {
+    for (const itemId of [...itemSnaps.keys()]) {
       if (nextItems.has(itemId)) continue;
-      if (inflight.current.has(`item:${itemId}`)) continue;
+      if (inflightOps.has(`item:${itemId}`)) continue;
       if (backoff.isBackingOff(`item:${itemId}`)) continue;
 
       // Change Item moves every shape out of a source item, then App removes
@@ -237,25 +259,25 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
       // — either the snapshot still points here but the next state moved it
       // elsewhere, or there's an in-flight shape PUT we haven't confirmed.
       let hasPendingReparent = false;
-      for (const [shapeId, snap] of shapeSnapshots.current) {
+      for (const [shapeId, snap] of shapeSnaps) {
         if (snap.itemId !== itemId) continue;
         const next = nextShapes.get(shapeId);
         if (next && next.item.id !== itemId) {
           hasPendingReparent = true;
           break;
         }
-        if (inflight.current.get(`shape:${shapeId}`) === 'updating') {
+        if (inflightOps.get(`shape:${shapeId}`) === 'updating') {
           hasPendingReparent = true;
           break;
         }
       }
       if (hasPendingReparent) continue;
 
-      inflight.current.set(`item:${itemId}`, 'deleting');
+      inflightOps.set(`item:${itemId}`, 'deleting');
       api.items
         .delete(itemId)
         .then(() => {
-          itemSnapshots.current.delete(itemId);
+          itemSnaps.delete(itemId);
           return true;
         })
         .catch((e) => {
@@ -268,17 +290,17 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
     // --- SHAPES: create / update / delete --------------------------------
 
     for (const [shapeId, { item, shape }] of nextShapes) {
-      if (inflight.current.has(`shape:${shapeId}`)) continue;
+      if (inflightOps.has(`shape:${shapeId}`)) continue;
       if (backoff.isBackingOff(`shape:${shapeId}`)) continue;
-      const prev = shapeSnapshots.current.get(shapeId);
+      const prev = shapeSnaps.get(shapeId);
       const nextSnap = snapshotShape(item, shape);
 
       if (!prev) {
         // Skip if the item hasn't been created server-side yet — the next
         // tick (after the item POST resolves) will pick this shape up.
-        if (inflight.current.has(`item:${item.id}`)) continue;
+        if (inflightOps.has(`item:${item.id}`)) continue;
 
-        inflight.current.set(`shape:${shapeId}`, 'creating');
+        inflightOps.set(`shape:${shapeId}`, 'creating');
         const dedupe = !!shape.deduction;
         const promise =
           item.type === ToolType.NOTE
@@ -356,7 +378,7 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
                     : Promise.resolve(null);
         promise
           .then(() => {
-            shapeSnapshots.current.set(shapeId, nextSnap);
+            shapeSnaps.set(shapeId, nextSnap);
             return true;
           })
           .catch((e) => {
@@ -374,7 +396,7 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
         // Reparenting (itemId), geometry edit (pointsHash, value), deduction
         // toggle, or NOTE text edit. Send all fields the worker accepts; on
         // a reparent the worker recalcs both old and new item totals.
-        inflight.current.set(`shape:${shapeId}`, 'updating');
+        inflightOps.set(`shape:${shapeId}`, 'updating');
         api.shapes
           .update(shapeId, {
             points: shape.points,
@@ -384,7 +406,7 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
             item_id: prev.itemId !== nextSnap.itemId ? nextSnap.itemId : undefined,
           })
           .then(() => {
-            shapeSnapshots.current.set(shapeId, nextSnap);
+            shapeSnaps.set(shapeId, nextSnap);
             return true;
           })
           .catch((e) => {
@@ -395,22 +417,22 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
       }
     }
 
-    for (const shapeId of [...shapeSnapshots.current.keys()]) {
+    for (const shapeId of [...shapeSnaps.keys()]) {
       if (nextShapes.has(shapeId)) continue;
-      if (inflight.current.has(`shape:${shapeId}`)) continue;
+      if (inflightOps.has(`shape:${shapeId}`)) continue;
       if (backoff.isBackingOff(`shape:${shapeId}`)) continue;
-      const prev = shapeSnapshots.current.get(shapeId)!;
+      const prev = shapeSnaps.get(shapeId)!;
       // If the parent item has also disappeared, the item DELETE cascades on
       // the server side; no need to call /shapes/:id explicitly.
-      if (!itemSnapshots.current.has(prev.itemId) && !nextItems.has(prev.itemId)) {
-        shapeSnapshots.current.delete(shapeId);
+      if (!itemSnaps.has(prev.itemId) && !nextItems.has(prev.itemId)) {
+        shapeSnaps.delete(shapeId);
         continue;
       }
-      inflight.current.set(`shape:${shapeId}`, 'deleting');
+      inflightOps.set(`shape:${shapeId}`, 'deleting');
       api.shapes
         .delete(shapeId)
         .then(() => {
-          shapeSnapshots.current.delete(shapeId);
+          shapeSnaps.delete(shapeId);
           return true;
         })
         .catch((e) => {

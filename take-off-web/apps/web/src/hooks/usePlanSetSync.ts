@@ -42,7 +42,17 @@ export function usePlanSetSync(
   const backoff = useRetryBackoff();
 
   useEffect(() => {
-    if (!projectId) return;
+    if (!projectId) {
+      // Detached: forget the old project and orphan in-flight uploads.
+      if (lastProjectId.current !== null) {
+        lastProjectId.current = null;
+        seen.current = new Set();
+        inflight.current = new Set();
+        r2Keys.current = new Map();
+        pendingKeys.current = new Map();
+      }
+      return;
+    }
 
     if (projectId !== lastProjectId.current) {
       seen.current = new Set(planSets.map((p) => p.id));
@@ -54,30 +64,39 @@ export function usePlanSetSync(
       return;
     }
 
+    // Bind this pass and its completions to THIS project's state; an upload
+    // for the previous project that settles after a switch only touches the
+    // discarded sets/maps.
+    const seenIds = seen.current;
+    const inflightIds = inflight.current;
+    const keysById = r2Keys.current;
+    const pendingById = pendingKeys.current;
+    const isCurrent = () => seenIds === seen.current;
+
     for (const set of planSets) {
-      if (seen.current.has(set.id)) continue;
-      if (inflight.current.has(set.id)) continue;
+      if (seenIds.has(set.id)) continue;
+      if (inflightIds.has(set.id)) continue;
       if (backoff.isBackingOff(`plan:${set.id}`)) continue;
-      if (r2Keys.current.has(set.id)) {
+      if (keysById.has(set.id)) {
         // Already uploaded earlier in this session — nothing to do.
-        seen.current.add(set.id);
+        seenIds.add(set.id);
         continue;
       }
       if (!set.file) {
         // No bytes locally and no key on server — nothing we can upload.
-        seen.current.add(set.id);
+        seenIds.add(set.id);
         continue;
       }
 
-      inflight.current.add(set.id);
+      inflightIds.add(set.id);
 
       (async () => {
         let ok = false;
         try {
-          let file_key = pendingKeys.current.get(set.id);
+          let file_key = pendingById.get(set.id);
           if (!file_key) {
             ({ file_key } = await api.projects.requestUploadUrl(projectId, set.name));
-            pendingKeys.current.set(set.id, file_key);
+            pendingById.set(set.id, file_key);
           }
           const bytes = await set.file.arrayBuffer();
           await api.projects.uploadPdfBytes(projectId, file_key, bytes);
@@ -101,20 +120,22 @@ export function usePlanSetSync(
             start_page_index: set.startPageIndex,
           });
 
-          r2Keys.current.set(set.id, file_key);
-          pendingKeys.current.delete(set.id);
-          seen.current.add(set.id);
+          keysById.set(set.id, file_key);
+          pendingById.delete(set.id);
+          seenIds.add(set.id);
           // Propagate into app state so exportProjectToZip can serialize
           // r2_key on plan sets that were uploaded mid-session, not only
           // those rehydrated from the server.
-          onR2KeyResolvedRef.current?.(set.id, file_key);
+          if (isCurrent()) onR2KeyResolvedRef.current?.(set.id, file_key);
           ok = true;
         } catch (e) {
           console.error('sync: planSet upload failed', set.id, e);
         } finally {
-          inflight.current.delete(set.id);
-          if (ok) backoff.succeeded(`plan:${set.id}`);
-          else backoff.failed(`plan:${set.id}`);
+          inflightIds.delete(set.id);
+          if (isCurrent()) {
+            if (ok) backoff.succeeded(`plan:${set.id}`);
+            else backoff.failed(`plan:${set.id}`);
+          }
         }
       })();
     }

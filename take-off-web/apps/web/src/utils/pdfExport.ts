@@ -296,12 +296,17 @@ export const generateMarkupPDF = async (
 
         let sourcePdf;
         try {
+            if (!plan.file) throw new Error('plan PDF bytes are not loaded');
             const existingPdfBytes = await plan.file.arrayBuffer();
             sourcePdf = await PDFDocument.load(existingPdfBytes);
             logger.log("Source PDF Loaded", { pageCount: sourcePdf.getPageCount() });
         } catch (e) {
             logger.log("Error Loading Source PDF", e);
-            continue;
+            // Fail the whole export rather than silently dropping every
+            // selected page of this plan and still reporting success — a
+            // markup missing pages is worse than no markup.
+            const reason = e instanceof Error ? e.message : String(e);
+            throw new Error(`Could not read plan "${plan.name}" (${reason}); nothing was exported.`);
         }
 
         const localIndices = globalIndices.map(gIdx => {

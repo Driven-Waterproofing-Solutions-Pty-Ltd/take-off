@@ -35,7 +35,20 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
   const backoff = useRetryBackoff();
 
   useEffect(() => {
-    if (!projectId) return;
+    if (!projectId) {
+      // Detached: forget the old project (re-opening it re-primes) and
+      // orphan any in-flight completions.
+      if (lastProjectId.current !== null) {
+        lastProjectId.current = null;
+        snapshots.current = new Map();
+        legendSnapshots.current = new Map();
+        nameSnapshots.current = new Map();
+        inflight.current = new Set();
+        legendInflight.current = new Set();
+        nameInflight.current = new Set();
+      }
+      return;
+    }
 
     if (projectId !== lastProjectId.current) {
       // Prime from server state.
@@ -56,6 +69,24 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
       return;
     }
 
+    // Bind this pass and its completions to THIS project's maps. Keys are
+    // page indexes, so a push for the previous project settling after a
+    // switch would otherwise mark the new project's page as synced (or
+    // unlock its in-flight push); a project switch swaps in fresh maps and
+    // stale completions only touch the discarded ones.
+    const scaleSnaps = snapshots.current;
+    const legendSnaps = legendSnapshots.current;
+    const nameSnaps = nameSnapshots.current;
+    const scaleInflight = inflight.current;
+    const legendInflightSet = legendInflight.current;
+    const nameInflightSet = nameInflight.current;
+    const isCurrent = () => scaleSnaps === snapshots.current;
+    const settle = (key: string, ok: boolean) => {
+      if (!isCurrent()) return;
+      if (ok) backoff.succeeded(key);
+      else backoff.failed(key);
+    };
+
     for (const k of Object.keys(projectData)) {
       const pageIndex = Number(k);
       const page = projectData[pageIndex];
@@ -66,14 +97,14 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
         const key = scaleKey(scale);
         const retryKey = `scale:${pageIndex}`;
         if (
-          snapshots.current.get(pageIndex) !== key &&
-          !inflight.current.has(pageIndex) &&
+          scaleSnaps.get(pageIndex) !== key &&
+          !scaleInflight.has(pageIndex) &&
           !backoff.isBackingOff(retryKey)
         ) {
           // We don't have two known points; pass synthetic ones so the worker
           // re-derives the same pixelsPerUnit (distance(p1,p2) / real_distance).
           // distance = pixelsPerUnit, real_distance = 1 → ppu / 1 = ppu. ✅
-          inflight.current.add(pageIndex);
+          scaleInflight.add(pageIndex);
           api.scale
             .manual(
               projectId,
@@ -84,7 +115,7 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
               scale.unit as Unit
             )
             .then(() => {
-              snapshots.current.set(pageIndex, key);
+              scaleSnaps.set(pageIndex, key);
               return true;
             })
             .catch((e) => {
@@ -92,9 +123,8 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
               return false;
             })
             .then((ok) => {
-              inflight.current.delete(pageIndex);
-              if (ok) backoff.succeeded(retryKey);
-              else backoff.failed(retryKey);
+              scaleInflight.delete(pageIndex);
+              settle(retryKey, ok);
             });
         }
       }
@@ -105,15 +135,15 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
         const lk = legendKey(legend);
         const retryKey = `legend:${pageIndex}`;
         if (
-          legendSnapshots.current.get(pageIndex) !== lk &&
-          !legendInflight.current.has(pageIndex) &&
+          legendSnaps.get(pageIndex) !== lk &&
+          !legendInflightSet.has(pageIndex) &&
           !backoff.isBackingOff(retryKey)
         ) {
-          legendInflight.current.add(pageIndex);
+          legendInflightSet.add(pageIndex);
           api.legend
             .set(projectId, pageIndex, legend)
             .then(() => {
-              legendSnapshots.current.set(pageIndex, lk);
+              legendSnaps.set(pageIndex, lk);
               return true;
             })
             .catch((e) => {
@@ -121,27 +151,26 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
               return false;
             })
             .then((ok) => {
-              legendInflight.current.delete(pageIndex);
-              if (ok) backoff.succeeded(retryKey);
-              else backoff.failed(retryKey);
+              legendInflightSet.delete(pageIndex);
+              settle(retryKey, ok);
             });
         }
       }
 
       // --- Page name (sidebar inline rename) ---
       const name = page.name ?? '';
-      const prevName = nameSnapshots.current.get(pageIndex) ?? '';
+      const prevName = nameSnaps.get(pageIndex) ?? '';
       const nameRetryKey = `name:${pageIndex}`;
       if (
         name !== prevName &&
-        !nameInflight.current.has(pageIndex) &&
+        !nameInflightSet.has(pageIndex) &&
         !backoff.isBackingOff(nameRetryKey)
       ) {
-        nameInflight.current.add(pageIndex);
+        nameInflightSet.add(pageIndex);
         api.pageName
           .set(projectId, pageIndex, name)
           .then(() => {
-            nameSnapshots.current.set(pageIndex, name);
+            nameSnaps.set(pageIndex, name);
             return true;
           })
           .catch((e) => {
@@ -149,9 +178,8 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
             return false;
           })
           .then((ok) => {
-            nameInflight.current.delete(pageIndex);
-            if (ok) backoff.succeeded(nameRetryKey);
-            else backoff.failed(nameRetryKey);
+            nameInflightSet.delete(pageIndex);
+            settle(nameRetryKey, ok);
           });
       }
     }

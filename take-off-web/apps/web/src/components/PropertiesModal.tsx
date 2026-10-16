@@ -168,6 +168,17 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
     const [price, setPrice] = useState<string>(item.price != null ? item.price.toString() : '');
     const [properties, setProperties] = useState<ItemProperty[]>(item.properties || []);
     const [formula, setFormula] = useState(item.formula || 'Qty');
+    // VOLUME depth (in the item's linear unit, e.g. "cu m" → m). Editable so a
+    // wrong depth entered at creation can be corrected without recreating the
+    // item and all of its measurements.
+    const isVolume = item.type === ToolType.VOLUME;
+    const depthUnitLabel = item.unit.startsWith('cu ') ? item.unit.slice(3) : item.unit;
+    const [depth, setDepth] = useState<string>(item.depth != null ? item.depth.toString() : '');
+    const parseDepth = (raw: string): number | undefined => {
+        if (raw.trim() === '') return undefined;
+        const n = parseFloat(raw);
+        return Number.isFinite(n) && n >= 0 ? n : undefined;
+    };
 
     const [subItems, setSubItems] = useState<SubItem[]>(item.subItems || []);
 
@@ -219,16 +230,24 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
     );
 
     useEffect(() => {
-        const convertedQty = convertValue(item.totalValue, item.unit, unit, item.type);
+        // Preview against the depth being edited: VOLUME quantity is the raw
+        // shape area × depth (same rule as App's calculateTotalValue).
+        let baseTotal = item.totalValue;
+        if (isVolume) {
+            const rawArea = item.shapes.reduce((sum, s) => (s.deduction ? sum - s.value : sum + s.value), 0);
+            const d = parseDepth(depth);
+            baseTotal = d != null ? rawArea * d : rawArea;
+        }
+        const convertedQty = convertValue(baseTotal, item.unit, unit, item.type);
         const tempItem: TakeoffItem = {
             ...item,
             properties,
             formula,
             unit,
-            totalValue: item.totalValue
+            totalValue: baseTotal
         };
         setPreviewValue(evaluateFormula(tempItem, convertedQty));
-    }, [properties, formula, unit, item]);
+    }, [properties, formula, unit, item, depth, isVolume]);
 
     useEffect(() => {
         if (isDraggingSub) {
@@ -442,7 +461,8 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
             price: parsePrice(price),
             properties,
             formula: finalFormula,
-            subItems
+            subItems,
+            ...(isVolume ? { depth: parseDepth(depth) } : {})
         });
         onClose();
     };
@@ -463,7 +483,7 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
             group: group.trim() || 'General',
             // VOLUME templates need depth too, otherwise items spawned from
             // the template fall back to area-only totals.
-            depth: item.depth,
+            depth: isVolume ? parseDepth(depth) : item.depth,
             createdAt: Date.now()
         };
         await saveTemplate(template);
@@ -661,6 +681,20 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
                                         />
                                     </div>
                                 </div>
+                                {isVolume && (
+                                    <div className="space-y-2">
+                                        <Label htmlFor="item-depth" className="flex items-center gap-1"><Ruler size={14} /> Depth ({depthUnitLabel})</Label>
+                                        <Input
+                                            id="item-depth"
+                                            type="number"
+                                            step="0.001"
+                                            min={0}
+                                            placeholder={depthUnitLabel}
+                                            value={depth}
+                                            onChange={e => setDepth(e.target.value)}
+                                        />
+                                    </div>
+                                )}
                             </div>
 
                             <Separator />

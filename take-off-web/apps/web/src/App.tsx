@@ -92,10 +92,15 @@ const AppContent: React.FC = () => {
   // Ready-to-Invoice queue → load the project, then drop the user on
   // Estimates with the Xero modal pre-opened. Modeled on the ?project=
   // bootstrap path so cross-project navigation stays inside the SPA.
+  // Only switch to Estimates + auto-open the Xero modal once the chosen
+  // project has actually loaded. If the load fails, the PREVIOUS project is
+  // still in state, and auto-opening the modal would offer to push that
+  // project's invoice instead.
   const handleOpenAndInvoice = async (id: string) => {
+    const opened = await openProjectById(id);
+    if (!opened) return;
     setAutoOpenXero(true);
     setViewMode('estimates');
-    await openProjectById(id);
   };
 
   // Persist every local state change back to D1 + R2.
@@ -230,7 +235,7 @@ const AppContent: React.FC = () => {
       addToast("PDF Export downloaded!", 'success');
     } catch (e) {
       console.error("Export Error:", e);
-      addToast("Export failed. See console.", 'error');
+      addToast(`Export failed: ${e instanceof Error ? e.message : String(e)}`, 'error');
     } finally {
       setIsExporting(false);
       setShowExportModal(false);
@@ -562,6 +567,10 @@ const AppContent: React.FC = () => {
       const item = draft.items.find(i => i.id === itemId);
       if (item) {
         Object.assign(item, updates);
+        // A VOLUME depth edit changes the item's quantity (area × depth).
+        if (item.type === ToolType.VOLUME && 'depth' in updates) {
+          item.totalValue = calculateTotalValue(item.shapes, item);
+        }
       }
     });
   };
