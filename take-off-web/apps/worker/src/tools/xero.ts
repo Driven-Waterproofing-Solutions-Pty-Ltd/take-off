@@ -160,13 +160,18 @@ function escapeXeroString(s: string): string {
 // Format `at` as YYYY-MM-DD in Australia/Sydney (handles AEST/AEDT switch).
 // Xero treats invoice Date / DueDate as local org dates; using the UTC date
 // for an evening AU push would book the invoice a day early.
-function auDateString(at: number = Date.now()): string {
-  return new Intl.DateTimeFormat('en-CA', {
+// `addDays` advances the Sydney CALENDAR date: adding 14 × 24 h instead
+// lands a day short when the span crosses the end of daylight saving.
+function auDateString(at: number = Date.now(), addDays = 0): string {
+  const local = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Australia/Sydney',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
   }).format(new Date(at));
+  if (addDays === 0) return local;
+  const [y, m, d] = local.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + addDays)).toISOString().slice(0, 10);
 }
 
 // Single source of truth for "open this Xero doc in Xero". QUOTE uses the
@@ -585,8 +590,10 @@ export async function pushToXero(
   // The local customer row for the contact the user actually pushed to.
   // Browser-created projects carry no customer_id, so without this the
   // pushed history, project search and the invoice queue stayed
-  // "No customer" even though a synced customer was chosen.
-  const customerId = contactRow?.id ?? quote.customerId ?? null;
+  // "No customer" even though a synced customer was chosen. A contact with
+  // no local row (not synced yet) stays unattributed: falling back to the
+  // project's customer recorded the push against someone it wasn't sent to.
+  const customerId = contactRow?.id ?? null;
 
   const today = auDateString();
   const headers = xeroHeaders(token, {
@@ -624,7 +631,7 @@ export async function pushToXero(
         Type: 'ACCREC',
         Contact: { ContactID: args.customer_xero_id },
         Date: today,
-        DueDate: auDateString(Date.now() + 14 * 86400_000),
+        DueDate: auDateString(Date.now(), 14),
         LineItems: lineItems,
         Status: 'DRAFT' as const,
         Reference: reference,
