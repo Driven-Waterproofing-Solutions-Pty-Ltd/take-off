@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import type { PlanSet } from '../types';
 import { api } from '../lib/api';
 import { mupdfController } from '../utils/mupdfController';
+import { useRetryBackoff } from './useRetryBackoff';
 
 // Upload newly-added PlanSet PDFs to R2 + register them in D1.
 // First render after a projectId change primes snapshots without uploading
@@ -24,16 +25,21 @@ export function usePlanSetSync(
   const seen = useRef<Set<string>>(new Set());
   const inflight = useRef<Set<string>>(new Set());
   const r2Keys = useRef<Map<string, string>>(new Map());
+  // file_key minted for a plan set's in-progress upload. Reused across
+  // retries: POST /pdfs is idempotent on (project_id, r2_key), so if a
+  // registration committed but its response was lost, the retry re-registers
+  // the SAME key instead of minting a fresh one and inserting a duplicate
+  // pdfs row (which hydrated as the same plan twice and inflated totalPages).
+  const pendingKeys = useRef<Map<string, string>>(new Map());
   // Stash the latest callback so callers can pass an inline function without
   // having to memoise it — we don't want it to trigger an effect re-run.
   const onR2KeyResolvedRef = useRef(onR2KeyResolved);
   onR2KeyResolvedRef.current = onR2KeyResolved;
-  // Same retry-loop pattern as useScaleSync / useShapeSync. A transient R2
+  // Same retry pattern as useScaleSync / useShapeSync. A transient R2
   // upload or /api/projects/:id/pdfs failure should not strand the PDF in
-  // local-only state; bumping tick on every inflight completion wakes the
-  // effect for another pass against the same plan set.
-  const [tick, setTick] = useState(0);
-  const retry = () => setTick((t) => t + 1);
+  // local-only state; a failed attempt wakes the effect for another pass
+  // after an exponential backoff.
+  const backoff = useRetryBackoff();
 
   useEffect(() => {
     if (!projectId) return;
@@ -42,6 +48,8 @@ export function usePlanSetSync(
       seen.current = new Set(planSets.map((p) => p.id));
       inflight.current = new Set();
       r2Keys.current = new Map();
+      pendingKeys.current = new Map();
+      backoff.reset();
       lastProjectId.current = projectId;
       return;
     }
@@ -49,6 +57,7 @@ export function usePlanSetSync(
     for (const set of planSets) {
       if (seen.current.has(set.id)) continue;
       if (inflight.current.has(set.id)) continue;
+      if (backoff.isBackingOff(`plan:${set.id}`)) continue;
       if (r2Keys.current.has(set.id)) {
         // Already uploaded earlier in this session — nothing to do.
         seen.current.add(set.id);
@@ -63,8 +72,13 @@ export function usePlanSetSync(
       inflight.current.add(set.id);
 
       (async () => {
+        let ok = false;
         try {
-          const { file_key } = await api.projects.requestUploadUrl(projectId, set.name);
+          let file_key = pendingKeys.current.get(set.id);
+          if (!file_key) {
+            ({ file_key } = await api.projects.requestUploadUrl(projectId, set.name));
+            pendingKeys.current.set(set.id, file_key);
+          }
           const bytes = await set.file.arrayBuffer();
           await api.projects.uploadPdfBytes(projectId, file_key, bytes);
 
@@ -88,18 +102,21 @@ export function usePlanSetSync(
           });
 
           r2Keys.current.set(set.id, file_key);
+          pendingKeys.current.delete(set.id);
           seen.current.add(set.id);
           // Propagate into app state so exportProjectToZip can serialize
           // r2_key on plan sets that were uploaded mid-session, not only
           // those rehydrated from the server.
           onR2KeyResolvedRef.current?.(set.id, file_key);
+          ok = true;
         } catch (e) {
           console.error('sync: planSet upload failed', set.id, e);
         } finally {
           inflight.current.delete(set.id);
-          retry();
+          if (ok) backoff.succeeded(`plan:${set.id}`);
+          else backoff.failed(`plan:${set.id}`);
         }
       })();
     }
-  }, [projectId, planSets, tick]);
+  }, [projectId, planSets, backoff.tick]);
 }

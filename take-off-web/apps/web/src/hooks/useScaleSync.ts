@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import type { LegendSettings, ProjectData, ScaleCalibration, Unit } from '../types';
 import { api } from '../lib/api';
+import { useRetryBackoff } from './useRetryBackoff';
 
 // Push per-page scale + legend changes to the worker so area/linear/arc tools
 // can persist and exported markups keep the user's layout across reloads.
@@ -27,10 +28,11 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
   const nameInflight = useRef<Set<number>>(new Set());
   // Mirror the useShapeSync pattern: refs don't trigger re-renders, so a
   // transient failure (e.g. network blip) would leave the page calibrated
-  // only in the browser. Bumping this tick in every .finally() wakes the
-  // effect so the next pass retries against the still-mismatched snapshot.
-  const [tick, setTick] = useState(0);
-  const retry = () => setTick((t) => t + 1);
+  // only in the browser. Every settled push wakes the effect so the next
+  // pass retries against the still-mismatched snapshot — failures after an
+  // exponential backoff (the worker can refuse a recalibration with a 400,
+  // and retrying that immediately would loop forever).
+  const backoff = useRetryBackoff();
 
   useEffect(() => {
     if (!projectId) return;
@@ -43,6 +45,7 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
       inflight.current = new Set();
       legendInflight.current = new Set();
       nameInflight.current = new Set();
+      backoff.reset();
       for (const k of Object.keys(projectData)) {
         const i = Number(k);
         snapshots.current.set(i, scaleKey(projectData[i].scale));
@@ -61,7 +64,12 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
       const scale = page.scale;
       if (scale?.isSet) {
         const key = scaleKey(scale);
-        if (snapshots.current.get(pageIndex) !== key && !inflight.current.has(pageIndex)) {
+        const retryKey = `scale:${pageIndex}`;
+        if (
+          snapshots.current.get(pageIndex) !== key &&
+          !inflight.current.has(pageIndex) &&
+          !backoff.isBackingOff(retryKey)
+        ) {
           // We don't have two known points; pass synthetic ones so the worker
           // re-derives the same pixelsPerUnit (distance(p1,p2) / real_distance).
           // distance = pixelsPerUnit, real_distance = 1 → ppu / 1 = ppu. ✅
@@ -75,11 +83,18 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
               1,
               scale.unit as Unit
             )
-            .then(() => snapshots.current.set(pageIndex, key))
-            .catch((e) => console.error('sync: scale push failed', pageIndex, e))
-            .finally(() => {
+            .then(() => {
+              snapshots.current.set(pageIndex, key);
+              return true;
+            })
+            .catch((e) => {
+              console.error('sync: scale push failed', pageIndex, e);
+              return false;
+            })
+            .then((ok) => {
               inflight.current.delete(pageIndex);
-              retry();
+              if (ok) backoff.succeeded(retryKey);
+              else backoff.failed(retryKey);
             });
         }
       }
@@ -88,15 +103,27 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
       const legend = page.legend;
       if (legend) {
         const lk = legendKey(legend);
-        if (legendSnapshots.current.get(pageIndex) !== lk && !legendInflight.current.has(pageIndex)) {
+        const retryKey = `legend:${pageIndex}`;
+        if (
+          legendSnapshots.current.get(pageIndex) !== lk &&
+          !legendInflight.current.has(pageIndex) &&
+          !backoff.isBackingOff(retryKey)
+        ) {
           legendInflight.current.add(pageIndex);
           api.legend
             .set(projectId, pageIndex, legend)
-            .then(() => legendSnapshots.current.set(pageIndex, lk))
-            .catch((e) => console.error('sync: legend push failed', pageIndex, e))
-            .finally(() => {
+            .then(() => {
+              legendSnapshots.current.set(pageIndex, lk);
+              return true;
+            })
+            .catch((e) => {
+              console.error('sync: legend push failed', pageIndex, e);
+              return false;
+            })
+            .then((ok) => {
               legendInflight.current.delete(pageIndex);
-              retry();
+              if (ok) backoff.succeeded(retryKey);
+              else backoff.failed(retryKey);
             });
         }
       }
@@ -104,17 +131,29 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
       // --- Page name (sidebar inline rename) ---
       const name = page.name ?? '';
       const prevName = nameSnapshots.current.get(pageIndex) ?? '';
-      if (name !== prevName && !nameInflight.current.has(pageIndex)) {
+      const nameRetryKey = `name:${pageIndex}`;
+      if (
+        name !== prevName &&
+        !nameInflight.current.has(pageIndex) &&
+        !backoff.isBackingOff(nameRetryKey)
+      ) {
         nameInflight.current.add(pageIndex);
         api.pageName
           .set(projectId, pageIndex, name)
-          .then(() => nameSnapshots.current.set(pageIndex, name))
-          .catch((e) => console.error('sync: page name push failed', pageIndex, e))
-          .finally(() => {
+          .then(() => {
+            nameSnapshots.current.set(pageIndex, name);
+            return true;
+          })
+          .catch((e) => {
+            console.error('sync: page name push failed', pageIndex, e);
+            return false;
+          })
+          .then((ok) => {
             nameInflight.current.delete(pageIndex);
-            retry();
+            if (ok) backoff.succeeded(nameRetryKey);
+            else backoff.failed(nameRetryKey);
           });
       }
     }
-  }, [projectId, projectData, tick]);
+  }, [projectId, projectData, backoff.tick]);
 }

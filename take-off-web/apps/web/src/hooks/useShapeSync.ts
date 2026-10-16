@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import type { TakeoffItem, Shape } from '../types';
 import { ToolType } from '../types';
 import { api } from '../lib/api';
+import { useRetryBackoff } from './useRetryBackoff';
 
 // Sync local React state → REST API by diffing on every items change.
 //
@@ -119,14 +120,21 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
   const inflight = useRef<Map<string, SyncOp>>(new Map());
   const lastProjectId = useRef<string | null>(null);
 
-  // Refs can't trigger a re-render on their own — bumping this tick on every
-  // completed in-flight op forces the effect to run again so:
-  //  (a) shapes deferred while their parent item was creating get processed,
+  // Refs can't trigger a re-render on their own — every settled in-flight op
+  // wakes the effect again so:
+  //  (a) shapes deferred while their parent item was creating get processed
+  //      (immediately, on success),
   //  (b) work that failed on a transient prerequisite (e.g. shape POST
-  //      arriving before the scale POST) gets retried instead of getting
-  //      stuck in local state until something else nudges items.
-  const [tick, setTick] = useState(0);
-  const retry = () => setTick((t) => t + 1);
+  //      arriving before the scale POST) gets retried — after an exponential
+  //      backoff, so a persistent 4xx can't become a tight request loop.
+  const backoff = useRetryBackoff();
+  // Run the success/failure bookkeeping AFTER the inflight lock is released
+  // so the woken effect sees the key as free.
+  const settle = (key: string, ok: boolean) => {
+    inflight.current.delete(key);
+    if (ok) backoff.succeeded(key);
+    else backoff.failed(key);
+  };
 
   useEffect(() => {
     if (!projectId) return;
@@ -137,6 +145,7 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
       itemSnapshots.current = new Map();
       shapeSnapshots.current = new Map();
       inflight.current = new Map();
+      backoff.reset();
       for (const item of items) {
         itemSnapshots.current.set(item.id, snapshotItem(item));
         for (const shape of item.shapes) {
@@ -159,6 +168,7 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
 
     for (const [itemId, item] of nextItems) {
       if (inflight.current.has(`item:${itemId}`)) continue;
+      if (backoff.isBackingOff(`item:${itemId}`)) continue;
       const prev = itemSnapshots.current.get(itemId);
       if (!prev) {
         // New item — POST it. Snapshot is set ONLY on success so a transient
@@ -183,30 +193,39 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
             sub_items: item.subItems,       // preserve sub-item breakdown
             hidden_pages: item.hiddenPages, // preserve per-page hides on copy/paste
           })
-          .then(() => itemSnapshots.current.set(itemId, snap))
-          .catch((e) => console.error('sync: create item failed', itemId, e))
-          .finally(() => {
-            inflight.current.delete(`item:${itemId}`);
-            retry(); // wake the effect so child shapes deferred for this item run
-          });
+          .then(() => {
+            itemSnapshots.current.set(itemId, snap);
+            return true;
+          })
+          .catch((e) => {
+            console.error('sync: create item failed', itemId, e);
+            return false;
+          })
+          // On success this wakes the effect so child shapes deferred for
+          // this item run straight away.
+          .then((ok) => settle(`item:${itemId}`, ok));
       } else if (itemChanged(prev, snapshotItem(item))) {
         // Mutated item — PUT it. Same snapshot-on-success rule.
         inflight.current.set(`item:${itemId}`, 'updating');
         const newSnap = snapshotItem(item);
         api.items
           .update(itemId, pickItemPatch(item))
-          .then(() => itemSnapshots.current.set(itemId, newSnap))
-          .catch((e) => console.error('sync: update item failed', itemId, e))
-          .finally(() => {
-            inflight.current.delete(`item:${itemId}`);
-            retry();
-          });
+          .then(() => {
+            itemSnapshots.current.set(itemId, newSnap);
+            return true;
+          })
+          .catch((e) => {
+            console.error('sync: update item failed', itemId, e);
+            return false;
+          })
+          .then((ok) => settle(`item:${itemId}`, ok));
       }
     }
 
     for (const itemId of [...itemSnapshots.current.keys()]) {
       if (nextItems.has(itemId)) continue;
       if (inflight.current.has(`item:${itemId}`)) continue;
+      if (backoff.isBackingOff(`item:${itemId}`)) continue;
 
       // Change Item moves every shape out of a source item, then App removes
       // the empty source item from local state. If we DELETE the source row
@@ -235,18 +254,22 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
       inflight.current.set(`item:${itemId}`, 'deleting');
       api.items
         .delete(itemId)
-        .then(() => itemSnapshots.current.delete(itemId))
-        .catch((e) => console.error('sync: delete item failed', itemId, e))
-        .finally(() => {
-          inflight.current.delete(`item:${itemId}`);
-          retry();
-        });
+        .then(() => {
+          itemSnapshots.current.delete(itemId);
+          return true;
+        })
+        .catch((e) => {
+          console.error('sync: delete item failed', itemId, e);
+          return false;
+        })
+        .then((ok) => settle(`item:${itemId}`, ok));
     }
 
     // --- SHAPES: create / update / delete --------------------------------
 
     for (const [shapeId, { item, shape }] of nextShapes) {
       if (inflight.current.has(`shape:${shapeId}`)) continue;
+      if (backoff.isBackingOff(`shape:${shapeId}`)) continue;
       const prev = shapeSnapshots.current.get(shapeId);
       const nextSnap = snapshotShape(item, shape);
 
@@ -332,12 +355,15 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
                         })
                     : Promise.resolve(null);
         promise
-          .then(() => shapeSnapshots.current.set(shapeId, nextSnap))
-          .catch((e) => console.error('sync: create shape failed', shapeId, e))
-          .finally(() => {
-            inflight.current.delete(`shape:${shapeId}`);
-            retry();
-          });
+          .then(() => {
+            shapeSnapshots.current.set(shapeId, nextSnap);
+            return true;
+          })
+          .catch((e) => {
+            console.error('sync: create shape failed', shapeId, e);
+            return false;
+          })
+          .then((ok) => settle(`shape:${shapeId}`, ok));
       } else if (
         prev.itemId !== nextSnap.itemId ||
         prev.pointsHash !== nextSnap.pointsHash ||
@@ -357,18 +383,22 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
             text: shape.text,
             item_id: prev.itemId !== nextSnap.itemId ? nextSnap.itemId : undefined,
           })
-          .then(() => shapeSnapshots.current.set(shapeId, nextSnap))
-          .catch((e) => console.error('sync: update shape failed', shapeId, e))
-          .finally(() => {
-            inflight.current.delete(`shape:${shapeId}`);
-            retry();
-          });
+          .then(() => {
+            shapeSnapshots.current.set(shapeId, nextSnap);
+            return true;
+          })
+          .catch((e) => {
+            console.error('sync: update shape failed', shapeId, e);
+            return false;
+          })
+          .then((ok) => settle(`shape:${shapeId}`, ok));
       }
     }
 
     for (const shapeId of [...shapeSnapshots.current.keys()]) {
       if (nextShapes.has(shapeId)) continue;
       if (inflight.current.has(`shape:${shapeId}`)) continue;
+      if (backoff.isBackingOff(`shape:${shapeId}`)) continue;
       const prev = shapeSnapshots.current.get(shapeId)!;
       // If the parent item has also disappeared, the item DELETE cascades on
       // the server side; no need to call /shapes/:id explicitly.
@@ -379,14 +409,17 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
       inflight.current.set(`shape:${shapeId}`, 'deleting');
       api.shapes
         .delete(shapeId)
-        .then(() => shapeSnapshots.current.delete(shapeId))
-        .catch((e) => console.error('sync: delete shape failed', shapeId, e))
-        .finally(() => {
-          inflight.current.delete(`shape:${shapeId}`);
-          retry();
-        });
+        .then(() => {
+          shapeSnapshots.current.delete(shapeId);
+          return true;
+        })
+        .catch((e) => {
+          console.error('sync: delete shape failed', shapeId, e);
+          return false;
+        })
+        .then((ok) => settle(`shape:${shapeId}`, ok));
     }
-  }, [projectId, items, tick]);
+  }, [projectId, items, backoff.tick]);
 }
 
 export function primeShapeSyncFromServerState(
