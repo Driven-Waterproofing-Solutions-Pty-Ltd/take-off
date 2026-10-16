@@ -18,6 +18,8 @@ export interface ComputedLineItem {
     total: number;
     /** Sub-item rows are a breakdown of their parent row and are never billed. */
     isSubItem?: boolean;
+    /** The formula produced a non-finite quantity or amount (e.g. Qty / 0). */
+    invalid?: boolean;
 }
 
 export interface JobSheetTotals {
@@ -78,6 +80,7 @@ export function computeLineItems(items: TakeoffItem[]): ComputedLineItem[] {
                     unitPrice: subPrice,
                     total: centsToDollars(toCents(lineTotal)),
                     isSubItem: true,
+                    invalid: !Number.isFinite(subQty) || !Number.isFinite(lineTotal),
                 });
             });
 
@@ -96,11 +99,17 @@ export function computeLineItems(items: TakeoffItem[]): ComputedLineItem[] {
                 unit: String(item.unit),
                 unitPrice,
                 total: centsToDollars(toCents(totalCost)),
+                invalid: !Number.isFinite(calculated) || !Number.isFinite(totalCost),
             });
             rows.push(...subRows);
         });
 
     return rows;
+}
+
+/** Billable rows whose formula gave a non-finite result; nothing may be sent while any exist. */
+export function invalidLines(rows: ComputedLineItem[]): ComputedLineItem[] {
+    return billableLines(rows).filter((r) => r.invalid);
 }
 
 /** The rows that are actually charged (sub-item breakdown rows excluded). */

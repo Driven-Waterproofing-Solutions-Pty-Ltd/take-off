@@ -10,6 +10,7 @@ import {
     computeLineItems,
     computeTotals,
     formatIsoDate,
+    invalidLines,
     sumLineCents,
     toCents,
     toLocalIsoDate,
@@ -186,7 +187,20 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
     const selectedAccountCode = accounts.find((a) => a.AccountID === selectedAccount)?.Code ?? '';
     const csvAccountCode = (isConnected ? selectedAccountCode : manualAccountCode).trim();
     const selectedContactName = contacts.find((c) => c.ContactID === selectedContact)?.Name ?? '';
+    // One customer name for the printed sheet and the CSV; the chosen Xero contact wins.
+    const billToName = (isConnected && selectedContactName) || clientName;
+    const invalidRows = invalidLines(lineItems);
+    const invalidMessage = invalidRows.length > 0
+        ? `Fix the formula for ${invalidRows.map((r) => r.label).join(', ')}: it does not give a finite amount.`
+        : '';
     const datesSet = Boolean(invoiceDate && dueDate);
+
+    // Scope the print stylesheet to the job sheet while it is on screen.
+    useEffect(() => {
+        if (activeTab !== 'jobsheet') return;
+        document.documentElement.classList.add('job-sheet-print');
+        return () => document.documentElement.classList.remove('job-sheet-print');
+    }, [activeTab]);
 
     // ── Load saved settings on mount ────────────────────────────────────────
     useEffect(() => {
@@ -364,6 +378,10 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
             addToast('There are no line items to export', 'error');
             return;
         }
+        if (invalidMessage) {
+            addToast(invalidMessage, 'error');
+            return;
+        }
         if (!csvAccountCode) {
             addToast('Enter or select a revenue account code for the Xero CSV', 'error');
             return;
@@ -375,8 +393,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
         try {
             const csvContent = buildXeroCsv({
                 rows: lineItems,
-                // The chosen Xero contact wins, so the import bills that customer.
-                contactName: (isConnected && selectedContactName) || clientName || projectName,
+                contactName: billToName || projectName,
                 address: clientAddress,
                 // One invoice number for every row, so Xero imports a single invoice.
                 invoiceNumber: invoiceNumber.trim() || fallbackInvoiceNumber(new Date()),
@@ -408,6 +425,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
         if (!selectedTenant) { addToast('Please select a Xero organisation', 'error'); return; }
         if (!selectedAccountCode) { addToast('Please select a revenue account', 'error'); return; }
         if (billable.length === 0) { addToast('There are no line items to invoice', 'error'); return; }
+        if (invalidMessage) { addToast(invalidMessage, 'error'); return; }
         if (!datesSet) { addToast('Set both the invoice date and the due date', 'error'); return; }
 
         setIsSending(true);
@@ -439,14 +457,15 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
             };
             // One idempotency key per distinct invoice, stored until Xero confirms
             // it, so a retry after a lost response can't create a second draft.
-            const pending = await xeroService.idempotencyKeyFor(JSON.stringify([selectedTenant, payload]));
+            const fingerprint = JSON.stringify([selectedTenant, payload]);
+            const pending = await xeroService.idempotencyKeyFor(fingerprint);
             if (pending.stale) {
                 // Too old for Xero to deduplicate: the user checks Xero, then clicks again.
                 addToast('An earlier send of this invoice was not confirmed and may already be in Xero. Check your draft invoices, then click Send again to send it anyway.', 'error');
                 return;
             }
             const result = await xeroService.createInvoice(token, selectedTenant, payload, pending.key);
-            await xeroService.clearPendingSend();
+            await xeroService.clearPendingSend(fingerprint);
 
             addToast(`Invoice ${result.InvoiceNumber} created in Xero!`, 'success');
             // Opening the browser is optional: a failure here must not read as a
@@ -611,10 +630,10 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                             </div>
 
                             {/* Client info */}
-                            {(clientName || clientAddress) && (
+                            {(billToName || clientAddress) && (
                                 <div className="mb-6">
                                     <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Bill To</div>
-                                    {clientName && <div className="font-semibold text-gray-900">{clientName}</div>}
+                                    {billToName && <div className="font-semibold text-gray-900">{billToName}</div>}
                                     {clientAddress && <div className="text-sm text-gray-600">{clientAddress}</div>}
                                 </div>
                             )}
@@ -674,7 +693,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                                                 </td>
                                                                 <td className="py-2 text-right font-medium">
                                                                     {/* Sub-items are a breakdown of the row above, not extra charges */}
-                                                                    {row.isSubItem ? '' : row.total !== 0 ? fmt.format(row.total) : '—'}
+                                                                    {row.isSubItem ? '' : row.invalid ? <span className="text-red-600">Check formula</span> : row.total !== 0 ? fmt.format(row.total) : '—'}
                                                                 </td>
                                                             </tr>
                                                         ))}
@@ -955,13 +974,19 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                             </CardContent>
                         </Card>
 
+                        {invalidMessage && (
+                            <div className="flex items-start gap-1.5 text-xs text-red-600">
+                                <AlertCircle size={13} className="mt-0.5 shrink-0" /> {invalidMessage}
+                            </div>
+                        )}
+
                         {/* ── Action buttons ────────────────────────────────── */}
                         <div className="flex gap-3">
                             <Button
                                 variant="outline"
                                 className="flex-1 h-9 text-sm"
                                 onClick={handleExportCSV}
-                                disabled={IS_MOBILE || billable.length === 0 || !csvAccountCode || !datesSet}
+                                disabled={IS_MOBILE || billable.length === 0 || !!invalidMessage || !csvAccountCode || !datesSet}
                                 title={
                                     IS_MOBILE
                                         ? 'CSV export is only available in the desktop app'
@@ -976,7 +1001,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                 <Button
                                     className="flex-1 h-9 text-sm"
                                     onClick={handleSendToXero}
-                                    disabled={isSending || !selectedContact || !selectedTenant || !selectedAccountCode || billable.length === 0 || !datesSet}
+                                    disabled={isSending || !selectedContact || !selectedTenant || !selectedAccountCode || billable.length === 0 || !!invalidMessage || !datesSet}
                                 >
                                     {isSending ? (
                                         <Loader2 size={14} className="mr-2 animate-spin" />

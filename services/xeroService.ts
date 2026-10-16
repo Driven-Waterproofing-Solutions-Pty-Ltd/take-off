@@ -134,6 +134,28 @@ let tokenEpoch = 0;
 /** Xero only remembers an idempotency key for a few minutes. */
 const IDEMPOTENCY_WINDOW_MS = 5 * 60 * 1000;
 
+/** Pending sends older than this are forgotten. */
+const PENDING_RETENTION_MS = 24 * 60 * 60 * 1000;
+
+type PendingRecord = { key: string; createdAt: number };
+
+async function sha256Hex(text: string): Promise<string> {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function readPendingSends(): Promise<Record<string, PendingRecord>> {
+    const raw = (await store.get<Record<string, PendingRecord>>(KEY_PENDING_SEND)) ?? {};
+    const now = Date.now();
+    const kept: Record<string, PendingRecord> = {};
+    for (const [id, rec] of Object.entries(raw)) {
+        if (rec && typeof rec.key === 'string' && typeof rec.createdAt === 'number' && now - rec.createdAt <= PENDING_RETENTION_MS) {
+            kept[id] = rec;
+        }
+    }
+    return kept;
+}
+
 export interface PendingSend {
     key: string;
     /** True when an earlier attempt of this invoice is older than Xero's idempotency window. */
@@ -408,21 +430,32 @@ export const xeroService = {
      * so `stale` is set and the caller should have the user check Xero first.
      */
     async idempotencyKeyFor(fingerprint: string): Promise<PendingSend> {
-        const pending = await store.get<{ fingerprint: string; key: string; createdAt?: number }>(KEY_PENDING_SEND);
-        if (pending?.fingerprint === fingerprint) {
-            const age = Date.now() - (pending.createdAt ?? 0);
-            if (age <= IDEMPOTENCY_WINDOW_MS) return { key: pending.key, stale: false };
-            await store.delete(KEY_PENDING_SEND);
-            await store.save();
-            return { key: pending.key, stale: true };
+        // One record per invoice, so sending a different invoice in between
+        // doesn't drop the key of one whose result is still unknown.
+        const id = await sha256Hex(fingerprint);
+        const pending = await readPendingSends();
+        const existing = pending[id];
+        let result: PendingSend;
+        if (existing && Date.now() - existing.createdAt <= IDEMPOTENCY_WINDOW_MS) {
+            result = { key: existing.key, stale: false };
+        } else if (existing) {
+            delete pending[id];
+            result = { key: existing.key, stale: true };
+        } else {
+            const key = crypto.randomUUID();
+            pending[id] = { key, createdAt: Date.now() };
+            result = { key, stale: false };
         }
-        const key = crypto.randomUUID();
-        await store.set(KEY_PENDING_SEND, { fingerprint, key, createdAt: Date.now() });
+        await store.set(KEY_PENDING_SEND, pending);
         await store.save();
-        return { key, stale: false };
+        return result;
     },
-    async clearPendingSend(): Promise<void> {
-        await store.delete(KEY_PENDING_SEND);
+    /** Forgets the pending send for one invoice once Xero has confirmed it. */
+    async clearPendingSend(fingerprint: string): Promise<void> {
+        const id = await sha256Hex(fingerprint);
+        const pending = await readPendingSends();
+        delete pending[id];
+        await store.set(KEY_PENDING_SEND, pending);
         await store.save();
     },
 
