@@ -64,7 +64,8 @@ export function computeLineItems(items: TakeoffItem[]): ComputedLineItem[] {
             const group = item.group || 'General';
             const convertedQty = convertValue(item.totalValue, Unit.FEET, item.unit, item.type);
             const main = evaluateFormulaChecked(item, convertedQty);
-            const calculated = main.value;
+            // A non-number result (e.g. a boolean) is invalid; use 0 so the row still renders.
+            const calculated = typeof main.value === 'number' ? main.value : 0;
 
             const subContext: Record<string, number> = {};
             let subTotal = 0;
@@ -72,7 +73,7 @@ export function computeLineItems(items: TakeoffItem[]): ComputedLineItem[] {
 
             (item.subItems ?? []).forEach((sub) => {
                 const subEval = evaluateFormulaChecked(item, convertedQty, sub.formula, subContext);
-                const subQty = subEval.value;
+                const subQty = typeof subEval.value === 'number' ? subEval.value : 0;
                 const varName = toVariableName(sub.label);
                 if (varName) subContext[varName] = subQty;
                 const subPrice = sub.price || 0;

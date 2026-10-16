@@ -41,6 +41,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '../contexts/ToastContext';
+import { ask } from '@tauri-apps/plugin-dialog';
 import { isMobilePlatform } from '../utils/platform';
 import {
     xeroService,
@@ -492,19 +493,28 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                 // them in the organisation's base currency.
                 CurrencyCode: 'AUD',
             };
-            // One idempotency key per distinct invoice, stored until Xero confirms
-            // it, so a retry after a lost response can't create a second draft.
-            const fingerprint = JSON.stringify([selectedTenant, payload]);
-            const pending = await xeroService.idempotencyKeyFor(fingerprint);
-            if (pending.stale) {
-                // Too old for Xero to deduplicate: the user checks Xero, then clicks again.
-                addToast('An earlier send of this invoice was not confirmed and may already be in Xero. Check your draft invoices, then click Send again to send it anyway.', 'error');
-                return;
+            // One stored send record per distinct invoice (Xero app, organisation
+            // and payload; idempotency keys are scoped per Xero app), so a retry
+            // after a lost response reuses its key and a repeat needs confirming.
+            const fingerprint = JSON.stringify([clientId.trim(), selectedTenant, payload]);
+            const state = await xeroService.prepareSend(fingerprint);
+            let key = state.key;
+            if (state.status === 'sent' || state.status === 'stale') {
+                const question = state.status === 'sent'
+                    ? `This invoice was already created in Xero as ${state.invoiceNumber}. Create another copy?`
+                    : 'An earlier send of this invoice was not confirmed and may already be in Xero. Check your draft invoices first. Send it anyway?';
+                const confirmed = await ask(question, { title: 'Send to Xero', kind: 'warning', okLabel: 'Send', cancelLabel: 'Cancel' });
+                if (!confirmed) return;
+                key = await xeroService.restartSend(fingerprint);
             }
-            const result = await xeroService.createInvoice(token, selectedTenant, payload, pending.key);
-            await xeroService.clearPendingSend(fingerprint);
+            const result = await xeroService.createInvoice(token, selectedTenant, payload, key);
+            await xeroService.markSent(fingerprint, result.InvoiceNumber);
 
-            addToast(`Invoice ${result.InvoiceNumber} created in Xero!`, 'success');
+            if (result.warnings.length > 0) {
+                addToast(`Invoice ${result.InvoiceNumber} was created in Xero with warnings; review it before approving: ${result.warnings.join(' ')}`, 'error');
+            } else {
+                addToast(`Invoice ${result.InvoiceNumber} created in Xero!`, 'success');
+            }
             // Opening the browser is optional: a failure here must not read as a
             // failed send, or a retry would create a second draft invoice.
             try {
@@ -637,7 +647,13 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                     Printing is only available in the desktop app.
                                 </span>
                             ) : (
-                                <Button onClick={handlePrint} className="h-8 text-xs shrink-0" variant="outline">
+                                <Button
+                                    onClick={handlePrint}
+                                    className="h-8 text-xs shrink-0"
+                                    variant="outline"
+                                    disabled={!!invalidMessage}
+                                    title={invalidMessage || undefined}
+                                >
                                     <Printer size={13} className="mr-1.5" /> Print / Save PDF
                                 </Button>
                             )}

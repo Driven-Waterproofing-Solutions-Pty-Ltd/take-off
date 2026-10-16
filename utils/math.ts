@@ -180,7 +180,9 @@ export const evaluateFormulaChecked = (
       return { value: 0, ok: false };
     }
 
-    return { value: result, ok: true };
+    // mathjs can also return booleans, units or matrices (e.g. `Qty > 0`);
+    // evaluateFormula passes those through unchanged, but they aren't amounts.
+    return { value: result, ok: typeof result === 'number' };
   } catch (e) {
     // If formula fails, return 0 (safe fallback for sub-items) or Qty (safe fallback for main items if no override)
     return { value: formulaOverride ? 0 : qty, ok: false };

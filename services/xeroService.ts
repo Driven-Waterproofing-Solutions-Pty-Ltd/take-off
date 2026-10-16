@@ -134,7 +134,8 @@ let tokenEpoch = 0;
 /** Xero only remembers an idempotency key for a few minutes. */
 const IDEMPOTENCY_WINDOW_MS = 5 * 60 * 1000;
 
-type PendingRecord = { key: string; createdAt: number };
+/** One record per invoice: its idempotency key, and the invoice number once Xero confirmed it. */
+type PendingRecord = { key: string; createdAt: number; sentInvoiceNumber?: string };
 
 async function sha256Hex(text: string): Promise<string> {
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
@@ -152,10 +153,21 @@ async function readPendingSends(): Promise<Record<string, PendingRecord>> {
     return kept;
 }
 
-export interface PendingSend {
-    key: string;
-    /** True when an earlier attempt of this invoice is older than Xero's idempotency window. */
-    stale: boolean;
+/**
+ * Where a send of one invoice stands:
+ * - `new`: first attempt; `pending`: an unconfirmed attempt within Xero's
+ *   idempotency window, so reusing `key` is safe;
+ * - `stale`: an unconfirmed attempt older than the window, so the key no
+ *   longer protects a retry; `sent`: Xero already created this invoice.
+ * For `stale` and `sent` the user must confirm before `restartSend`.
+ */
+export type SendState =
+    | { status: 'new' | 'pending' | 'stale'; key: string }
+    | { status: 'sent'; key: string; invoiceNumber: string };
+
+async function writePendingSends(pending: Record<string, PendingRecord>): Promise<void> {
+    await store.set(KEY_PENDING_SEND, pending);
+    await store.save();
 }
 
 export const XERO_REDIRECT_URI = 'https://poyashauvewhifohkxeg.supabase.co/functions/v1/xero-oauth/callback';
@@ -424,40 +436,42 @@ export const xeroService = {
     },
 
     /**
-     * The idempotency key for an invoice, identified by `fingerprint`. It is
-     * stored until `clearPendingSend`, so a retry of the same invoice reuses it
-     * even after the view or the app has been reopened. Once an attempt is
-     * older than Xero's idempotency window the key no longer protects a retry,
-     * so `stale` is set and the caller should have the user check Xero first.
+     * Looks up (or starts) the send record for an invoice, identified by
+     * `fingerprint`. Records are kept in the store, so this survives the view
+     * or the app being reopened; nothing is dropped until the user confirms.
      */
-    async idempotencyKeyFor(fingerprint: string): Promise<PendingSend> {
-        // One record per invoice, so sending a different invoice in between
-        // doesn't drop the key of one whose result is still unknown.
+    async prepareSend(fingerprint: string): Promise<SendState> {
         const id = await sha256Hex(fingerprint);
         const pending = await readPendingSends();
         const existing = pending[id];
-        let result: PendingSend;
-        if (existing && Date.now() - existing.createdAt <= IDEMPOTENCY_WINDOW_MS) {
-            result = { key: existing.key, stale: false };
-        } else if (existing) {
-            delete pending[id];
-            result = { key: existing.key, stale: true };
-        } else {
+        if (!existing) {
             const key = crypto.randomUUID();
             pending[id] = { key, createdAt: Date.now() };
-            result = { key, stale: false };
+            await writePendingSends(pending);
+            return { status: 'new', key };
         }
-        await store.set(KEY_PENDING_SEND, pending);
-        await store.save();
-        return result;
+        if (existing.sentInvoiceNumber) {
+            return { status: 'sent', key: existing.key, invoiceNumber: existing.sentInvoiceNumber };
+        }
+        const fresh = Date.now() - existing.createdAt <= IDEMPOTENCY_WINDOW_MS;
+        return { status: fresh ? 'pending' : 'stale', key: existing.key };
     },
-    /** Forgets the pending send for one invoice once Xero has confirmed it. */
-    async clearPendingSend(fingerprint: string): Promise<void> {
+    /** After the user confirmed sending again: a new key and a fresh record. */
+    async restartSend(fingerprint: string): Promise<string> {
         const id = await sha256Hex(fingerprint);
         const pending = await readPendingSends();
-        delete pending[id];
-        await store.set(KEY_PENDING_SEND, pending);
-        await store.save();
+        const key = crypto.randomUUID();
+        pending[id] = { key, createdAt: Date.now() };
+        await writePendingSends(pending);
+        return key;
+    },
+    /** Records that Xero created this invoice, so an identical resend needs confirmation. */
+    async markSent(fingerprint: string, invoiceNumber: string): Promise<void> {
+        const id = await sha256Hex(fingerprint);
+        const pending = await readPendingSends();
+        const existing = pending[id];
+        pending[id] = { key: existing?.key ?? '', createdAt: existing?.createdAt ?? Date.now(), sentInvoiceNumber: invoiceNumber || '(number pending)' };
+        await writePendingSends(pending);
     },
 
     /**
@@ -469,7 +483,7 @@ export const xeroService = {
         tenantId: string,
         payload: XeroInvoicePayload,
         idempotencyKey: string
-    ): Promise<{ InvoiceID: string; InvoiceNumber: string }> {
+    ): Promise<{ InvoiceID: string; InvoiceNumber: string; warnings: string[] }> {
         const res = await fetch('https://api.xero.com/api.xro/2.0/Invoices', {
             method: 'POST',
             headers: {
@@ -487,10 +501,19 @@ export const xeroService = {
             throw new Error(`Failed to create Xero invoice: ${text}`);
         }
 
-        const data = await res.json();
+        type Warning = { Message?: string };
+        const data: {
+            Warnings?: Warning[];
+            Invoices?: { InvoiceID: string; InvoiceNumber: string; Warnings?: Warning[] }[];
+        } = await res.json();
         const invoice = data.Invoices?.[0];
         if (!invoice) throw new Error('Xero returned no invoice data');
-        return { InvoiceID: invoice.InvoiceID, InvoiceNumber: invoice.InvoiceNumber };
+        // Xero can create the invoice yet flag problems (StatusAttributeString
+        // "WARNING"); pass the messages on so the user reviews the draft.
+        const warnings = [...(invoice.Warnings ?? []), ...(data.Warnings ?? [])]
+            .map((w) => w.Message ?? '')
+            .filter((m) => m.length > 0);
+        return { InvoiceID: invoice.InvoiceID, InvoiceNumber: invoice.InvoiceNumber, warnings };
     },
 
     /** Opens a Xero invoice in the browser. */
