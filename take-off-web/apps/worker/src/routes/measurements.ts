@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { Env } from '../env';
 import { tools } from '@takeoff/shared';
-import { setScalePreset, setScaleManual } from '../tools/scale';
+import { setScalePreset, setScaleManual, clearScale } from '../tools/scale';
 import { addArea, addLinear, addCount, addArc, addNote } from '../tools/measure';
 import { snapPdfPoints } from '../tools/snap';
 import { listItems } from '../tools/memory';
@@ -23,6 +24,16 @@ app.post('/scale/manual', async (c) => {
   const body = await c.req.json();
   const input = tools.set_scale_manual.input.parse(body);
   return c.json(await setScaleManual(c.env, input));
+});
+
+const ClearScaleZ = z.object({
+  project_id: z.string().min(1),
+  page_index: z.number().int().min(0),
+});
+
+app.post('/scale/clear', async (c) => {
+  const input = ClearScaleZ.parse(await c.req.json());
+  return c.json(await clearScale(c.env, input));
 });
 
 app.post('/shapes/area', async (c) => {

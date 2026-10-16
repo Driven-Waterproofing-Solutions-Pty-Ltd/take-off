@@ -129,13 +129,19 @@ export async function updateItem(
   // silently vanish from (or be mispriced in) buildQuote. Validate when the
   // link is being set or changed (useShapeSync re-sends the full item on
   // every edit, so an unchanged link must not block unrelated edits).
-  if (patch.assembly_id) {
+  //
+  // Also re-check when the UNIT changes on an item that keeps an assembly:
+  // switching an assembly-linked item from "sq m" to "m" would otherwise
+  // leave the assembly attached and price the wrong dimension.
+  if (patch.assembly_id || (patch.unit !== undefined && patch.assembly_id !== null)) {
     const current = (await env.DB.prepare('SELECT unit, assembly_id FROM items WHERE id = ?')
       .bind(itemId)
       .first()) as { unit: string; assembly_id: string | null } | null;
     if (!current) throw new Error(`Item ${itemId} not found`);
-    if (patch.assembly_id !== current.assembly_id) {
-      await assertAssemblyAttachable(env, patch.assembly_id, patch.unit ?? current.unit);
+    const nextAssembly = patch.assembly_id !== undefined ? patch.assembly_id : current.assembly_id;
+    const nextUnit = patch.unit ?? current.unit;
+    if (nextAssembly && (nextAssembly !== current.assembly_id || nextUnit !== current.unit)) {
+      await assertAssemblyAttachable(env, nextAssembly, nextUnit);
     }
   }
   const sets: string[] = [];

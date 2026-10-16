@@ -303,20 +303,17 @@ export function recalcItemTotalStatement(db: D1Database, itemId: string): D1Prep
     .bind(itemId, Date.now(), itemId);
 }
 
+// Recompute in ONE statement (sum + write together). The old SELECT-then-
+// UPDATE could interleave with a concurrent shape write for the same item —
+// useShapeSync fires shape requests without awaiting each other — and
+// persist an older sum over a newer one.
 export async function recalcItemTotal(db: D1Database, itemId: string): Promise<number> {
-  const result = (await db
-    .prepare(
-      `SELECT COALESCE(SUM(CASE WHEN deduction = 1 THEN -value ELSE value END), 0) AS total
-       FROM shapes WHERE item_id = ?`
-    )
+  await recalcItemTotalStatement(db, itemId).run();
+  const row = (await db
+    .prepare('SELECT total_value FROM items WHERE id = ?')
     .bind(itemId)
-    .first()) as { total: number } | null;
-  const total = result?.total ?? 0;
-  await db
-    .prepare('UPDATE items SET total_value = ?, updated_at = ? WHERE id = ?')
-    .bind(total, Date.now(), itemId)
-    .run();
-  return total;
+    .first()) as { total_value: number } | null;
+  return row?.total_value ?? 0;
 }
 
 export function rowToTakeoffItem(row: ItemRow, shapes: Shape[]): TakeoffItem {

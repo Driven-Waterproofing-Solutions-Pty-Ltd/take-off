@@ -21,14 +21,14 @@ The Worker serves **both** the API and the SPA from a single URL via Workers Ass
 | D1 | `takeoff-production` | `cacd85f3-b42e-4d09-be7a-bbe11cbb2cdc` (Oceania) |
 | R2 | `takeoff-pdfs` | (ENAM) |
 
-All three D1 migrations have been applied to the remote DB (`0001_init`, `0002_auth`, `0003_page_legend`). 17 tables live.
+**Apply every checked-in migration before the worker that needs it goes live.** The worker code queries the schema those migrations add (`0004` `customers.xero_tenant_id`, `0005` `takeoff_knowledge`, `0006` `projects.snoozed_until`, `0007` `login_attempts`), so deploying ahead of them breaks customer lookup, the invoice queue, knowledge lookups and login throttling (the throttle fails open, the others error).
 
-Future migrations: when you add `apps/worker/migrations/0004_*.sql`, run **once** from a machine that has wrangler installed:
+Before any deploy that ships a new `apps/worker/migrations/*.sql`, run **once** from a machine that has wrangler installed:
 ```bash
 cd take-off-web/apps/worker
 wrangler d1 migrations apply takeoff-production --remote
 ```
-That's the only `wrangler` you'll touch — we deliberately do NOT run migrations from the build, because a bad migration shouldn't ship silently on push.
+It is idempotent — it checks the `d1_migrations` table and only runs files that haven't been applied, so it is safe to run before every deploy. Workers Builds deliberately does NOT run migrations itself (a bad migration shouldn't ship silently on push); the opt-in GitHub Actions deploy (`.github/workflows/take-off-deploy.yml`) does run this step before deploying.
 
 ---
 

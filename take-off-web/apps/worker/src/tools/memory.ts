@@ -11,6 +11,25 @@ import {
 // VOLUME depth is folded into item.totalValue by rowToTakeoffItem on hydration.
 // buildQuote uses totalValue directly — no per-type fold needed here.
 import { rowToShape, rowToTakeoffItem, ItemRow, ShapeRow } from '../db/queries';
+import { sha256Hex } from '../lib/crypto';
+
+// Stable identity of a priced quote: what would be sent to Xero, rounded so
+// floating-point noise can't change it. Used to make sure the quote a user
+// (or agent) reviewed is the one that gets pushed.
+export async function quoteFingerprint(quote: Pick<QuoteDraft, 'projectId' | 'lines' | 'total'>): Promise<string> {
+  const stable = {
+    p: quote.projectId,
+    t: Math.round(quote.total * 100),
+    l: quote.lines.map((l) => [
+      l.description,
+      Math.round(l.qty * 1000),
+      l.unit,
+      Math.round(l.unitPrice * 100),
+      Math.round(l.lineTotal * 100),
+    ]),
+  };
+  return (await sha256Hex(JSON.stringify(stable))).slice(0, 32);
+}
 
 export async function listItems(env: Env, projectId: string): Promise<TakeoffItem[]> {
   const itemRows = (
@@ -281,38 +300,62 @@ export async function buildQuote(env: Env, projectId: string): Promise<QuoteDraf
   ).first()) as { charge_out_rate: number } | null;
   const defaultChargeOutPerHour = labourRow?.charge_out_rate ?? 0;
 
+  // Load every assembly (and its priced lines) referenced by this project's
+  // items in two queries up front. Querying per assembly-linked item cost two
+  // D1 queries each, so a project with a couple of dozen assembly items blew
+  // D1's per-invocation query limit (50 on Workers Free) and build_quote /
+  // the Xero push failed.
+  type AssemblyLine = {
+    assembly_id: string;
+    qty_per_unit: number;
+    waste_pct: number;
+    labour_min_per_unit: number;
+    material_id: string;
+    material_name: string;
+    material_unit: string;
+    unit_cost: number;
+  };
+  const assemblyById = new Map<string, { id: string; name: string; unit: string; formula: string | null }>();
+  const linesByAssembly = new Map<string, AssemblyLine[]>();
+  if (items.some((i) => i.assemblyId)) {
+    const assemblyRows = (
+      await env.DB.prepare(
+        `SELECT id, name, unit, formula FROM assemblies
+          WHERE id IN (SELECT assembly_id FROM items WHERE project_id = ? AND assembly_id IS NOT NULL)`
+      )
+        .bind(projectId)
+        .all()
+    ).results as Array<{ id: string; name: string; unit: string; formula: string | null }>;
+    for (const a of assemblyRows) assemblyById.set(a.id, a);
+    const lineRows = (
+      await env.DB.prepare(
+        `SELECT al.assembly_id, al.qty_per_unit, al.waste_pct, al.labour_min_per_unit,
+                m.id AS material_id, m.name AS material_name, m.unit AS material_unit, m.unit_cost
+           FROM assembly_lines al
+           JOIN materials m ON m.id = al.material_id
+          WHERE al.assembly_id IN (SELECT assembly_id FROM items WHERE project_id = ? AND assembly_id IS NOT NULL)`
+      )
+        .bind(projectId)
+        .all()
+    ).results as unknown as AssemblyLine[];
+    for (const l of lineRows) {
+      const list = linesByAssembly.get(l.assembly_id) ?? [];
+      list.push(l);
+      linesByAssembly.set(l.assembly_id, list);
+    }
+  }
+
   const lines: QuoteLineItem[] = [];
 
   for (const item of items) {
     if (item.assemblyId) {
-      const assembly = (await env.DB.prepare(
-        'SELECT id, name, unit, formula FROM assemblies WHERE id = ?'
-      )
-        .bind(item.assemblyId)
-        .first()) as { id: string; name: string; unit: string; formula: string | null } | null;
-
-      const linesRes = await env.DB.prepare(
-        `SELECT al.qty_per_unit, al.waste_pct, al.labour_min_per_unit,
-                m.id AS material_id, m.name AS material_name, m.unit AS material_unit, m.unit_cost
-         FROM assembly_lines al
-         JOIN materials m ON m.id = al.material_id
-         WHERE al.assembly_id = ?`
-      )
-        .bind(item.assemblyId)
-        .all();
+      const assembly = assemblyById.get(item.assemblyId) ?? null;
+      const assemblyLines = linesByAssembly.get(item.assemblyId) ?? [];
 
       const qty = evaluateFormula(item, item.totalValue, assembly?.formula ?? undefined);
 
       let assemblyLabourMinutes = 0;
-      for (const r of linesRes.results as unknown as Array<{
-        qty_per_unit: number;
-        waste_pct: number;
-        labour_min_per_unit: number;
-        material_id: string;
-        material_name: string;
-        material_unit: string;
-        unit_cost: number;
-      }>) {
+      for (const r of assemblyLines) {
         const totalQty = qty * r.qty_per_unit * (1 + r.waste_pct / 100);
         lines.push({
           description: `${assembly?.name ?? 'Assembly'} — ${r.material_name}`,
@@ -400,5 +443,6 @@ export async function buildQuote(env: Env, projectId: string): Promise<QuoteDraf
     subtotal,
     gst,
     total,
+    fingerprint: await quoteFingerprint({ projectId, lines, total }),
   };
 }

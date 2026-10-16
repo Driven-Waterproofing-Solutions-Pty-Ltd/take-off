@@ -85,6 +85,7 @@ export const QuoteDraftZ = z.object({
   subtotal: z.number(),
   gst: z.number(),
   total: z.number(),
+  fingerprint: z.string().optional(),
 });
 
 const ViewportZ = z.object({
@@ -316,6 +317,12 @@ export const tools = {
       kind: z.enum(['QUOTE', 'INVOICE']),
       customer_xero_id: z.string(),
       reference: z.string().optional(),
+      quote_fingerprint: z
+        .string()
+        .optional()
+        .describe(
+          'The `fingerprint` from the build_quote result the user reviewed. When given, the push is refused if the quote has changed since.'
+        ),
     }),
     output: z.object({
       xero_id: z.string(),

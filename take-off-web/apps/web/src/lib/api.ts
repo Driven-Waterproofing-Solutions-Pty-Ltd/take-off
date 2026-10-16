@@ -118,6 +118,11 @@ export const api = {
           preset_label: presetLabel,
         }),
       }),
+    clear: (projectId: string, pageIndex: number) =>
+      req<ScaleCalibration>('/api/measure/scale/clear', {
+        method: 'POST',
+        body: JSON.stringify({ project_id: projectId, page_index: pageIndex }),
+      }),
     manual: (
       projectId: string,
       pageIndex: number,
@@ -354,7 +359,9 @@ export const api = {
   },
 
   xero: {
-    pushQuote: (projectId: string, customerXeroId: string, reference?: string) =>
+    // `quoteFingerprint` = the `fingerprint` of the quote the user reviewed;
+    // the worker refuses the push if the quote has changed since.
+    pushQuote: (projectId: string, customerXeroId: string, reference?: string, quoteFingerprint?: string) =>
       req<{ xero_id: string; deep_link: string }>('/xero/push', {
         method: 'POST',
         body: JSON.stringify({
@@ -362,9 +369,10 @@ export const api = {
           kind: 'QUOTE',
           customer_xero_id: customerXeroId,
           reference,
+          quote_fingerprint: quoteFingerprint,
         }),
       }),
-    pushInvoice: (projectId: string, customerXeroId: string, reference?: string) =>
+    pushInvoice: (projectId: string, customerXeroId: string, reference?: string, quoteFingerprint?: string) =>
       req<{ xero_id: string; deep_link: string }>('/xero/push', {
         method: 'POST',
         body: JSON.stringify({
@@ -372,6 +380,7 @@ export const api = {
           kind: 'INVOICE',
           customer_xero_id: customerXeroId,
           reference,
+          quote_fingerprint: quoteFingerprint,
         }),
       }),
     // Find or create a Xero contact for a brand-new customer, returning the

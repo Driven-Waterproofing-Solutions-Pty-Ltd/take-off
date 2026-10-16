@@ -16,7 +16,7 @@ import {
 } from '@takeoff/shared';
 import type { D1PreparedStatement } from '@cloudflare/workers-types';
 import type { Env } from '../env';
-import { getPage, parseScale, upsertPageStatement, recalcItemTotalStatement } from '../db/queries';
+import { getPage, parseScale, upsertPage, upsertPageStatement, recalcItemTotalStatement } from '../db/queries';
 
 interface ShapeRowMin {
   id: string;
@@ -272,6 +272,21 @@ export async function setScalePreset(
     unit: preset.unit,
   };
   await applyScale(env, args.project_id, args.page_index, scale);
+  return scale;
+}
+
+// Mark a page as uncalibrated again (the browser's Undo of a page's first
+// calibration). Without it the server kept the undone scale, so a reload
+// resurrected it and agent/MCP measurements kept using it while the browser
+// showed the page as uncalibrated. Existing shape values are left as they
+// are; the next calibration recomputes them.
+export async function clearScale(
+  env: Env,
+  args: { project_id: string; page_index: number }
+): Promise<ScaleCalibration> {
+  const previous = parseScale(await getPage(env.DB, args.project_id, args.page_index));
+  const scale: ScaleCalibration = { isSet: false, pixelsPerUnit: 0, unit: previous.unit };
+  await upsertPage(env.DB, args.project_id, args.page_index, { scale });
   return scale;
 }
 

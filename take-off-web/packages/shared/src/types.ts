@@ -199,4 +199,7 @@ export interface QuoteDraft {
   subtotal: number;
   gst: number;
   total: number;
+  // Hash of the priced lines + total. Pass it back to push_to_xero so the
+  // push is refused if the server-side quote changed after it was reviewed.
+  fingerprint?: string;
 }

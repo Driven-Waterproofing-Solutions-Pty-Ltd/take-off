@@ -517,10 +517,20 @@ export async function pushToXero(
     kind: 'QUOTE' | 'INVOICE';
     customer_xero_id: string;
     reference?: string;
+    quote_fingerprint?: string;
   }
 ): Promise<{ xero_id: string; deep_link: string }> {
-  const token = await getActiveXeroToken(env);
+  // Rebuild first and compare with what was reviewed: /xero/push prices from
+  // the latest server state, so an item edit that was still syncing when the
+  // review modal loaded would otherwise send different lines than the user
+  // approved.
   const quote = await buildQuote(env, args.project_id);
+  if (args.quote_fingerprint && args.quote_fingerprint !== quote.fingerprint) {
+    throw new Error(
+      'The quote changed after it was reviewed — cannot push it. Reopen the review to see the current lines and total, then push again.'
+    );
+  }
+  const token = await getActiveXeroToken(env);
   // Server-side default; the modal sends the user-edited reference verbatim
   // (including an explicit empty string), so this only fires for callers that
   // omitted the field entirely (e.g. the agent path).
@@ -695,30 +705,42 @@ export async function syncXeroContacts(env: Env): Promise<{ synced: number; tena
     // Stamp xero_tenant_id on every synced row so a future tenant switch
     // doesn't leave stale ContactIDs in `customers` that would push to the
     // wrong tenant via /xero/push. recallCustomer / pushToXero filter by
-    // the currently-active token's tenant. One D1 batch per page.
+    // the currently-active token's tenant.
+    //
+    // ONE statement per page: the page's contacts travel as a single JSON
+    // parameter expanded with json_each(). A statement per contact (even
+    // inside db.batch, which still counts each statement) exceeded D1's
+    // 50-queries-per-invocation limit on Workers Free for any page over ~45
+    // contacts, so the sync failed and rolled the page back. `WHERE true`
+    // is SQLite's required disambiguator for INSERT … SELECT … ON CONFLICT.
     if (contacts.length > 0) {
-      await env.DB.batch(
-        contacts.map((c) =>
-          env.DB.prepare(
-            `INSERT INTO customers (id, xero_contact_id, xero_tenant_id, name, email, phone, last_synced_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(xero_contact_id) DO UPDATE SET
-               xero_tenant_id = excluded.xero_tenant_id,
-               name = excluded.name,
-               email = excluded.email,
-               phone = excluded.phone,
-               last_synced_at = excluded.last_synced_at`
-          ).bind(
-            crypto.randomUUID(),
-            c.ContactID,
-            token.tenant_id,
-            c.Name,
-            c.EmailAddress ?? null,
-            c.Phones?.find((p) => p.PhoneNumber)?.PhoneNumber ?? null,
-            now
-          )
-        )
-      );
+      const payload = contacts.map((c) => ({
+        id: crypto.randomUUID(),
+        contact_id: c.ContactID,
+        name: c.Name,
+        email: c.EmailAddress ?? null,
+        phone: c.Phones?.find((p) => p.PhoneNumber)?.PhoneNumber ?? null,
+      }));
+      await env.DB.prepare(
+        `INSERT INTO customers (id, xero_contact_id, xero_tenant_id, name, email, phone, last_synced_at)
+         SELECT json_extract(value, '$.id'),
+                json_extract(value, '$.contact_id'),
+                ?,
+                json_extract(value, '$.name'),
+                json_extract(value, '$.email'),
+                json_extract(value, '$.phone'),
+                ?
+           FROM json_each(?)
+          WHERE true
+         ON CONFLICT(xero_contact_id) DO UPDATE SET
+           xero_tenant_id = excluded.xero_tenant_id,
+           name = excluded.name,
+           email = excluded.email,
+           phone = excluded.phone,
+           last_synced_at = excluded.last_synced_at`
+      )
+        .bind(token.tenant_id, now, JSON.stringify(payload))
+        .run();
     }
     synced += contacts.length;
     const lastPage = json.pagination?.pageCount;

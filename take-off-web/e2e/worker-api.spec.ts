@@ -298,6 +298,24 @@ test('assemblies only attach to items measured in a compatible unit', async () =
 
   const items = await listItems(call, projectId);
   expect(items.find((i) => i.id === linear)).not.toHaveProperty('assemblyId');
+
+  // Changing an assembly-linked item to an incompatible unit is refused too.
+  const unitChange = await call<{ error: string }>('PUT', `/api/measure/items/${area}`, {
+    unit: 'm',
+    assembly_id: assembly.body.id,
+  });
+  expect(unitChange.status).toBe(400);
+  expect(unitChange.body.error).toMatch(/cannot attach/);
+
+  // The quote prices the area item from the assembly's lines.
+  const quote = await call<{ lines: Array<{ itemId?: string; assemblyId?: string; unitPrice: number }> }>(
+    'GET',
+    `/api/memory/quote/${projectId}`
+  );
+  expect(quote.status).toBe(200);
+  const assemblyLines = quote.body.lines.filter((l) => l.itemId === area);
+  expect(assemblyLines.length).toBeGreaterThan(0);
+  expect(assemblyLines.every((l) => l.assemblyId === assembly.body.id)).toBe(true);
 });
 
 test('server recalibration refuses to mix units on a multi-page item', async () => {
@@ -456,4 +474,83 @@ test('login is throttled after repeated failures for an account', async () => {
   expect(Number(blocked.headers.get('Retry-After'))).toBeGreaterThan(0);
   // Even the right password waits out the window once the account is locked.
   expect((await attempt(password)).status).toBe(429);
+});
+
+test('an undone calibration can be persisted as unset', async () => {
+  const call = await bearerClient();
+  const projectId = await newProject(call, 'Clear scale');
+  expect(
+    (await call('POST', '/api/measure/scale/preset', {
+      project_id: projectId,
+      page_index: 0,
+      preset_label: '1:100',
+    })).status
+  ).toBe(200);
+  const cleared = await call<{ isSet: boolean }>('POST', '/api/measure/scale/clear', {
+    project_id: projectId,
+    page_index: 0,
+  });
+  expect(cleared.status).toBe(200);
+  expect(cleared.body.isSet).toBe(false);
+  const project = await call<{ pages: Array<{ page_index: number; scale_json: string }> }>(
+    'GET',
+    `/api/projects/${projectId}`
+  );
+  const page0 = project.body.pages.find((p) => p.page_index === 0)!;
+  expect(JSON.parse(page0.scale_json)).toMatchObject({ isSet: false });
+});
+
+test('Xero push refuses a quote that changed after review', async () => {
+  const admin = await adminSessionClient();
+  const projectId = await newProject(admin, 'Reviewed quote');
+  const itemId = crypto.randomUUID();
+  expect(
+    (await admin('POST', '/api/measure/items', {
+      project_id: projectId,
+      id: itemId,
+      label: 'Puddle flange',
+      type: 'COUNT',
+      color: '#ef4444',
+      unit: 'EA',
+      price: 30,
+    })).status
+  ).toBe(200);
+  expect(
+    (await admin('POST', '/api/measure/shapes/count', {
+      project_id: projectId,
+      page_index: 0,
+      item_id: itemId,
+      points: [{ x: 1, y: 1 }],
+    })).status
+  ).toBe(200);
+  const reviewed = await admin<{ fingerprint: string; total: number }>(
+    'GET',
+    `/api/memory/quote/${projectId}`
+  );
+  expect(reviewed.status).toBe(200);
+  expect(reviewed.body.fingerprint).toMatch(/^[0-9a-f]{32}$/);
+
+  // Pricing changes after the review was loaded.
+  expect((await admin('PUT', `/api/measure/items/${itemId}`, { price: 35 })).status).toBe(200);
+
+  const stale = await admin<{ error: string }>('POST', '/xero/push', {
+    project_id: projectId,
+    kind: 'INVOICE',
+    customer_xero_id: 'contact-under-review',
+    quote_fingerprint: reviewed.body.fingerprint,
+  });
+  expect(stale.status).toBe(400);
+  expect(stale.body.error).toMatch(/changed after it was reviewed/);
+
+  // With the current fingerprint the push gets past the review check (and
+  // stops at the missing Xero connection in this test environment).
+  const current = await admin<{ fingerprint: string }>('GET', `/api/memory/quote/${projectId}`);
+  const fresh = await admin<{ error: string }>('POST', '/xero/push', {
+    project_id: projectId,
+    kind: 'INVOICE',
+    customer_xero_id: 'contact-under-review',
+    quote_fingerprint: current.body.fingerprint,
+  });
+  expect(fresh.body.error).not.toMatch(/changed after it was reviewed/);
+  expect(fresh.body.error).toMatch(/Xero is not connected/);
 });
