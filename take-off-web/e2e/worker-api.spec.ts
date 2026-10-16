@@ -739,6 +739,43 @@ test('Xero push refuses a quote that changed after review', async () => {
   expect(unbound.body.error).toMatch(/invalid request/);
 });
 
+test('PDF uploads stream to R2 and read back intact', async () => {
+  const token = await mintToken();
+  const auth = { Authorization: `Bearer ${token}` };
+  const call = client(auth);
+  const projectId = await newProject(call, 'Upload');
+  const url = await call<{ file_key: string }>('POST', `/api/projects/${projectId}/upload-url`, {
+    filename: 'plan.pdf',
+  });
+  expect(url.status).toBe(200);
+  const fileKey = url.body.file_key;
+
+  // ~1 MB with a varying pattern so truncation or reordering would show.
+  const bytes = new Uint8Array(1024 * 1024 + 7);
+  bytes.set(new TextEncoder().encode('%PDF-1.4\n'));
+  for (let i = 9; i < bytes.length; i++) bytes[i] = (i * 31) % 251;
+  const put = await fetch(`${WORKER}/api/projects/${projectId}/upload/${fileKey}`, {
+    method: 'PUT',
+    headers: { ...auth, 'Content-Type': 'application/pdf' },
+    body: bytes,
+  });
+  expect(put.status).toBe(200);
+
+  expect(
+    (await call('POST', `/api/projects/${projectId}/pdfs`, {
+      file_key: fileKey,
+      name: 'plan.pdf',
+      page_count: 1,
+      page_sizes: [{ width: 595, height: 842 }],
+    })).status
+  ).toBe(200);
+  const back = await fetch(`${WORKER}/api/projects/${projectId}/pdfs/${fileKey}`, { headers: auth });
+  expect(back.status).toBe(200);
+  const got = new Uint8Array(await back.arrayBuffer());
+  expect(got.length).toBe(bytes.length);
+  expect(Buffer.from(got).equals(Buffer.from(bytes))).toBe(true);
+});
+
 test('server recalibration converts VOLUME items and totals in bulk', async () => {
   const call = await bearerClient();
   const projectId = await newProject(call, 'Bulk recal');

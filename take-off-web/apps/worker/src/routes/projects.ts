@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ReadableStream as WorkerReadableStream } from '@cloudflare/workers-types';
 import type { Env } from '../env';
 import { requireAuth } from '../lib/auth';
 
@@ -163,17 +164,29 @@ app.put('/:id/upload/:key{.+}', async (c) => {
     return c.json({ error: 'expected application/pdf' }, 415);
   }
   const lenHeader = c.req.header('Content-Length');
-  if (lenHeader && Number(lenHeader) > MAX_PDF_BYTES) {
+  const declaredLength = lenHeader === undefined ? NaN : Number(lenHeader);
+  if (declaredLength > MAX_PDF_BYTES) {
     return c.json({ error: 'pdf too large' }, 413);
   }
 
+  const httpMetadata = { contentType: 'application/pdf' };
+  const body = c.req.raw.body;
+  if (body && Number.isInteger(declaredLength) && declaredLength > 0) {
+    // Known length (browsers send Content-Length for an ArrayBuffer body):
+    // stream straight to R2. Buffering a near-limit plan first held up to
+    // 100 MB in the isolate, close to its memory limit. The runtime makes
+    // the body match Content-Length, which is what R2 needs for a stream.
+    // Hono types the raw body with the DOM stream; it is the runtime's own.
+    await c.env.PDFS.put(key, body as unknown as WorkerReadableStream, { httpMetadata });
+    return c.json({ ok: true, key });
+  }
+
+  // Unknown length (chunked upload): buffer and check the real size.
   const bytes = await c.req.arrayBuffer();
   if (bytes.byteLength > MAX_PDF_BYTES) {
     return c.json({ error: 'pdf too large' }, 413);
   }
-  await c.env.PDFS.put(key, bytes, {
-    httpMetadata: { contentType: 'application/pdf' },
-  });
+  await c.env.PDFS.put(key, bytes, { httpMetadata });
   return c.json({ ok: true, key });
 });
 
