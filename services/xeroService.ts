@@ -1,5 +1,9 @@
 import { LazyStore } from '@tauri-apps/plugin-store';
 import { open } from '@tauri-apps/plugin-shell';
+// Xero's identity and Accounting APIs do not send CORS headers, so the WebView's
+// own fetch is blocked. The Tauri HTTP plugin performs the request natively;
+// its allowed URLs are scoped in src-tauri/capabilities/default.json.
+import { fetch } from '@tauri-apps/plugin-http';
 
 // ── Keys used in persistent storage ─────────────────────────────────────────
 const KEY_CLIENT_ID = 'xero_client_id';
@@ -36,6 +40,15 @@ export interface XeroAccount {
     Type: string;
 }
 
+export interface XeroTaxRate {
+    Name: string;
+    TaxType: string;
+    ReportTaxType?: string;
+    Status: string;
+    CanApplyToRevenue?: boolean;
+    EffectiveRate?: number;
+}
+
 export interface XeroLineItem {
     Description: string;
     Quantity: number;
@@ -56,6 +69,27 @@ export interface XeroInvoicePayload {
     LineAmountTypes?: 'EXCLUSIVE' | 'INCLUSIVE' | 'NOTAX';
     CurrencyCode?: string;
 }
+
+interface XeroTokenResponse {
+    access_token: string;
+    refresh_token?: string;
+    expires_in?: number;
+}
+
+/**
+ * Least-privilege scopes, using Xero's granular scope names: apps created on or
+ * after 2 March 2026 cannot use the broad `accounting.transactions` scope.
+ * `accounting.settings.read` is required by the Accounts and TaxRates endpoints.
+ */
+export const XERO_SCOPES = [
+    'openid',
+    'profile',
+    'email',
+    'accounting.invoices',
+    'accounting.contacts.read',
+    'accounting.settings.read',
+    'offline_access',
+].join(' ');
 
 // ── Internal PKCE helpers ────────────────────────────────────────────────────
 function base64UrlEncode(bytes: Uint8Array): string {
@@ -131,7 +165,7 @@ export const xeroService = {
             response_type: 'code',
             client_id: clientId,
             redirect_uri: XERO_REDIRECT_URI,
-            scope: 'openid profile email accounting.transactions accounting.contacts.read offline_access',
+            scope: XERO_SCOPES,
             state,
             code_challenge: challenge,
             code_challenge_method: 'S256',
@@ -174,10 +208,10 @@ export const xeroService = {
             throw new Error(`Xero token exchange failed: ${text}`);
         }
 
-        const data = await response.json();
+        const data: XeroTokenResponse = await response.json();
         const tokens: XeroTokens = {
             access_token: data.access_token,
-            refresh_token: data.refresh_token,
+            refresh_token: data.refresh_token ?? '',
             expires_at: Date.now() + (data.expires_in ?? 1800) * 1000,
         };
 
@@ -209,7 +243,7 @@ export const xeroService = {
             throw new Error(`Xero token refresh failed (${response.status}): ${text}`);
         }
 
-        const data = await response.json();
+        const data: XeroTokenResponse = await response.json();
         const newTokens: XeroTokens = {
             access_token: data.access_token,
             refresh_token: data.refresh_token ?? tokens.refresh_token,
@@ -269,6 +303,20 @@ export const xeroService = {
         if (!res.ok) throw new Error('Failed to fetch Xero accounts');
         const data = await res.json();
         return data.Accounts ?? [];
+    },
+
+    /** Active tax rates that can be applied to sales (revenue) lines. */
+    async getTaxRates(accessToken: string, tenantId: string): Promise<XeroTaxRate[]> {
+        const res = await fetch('https://api.xero.com/api.xro/2.0/TaxRates', {
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'Xero-Tenant-Id': tenantId,
+                Accept: 'application/json',
+            },
+        });
+        if (!res.ok) throw new Error('Failed to fetch Xero tax rates');
+        const data: { TaxRates?: XeroTaxRate[] } = await res.json();
+        return (data.TaxRates ?? []).filter((r) => r.Status === 'ACTIVE' && r.CanApplyToRevenue !== false);
     },
 
     async createInvoice(
