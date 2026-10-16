@@ -175,6 +175,13 @@ export const evaluateFormula = (
     scope['price'] = item.price;
   }
 
+  // Qty is reserved: a custom property or sub-item labelled "Qty" must not
+  // replace the measured quantity every formula prices from (same rule as
+  // the worker's shared evaluator).
+  scope['Qty'] = qty;
+  scope['QTY'] = qty;
+  scope['qty'] = qty;
+
   try {
     const result: unknown = limitedEvaluate(formulaToUse, scope);
 

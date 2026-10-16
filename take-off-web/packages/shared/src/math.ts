@@ -132,6 +132,12 @@ export const tryEvaluateFormula = (
     scope.price = item.price;
   }
 
+  // Qty is reserved: a custom property or sub-item labelled "Qty" must not
+  // replace the measured quantity every formula prices from.
+  scope.Qty = qty;
+  scope.QTY = qty;
+  scope.qty = qty;
+
   try {
     const result: unknown = limitedEvaluate(formulaToUse, scope);
     // Only finite numbers are quantities. `Qty / 0` evaluates to Infinity,

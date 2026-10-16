@@ -559,6 +559,43 @@ test('formulas that evaluate to Infinity never reach the quote', async () => {
   expect(Number.isFinite(quote.body.total)).toBe(true);
 });
 
+test('a custom property named Qty cannot replace the measured quantity', async () => {
+  const call = await bearerClient();
+  const projectId = await newProject(call, 'Reserved Qty');
+  const itemId = crypto.randomUUID();
+  expect(
+    (await call('POST', '/api/measure/items', {
+      project_id: projectId,
+      id: itemId,
+      label: 'Floor waste',
+      type: 'COUNT',
+      color: '#ef4444',
+      unit: 'EA',
+      price: 10,
+      formula: 'Qty * 2',
+      properties: [{ name: 'Qty', value: 999 }],
+    })).status
+  ).toBe(200);
+  for (const x of [1, 2, 3]) {
+    expect(
+      (await call('POST', '/api/measure/shapes/count', {
+        project_id: projectId,
+        page_index: 0,
+        item_id: itemId,
+        points: [{ x, y: x }],
+      })).status
+    ).toBe(200);
+  }
+  const quote = await call<{ lines: Array<{ itemId?: string; qty: number; lineTotal: number }> }>(
+    'GET',
+    `/api/memory/quote/${projectId}`
+  );
+  expect(quote.status).toBe(200);
+  const line = quote.body.lines.find((l) => l.itemId === itemId)!;
+  expect(line.qty).toBeCloseTo(6, 6);
+  expect(line.lineTotal).toBeCloseTo(60, 6);
+});
+
 test('a broken assembly formula refuses the quote instead of pricing it at zero', async () => {
   const admin = await adminSessionClient();
   const material = await admin<{ id: string }>('POST', '/api/memory/materials', {
