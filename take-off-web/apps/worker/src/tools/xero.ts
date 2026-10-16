@@ -22,28 +22,61 @@ function requireTokenKey(env: Env): string {
   return env.XERO_TOKEN_KEY;
 }
 
-async function getActiveXeroToken(env: Env): Promise<DecryptedXeroToken> {
-  const row = (await env.DB.prepare(
+async function readActiveTokenRow(env: Env): Promise<XeroTokenRow | null> {
+  return (await env.DB.prepare(
     'SELECT * FROM xero_tokens ORDER BY updated_at DESC LIMIT 1'
   ).first()) as XeroTokenRow | null;
-  if (!row) throw new Error('Xero is not connected. Visit /xero/oauth/start to connect.');
+}
 
+async function decryptRow(env: Env, row: XeroTokenRow): Promise<DecryptedXeroToken> {
   const key = requireTokenKey(env);
-  const decrypted: DecryptedXeroToken = {
+  return {
     ...row,
     access_token: await decryptString(key, row.access_token),
     refresh_token: await decryptString(key, row.refresh_token),
   };
+}
 
-  if (row.expires_at <= Date.now() + 60_000) {
-    return await refreshXeroToken(env, decrypted);
+const REFRESH_SKEW_MS = 60_000;
+const REFRESH_WAIT_MS = 10_000;
+const REFRESH_POLL_MS = 250;
+
+async function getActiveXeroToken(env: Env): Promise<DecryptedXeroToken> {
+  const row = await readActiveTokenRow(env);
+  if (!row) throw new Error('Xero is not connected. Visit /xero/oauth/start to connect.');
+  if (row.expires_at > Date.now() + REFRESH_SKEW_MS) return decryptRow(env, row);
+
+  // Xero rotates the refresh token on every use, so only ONE request may
+  // refresh at a time; otherwise two concurrent refreshes can persist their
+  // results out of issuance order and leave a superseded refresh token
+  // stored (forcing a re-connect once Xero's grace period lapses). Claim the
+  // refresh by bumping updated_at as a version (compare-and-swap on the
+  // value we read); losers wait for the winner's write and use that token.
+  const claim = Math.max(Date.now(), row.updated_at + 1);
+  const claimed = await env.DB.prepare(
+    'UPDATE xero_tokens SET updated_at = ? WHERE tenant_id = ? AND updated_at = ?'
+  )
+    .bind(claim, row.tenant_id, row.updated_at)
+    .run();
+  if ((claimed.meta?.changes ?? 0) === 1) {
+    return refreshXeroToken(env, await decryptRow(env, row), claim);
   }
-  return decrypted;
+
+  const deadline = Date.now() + REFRESH_WAIT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, REFRESH_POLL_MS));
+    const latest = (await env.DB.prepare('SELECT * FROM xero_tokens WHERE tenant_id = ?')
+      .bind(row.tenant_id)
+      .first()) as XeroTokenRow | null;
+    if (latest && latest.expires_at > Date.now() + REFRESH_SKEW_MS) return decryptRow(env, latest);
+  }
+  throw new Error('Xero token refresh is already in progress — retry in a few seconds.');
 }
 
 async function refreshXeroToken(
   env: Env,
-  current: DecryptedXeroToken
+  current: DecryptedXeroToken,
+  claim: number
 ): Promise<DecryptedXeroToken> {
   if (!env.XERO_CLIENT_ID || !env.XERO_CLIENT_SECRET) {
     throw new Error('XERO_CLIENT_ID / XERO_CLIENT_SECRET secrets not set');
@@ -70,17 +103,20 @@ async function refreshXeroToken(
   const key = requireTokenKey(env);
   const encAccess = await encryptString(key, body.access_token);
   const encRefresh = await encryptString(key, body.refresh_token);
+  const updatedAt = Math.max(Date.now(), claim + 1);
+  // Only persist if our claim still stands (nobody re-connected meanwhile).
   await env.DB.prepare(
     `UPDATE xero_tokens SET access_token = ?, refresh_token = ?, expires_at = ?, updated_at = ?
-     WHERE tenant_id = ?`
+     WHERE tenant_id = ? AND updated_at = ?`
   )
-    .bind(encAccess, encRefresh, expires_at, Date.now(), current.tenant_id)
+    .bind(encAccess, encRefresh, expires_at, updatedAt, current.tenant_id, claim)
     .run();
   return {
     ...current,
     access_token: body.access_token,
     refresh_token: body.refresh_token,
     expires_at,
+    updated_at: updatedAt,
   };
 }
 

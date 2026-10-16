@@ -1,4 +1,4 @@
-import type { D1Database } from '@cloudflare/workers-types';
+import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types';
 import { ToolType, getLinearBase } from '@takeoff/shared';
 import type {
   Shape,
@@ -69,17 +69,31 @@ export async function getProject(db: D1Database, projectId: string): Promise<Pro
 // calibration) could each restore the other's stale value — a successful
 // calibration could reload as unset. With INSERT … ON CONFLICT DO UPDATE SET
 // <supplied columns only>, untouched columns are never rewritten.
+type PageFields = Partial<{
+  scale: ScaleCalibration;
+  vectorCache: unknown;
+  name: string;
+  legend: unknown;
+}>;
+
 export async function upsertPage(
   db: D1Database,
   projectId: string,
   pageIndex: number,
-  fields: Partial<{
-    scale: ScaleCalibration;
-    vectorCache: unknown;
-    name: string;
-    legend: unknown;
-  }>
+  fields: PageFields
 ): Promise<PageRow> {
+  await upsertPageStatement(db, projectId, pageIndex, fields).run();
+  return (await getPage(db, projectId, pageIndex))!;
+}
+
+// The statement behind upsertPage, for callers that need it inside a
+// db.batch() transaction (e.g. recalibration).
+export function upsertPageStatement(
+  db: D1Database,
+  projectId: string,
+  pageIndex: number,
+  fields: PageFields
+): D1PreparedStatement {
   const supplied: Array<[column: string, value: string]> = [];
   if (fields.scale !== undefined) supplied.push(['scale_json', JSON.stringify(fields.scale)]);
   if (fields.vectorCache !== undefined) {
@@ -91,7 +105,7 @@ export async function upsertPage(
   const value = (column: string): string | null =>
     supplied.find(([c]) => c === column)?.[1] ?? null;
   const updates = supplied.map(([column]) => `${column} = excluded.${column}`);
-  await db
+  return db
     .prepare(
       `INSERT INTO pages (project_id, page_index, scale_json, vector_cache_json, name, legend_json)
        VALUES (?, ?, ?, ?, ?, ?)
@@ -106,9 +120,7 @@ export async function upsertPage(
       value('vector_cache_json'),
       value('name'),
       value('legend_json')
-    )
-    .run();
-  return (await getPage(db, projectId, pageIndex))!;
+    );
 }
 
 export async function getPage(
@@ -275,6 +287,20 @@ export async function getOrCreateItem(
     .prepare('SELECT * FROM items WHERE id = ?')
     .bind(id)
     .first()) as ItemRow;
+}
+
+// Single-statement total recompute, usable inside db.batch() so it sees the
+// shape updates batched before it.
+export function recalcItemTotalStatement(db: D1Database, itemId: string): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE items
+          SET total_value = (SELECT COALESCE(SUM(CASE WHEN deduction = 1 THEN -value ELSE value END), 0)
+                               FROM shapes WHERE item_id = ?),
+              updated_at = ?
+        WHERE id = ?`
+    )
+    .bind(itemId, Date.now(), itemId);
 }
 
 export async function recalcItemTotal(db: D1Database, itemId: string): Promise<number> {

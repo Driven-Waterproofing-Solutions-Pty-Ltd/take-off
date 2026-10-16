@@ -14,8 +14,9 @@ import {
   Unit,
   Point,
 } from '@takeoff/shared';
+import type { D1PreparedStatement } from '@cloudflare/workers-types';
 import type { Env } from '../env';
-import { getPage, parseScale, upsertPage, recalcItemTotal } from '../db/queries';
+import { getPage, parseScale, upsertPageStatement, recalcItemTotalStatement } from '../db/queries';
 
 interface ShapeRowMin {
   id: string;
@@ -39,16 +40,23 @@ interface ItemRowMin {
  * stay stale, build_quote prices the wrong quantities, and the canvas
  * disagrees with the server on reload. Mirrors the browser-side
  * handleUpdateScale recompute loop so REST/MCP scale changes match.
+ *
+ * Returns the write statements instead of running them: applyScale commits
+ * them together with the new page scale in ONE db.batch() transaction.
+ * Running a statement per shape after the scale had already been saved could
+ * exceed D1's per-invocation query limit on a busy page and fail half-way,
+ * leaving the new scale beside a mix of old and new shape values.
  */
-async function recomputeShapesForPage(
+async function recomputeStatementsForPage(
   env: Env,
   projectId: string,
   pageIndex: number,
   scale: ScaleCalibration,
   prevUnit: Unit | null
-): Promise<void> {
+): Promise<D1PreparedStatement[]> {
   const ppu = scale.pixelsPerUnit;
-  if (!Number.isFinite(ppu) || ppu <= 0) return;
+  if (!Number.isFinite(ppu) || ppu <= 0) return [];
+  const stmts: D1PreparedStatement[] = [];
 
   const shapeRows = (
     await env.DB.prepare(
@@ -60,7 +68,7 @@ async function recomputeShapesForPage(
       .bind(projectId, pageIndex)
       .all()
   ).results as unknown as ShapeRowMin[];
-  if (shapeRows.length === 0) return;
+  if (shapeRows.length === 0) return [];
 
   // Join rather than `id IN (…)` so a page with more than 100 items stays
   // under D1's 100-bound-parameter limit.
@@ -104,7 +112,7 @@ async function recomputeShapesForPage(
     } else {
       continue; // COUNT / NOTE carry annotation/count semantics independent of scale
     }
-    await env.DB.prepare('UPDATE shapes SET value = ? WHERE id = ?').bind(nextValue, row.id).run();
+    stmts.push(env.DB.prepare('UPDATE shapes SET value = ? WHERE id = ?').bind(nextValue, row.id));
   }
 
   // Retune item units (AREA→sq_m, VOLUME→cu_m, LINEAR→m) and recompute totals.
@@ -136,19 +144,27 @@ async function recomputeShapesForPage(
         prevUnit !== scale.unit
       ) {
         const nextDepth = convertLinearUnit(row.depth, prevUnit, scale.unit);
-        await env.DB.prepare(
-          'UPDATE items SET unit = ?, depth = ?, updated_at = ? WHERE id = ?'
-        )
-          .bind(nextUnit, nextDepth, Date.now(), row.id)
-          .run();
+        stmts.push(
+          env.DB.prepare('UPDATE items SET unit = ?, depth = ?, updated_at = ? WHERE id = ?').bind(
+            nextUnit,
+            nextDepth,
+            Date.now(),
+            row.id
+          )
+        );
       } else {
-        await env.DB.prepare('UPDATE items SET unit = ?, updated_at = ? WHERE id = ?')
-          .bind(nextUnit, Date.now(), row.id)
-          .run();
+        stmts.push(
+          env.DB.prepare('UPDATE items SET unit = ?, updated_at = ? WHERE id = ?').bind(
+            nextUnit,
+            Date.now(),
+            row.id
+          )
+        );
       }
     }
-    await recalcItemTotal(env.DB, row.id);
+    stmts.push(recalcItemTotalStatement(env.DB, row.id));
   }
+  return stmts;
 }
 
 /**
@@ -214,6 +230,19 @@ async function assertNoMixedUnitItems(
   }
 }
 
+// Save the page scale and every dependent recomputation atomically.
+async function applyScale(
+  env: Env,
+  projectId: string,
+  pageIndex: number,
+  scale: ScaleCalibration
+): Promise<void> {
+  await assertNoMixedUnitItems(env, projectId, pageIndex, scale.unit);
+  const prevUnit = await capturePrevUnit(env, projectId, pageIndex);
+  const recompute = await recomputeStatementsForPage(env, projectId, pageIndex, scale, prevUnit);
+  await env.DB.batch([upsertPageStatement(env.DB, projectId, pageIndex, { scale }), ...recompute]);
+}
+
 async function capturePrevUnit(
   env: Env,
   projectId: string,
@@ -237,15 +266,12 @@ export async function setScalePreset(
       `Unknown preset "${args.preset_label}". Available: ${PRESET_SCALES.map((p) => p.label).join(', ')}`
     );
   }
-  await assertNoMixedUnitItems(env, args.project_id, args.page_index, preset.unit);
-  const prevUnit = await capturePrevUnit(env, args.project_id, args.page_index);
   const scale: ScaleCalibration = {
     isSet: true,
     pixelsPerUnit: preset.pointsPerUnit,
     unit: preset.unit,
   };
-  await upsertPage(env.DB, args.project_id, args.page_index, { scale });
-  await recomputeShapesForPage(env, args.project_id, args.page_index, scale, prevUnit);
+  await applyScale(env, args.project_id, args.page_index, scale);
   return scale;
 }
 
@@ -264,14 +290,11 @@ export async function setScaleManual(
   if (pixelDistance <= 0) throw new Error('Calibration points are identical');
   if (args.real_distance <= 0) throw new Error('Real distance must be > 0');
 
-  await assertNoMixedUnitItems(env, args.project_id, args.page_index, args.unit);
-  const prevUnit = await capturePrevUnit(env, args.project_id, args.page_index);
   const scale: ScaleCalibration = {
     isSet: true,
     pixelsPerUnit: pixelDistance / args.real_distance,
     unit: args.unit,
   };
-  await upsertPage(env.DB, args.project_id, args.page_index, { scale });
-  await recomputeShapesForPage(env, args.project_id, args.page_index, scale, prevUnit);
+  await applyScale(env, args.project_id, args.page_index, scale);
   return scale;
 }
