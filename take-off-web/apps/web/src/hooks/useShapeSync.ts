@@ -129,10 +129,29 @@ export interface SyncStatus {
   isIdle: () => boolean;
 }
 
-export function useShapeSync(projectId: string | null, items: TakeoffItem[]): SyncStatus {
+export interface ShapeSyncStatus extends SyncStatus {
+  /** Re-run the diff now (e.g. once writes it was holding may go out). */
+  wake: () => void;
+}
+
+export function useShapeSync(
+  projectId: string | null,
+  items: TakeoffItem[],
+  // True while a page's calibration hasn't been accepted by the worker
+  // (useScaleSync's isPagePending). Writes for shapes on that page, and for
+  // items with shapes there, are held until it is: they carry values,
+  // units and depths derived from that calibration, and the shape PUT
+  // stores the client's value, so they must not land beside a scale the
+  // worker refused.
+  isPageScalePending?: (pageIndex: number) => boolean
+): ShapeSyncStatus {
+  const isPageScalePendingRef = useRef(isPageScalePending);
+  isPageScalePendingRef.current = isPageScalePending;
   const itemSnapshots = useRef<Map<string, ItemSnapshot>>(new Map());
   const shapeSnapshots = useRef<Map<string, ShapeSnapshot>>(new Map());
   const inflight = useRef<Map<string, SyncOp>>(new Map());
+  // Keys whose writes the last pass held behind a pending page calibration.
+  const held = useRef<Set<string>>(new Set());
   const lastProjectId = useRef<string | null>(null);
 
   // Refs can't trigger a re-render on their own — every settled in-flight op
@@ -154,6 +173,7 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): Sy
         itemSnapshots.current = new Map();
         shapeSnapshots.current = new Map();
         inflight.current = new Map();
+        held.current = new Set();
       }
       return;
     }
@@ -164,6 +184,7 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): Sy
       itemSnapshots.current = new Map();
       shapeSnapshots.current = new Map();
       inflight.current = new Map();
+      held.current = new Set();
       backoff.reset();
       for (const item of items) {
         itemSnapshots.current.set(item.id, snapshotItem(item));
@@ -192,6 +213,10 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): Sy
       if (ok) backoff.succeeded(key);
       else backoff.failed(key);
     };
+
+    const scalePending = (pageIndex: number) => isPageScalePendingRef.current?.(pageIndex) ?? false;
+    const heldNow = new Set<string>();
+    held.current = heldNow;
 
     // Build the next-state maps so we can diff against the previous snapshot.
     const nextItems = new Map<string, TakeoffItem>();
@@ -229,6 +254,10 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): Sy
       if (inflightOps.has(`item:${itemId}`)) continue;
       if (backoff.isBackingOff(`item:${itemId}`)) continue;
       const prev = itemSnaps.get(itemId);
+      if (item.shapes.some((s) => scalePending(s.pageIndex))) {
+        if (!prev || itemChanged(prev, snapshotItem(item))) heldNow.add(`item:${itemId}`);
+        continue;
+      }
       if (!prev) {
         // New item — POST it. Snapshot is set ONLY on success so a transient
         // failure leaves no "marked synced" state and the next diff retries.
@@ -331,6 +360,10 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): Sy
       if (backoff.isBackingOff(`shape:${shapeId}`)) continue;
       const prev = shapeSnaps.get(shapeId);
       const nextSnap = snapshotShape(item, shape);
+      if (scalePending(shape.pageIndex)) {
+        if (!prev || shapeChanged(prev, nextSnap)) heldNow.add(`shape:${shapeId}`);
+        continue;
+      }
 
       if (!prev) {
         // Skip if the item hasn't been created server-side yet — the next
@@ -485,10 +518,10 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): Sy
   // to hold off reviewing/pushing a quote, or switching projects, while
   // local edits haven't reached the server yet.
   const isIdle = useCallback(
-    () => inflight.current.size === 0 && !backoff.hasPendingFailures(),
+    () => inflight.current.size === 0 && held.current.size === 0 && !backoff.hasPendingFailures(),
     [backoff]
   );
-  return { isIdle };
+  return { isIdle, wake: backoff.wake };
 }
 
 export function primeShapeSyncFromServerState(

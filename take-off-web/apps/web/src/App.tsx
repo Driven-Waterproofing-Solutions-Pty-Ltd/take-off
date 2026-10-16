@@ -112,11 +112,20 @@ const AppContent: React.FC = () => {
     setViewMode('estimates');
   };
 
-  // Persist every local state change back to D1 + R2.
-  const shapeSync = useShapeSync(projectId, items);
-  const scaleSync = useScaleSync(projectId, projectData, (page, reason) =>
-    addToast(`The server kept the previous scale for page ${page + 1}: ${reason}`, 'error')
+  // Persist every local state change back to D1 + R2. Scale sync runs first:
+  // shape/item writes for a page wait until its calibration is accepted, and
+  // go out once it has synced.
+  const scaleSync = useScaleSync(
+    projectId,
+    projectData,
+    (page, reason) =>
+      addToast(
+        `The server kept the previous scale for page ${page + 1}: ${reason} Undo the calibration — changes on that page won't save until it matches.`,
+        'error'
+      ),
+    () => shapeSync.wake()
   );
+  const shapeSync = useShapeSync(projectId, items, scaleSync.isPagePending);
   // True when every local edit has reached the worker (nothing in flight,
   // nothing waiting to retry). Gates quote review/push and project switches.
   const isSyncIdle = () => shapeSync.isIdle() && scaleSync.isIdle();
@@ -814,6 +823,30 @@ const AppContent: React.FC = () => {
     if (conflictItem) {
       addToast(
         `Can't recalibrate to ${unit}: "${conflictItem.label}" also has shapes on other pages with a different unit. Recalibrate those pages first, or split the item.`,
+        'error'
+      );
+      return;
+    }
+    // Mirrors the worker's assertAssembliesSurviveRetag: a unit change would
+    // retag an assembly-priced item (sq m → sq ft…) while its assembly stays
+    // priced in the old unit. The browser doesn't hold assembly units, so
+    // refuse for any assembly-linked item on this page whose unit would change.
+    const retaggedUnit = (type: ToolType): string | null =>
+      type === ToolType.AREA || type === ToolType.FILL
+        ? getAreaUnitFromLinear(unit)
+        : type === ToolType.VOLUME
+          ? getVolumeUnitFromLinear(unit)
+          : type === ToolType.LINEAR || type === ToolType.ARC || type === ToolType.SEGMENT || type === ToolType.DIMENSION
+            ? unit
+            : null;
+    const assemblyConflict = items.find((item) => {
+      if (!item.assemblyId || !item.shapes.some((s) => s.pageIndex === pageIndex)) return false;
+      const next = retaggedUnit(item.type);
+      return next !== null && next !== item.unit;
+    });
+    if (assemblyConflict) {
+      addToast(
+        `Can't recalibrate to ${unit}: "${assemblyConflict.label}" is priced by an assembly in ${assemblyConflict.unit}. Detach or replace the assembly first.`,
         'error'
       );
       return;

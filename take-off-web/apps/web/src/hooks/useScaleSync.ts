@@ -32,16 +32,31 @@ function rejectionMessage(e: unknown): string | null {
   }
 }
 
+export interface ScaleSyncStatus extends SyncStatus {
+  /**
+   * True while `pageIndex`'s local calibration hasn't been accepted by the
+   * worker (unsent, in flight, waiting to retry, or refused).
+   */
+  isPagePending: (pageIndex: number) => boolean;
+}
+
 export function useScaleSync(
   projectId: string | null,
   projectData: ProjectData,
   // Called once per distinct refusal (4xx) of a page's calibration push —
   // e.g. the worker refusing a recalibration that would mix units or
   // mis-price an assembly — so the user learns the server kept the old scale.
-  onScaleRejected?: (pageIndex: number, message: string) => void
-): SyncStatus {
+  onScaleRejected?: (pageIndex: number, message: string) => void,
+  // Called after a page's calibration (or its removal) has synced, so
+  // writes held behind it (see isPagePending) can go out.
+  onScaleSynced?: () => void
+): ScaleSyncStatus {
   const onScaleRejectedRef = useRef(onScaleRejected);
   onScaleRejectedRef.current = onScaleRejected;
+  const onScaleSyncedRef = useRef(onScaleSynced);
+  onScaleSyncedRef.current = onScaleSynced;
+  const projectDataRef = useRef(projectData);
+  projectDataRef.current = projectData;
   const lastRejection = useRef<Map<number, string>>(new Map());
   const lastProjectId = useRef<string | null>(null);
   const snapshots = useRef<Map<number, string>>(new Map());
@@ -183,6 +198,7 @@ export function useScaleSync(
             .then((ok) => {
               scaleInflight.delete(pageIndex);
               settle(retryKey, ok);
+              if (ok && isCurrent()) onScaleSyncedRef.current?.();
             });
         }
       } else if (scale) {
@@ -211,6 +227,7 @@ export function useScaleSync(
             .then((ok) => {
               scaleInflight.delete(pageIndex);
               settle(retryKey, ok);
+              if (ok && isCurrent()) onScaleSyncedRef.current?.();
             });
         }
       }
@@ -279,5 +296,19 @@ export function useScaleSync(
       !backoff.hasPendingFailures(),
     [backoff]
   );
-  return { isIdle };
+  // useShapeSync holds a page's derived writes (recomputed shape values,
+  // retagged item units and depths) while this is true. The shape PUT
+  // stores the client's value, so sending them beside a recalibration the
+  // worker then refused left D1 with the old scale and new-scale quantities.
+  const isPagePending = useCallback((pageIndex: number) => {
+    if (lastProjectId.current === null) return false;
+    if (inflight.current.has(pageIndex)) return true;
+    const scale = projectDataRef.current[pageIndex]?.scale;
+    if (!scale) return false;
+    const prev = snapshots.current.get(pageIndex);
+    if (scale.isSet) return prev !== scaleKey(scale);
+    return prev !== undefined && prev !== 'unset';
+  }, []);
+
+  return { isIdle, isPagePending };
 }
