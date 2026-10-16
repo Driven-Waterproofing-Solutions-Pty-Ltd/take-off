@@ -135,6 +135,60 @@
   }
 }
 
+/* ── Print styles for Job Sheet ───────────────────────────────────────────── */
+/* XeroView adds .job-sheet-print to <html> only while the job sheet is on
+   screen, so printing any other view is unaffected. */
+@media print {
+  /* Use visibility so only the .printable area renders */
+  html.job-sheet-print body {
+    visibility: hidden;
+  }
+
+  html.job-sheet-print .printable,
+  html.job-sheet-print .printable * {
+    visibility: visible;
+  }
+
+  html.job-sheet-print .printable {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    padding: 20mm !important;
+    background: white !important;
+    font-size: 10pt !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  /* The app shell is a fixed-height, overflow-clipped flex layout, which would
+     cut a long job sheet off at the first page. Where :has() is available,
+     let every ancestor of the job sheet grow and flow normally, and drop all
+     other UI from the layout so it cannot add blank pages. */
+  @supports selector(:has(*)) {
+    html.job-sheet-print,
+    html.job-sheet-print body,
+    html.job-sheet-print :has(.printable) {
+      display: block !important;
+      position: static !important;
+      height: auto !important;
+      min-height: 0 !important;
+      max-height: none !important;
+      overflow: visible !important;
+    }
+
+    html.job-sheet-print body :not(.printable, .printable *, :has(.printable)) {
+      display: none !important;
+    }
+
+    html.job-sheet-print .printable {
+      position: static !important;
+    }
+  }
+}
+
 /* P7: Enlarge icon-button touch targets on coarse pointers (touch) only.
    Desktop (fine pointer / hover) keeps its existing pixel sizes. */
 @media (pointer: coarse) {
