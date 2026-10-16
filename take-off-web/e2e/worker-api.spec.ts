@@ -554,3 +554,65 @@ test('Xero push refuses a quote that changed after review', async () => {
   expect(fresh.body.error).not.toMatch(/changed after it was reviewed/);
   expect(fresh.body.error).toMatch(/Xero is not connected/);
 });
+
+test('server recalibration converts VOLUME items and totals in bulk', async () => {
+  const call = await bearerClient();
+  const projectId = await newProject(call, 'Bulk recal');
+  // 1/4" = 1'0" → 18 PDF points per foot.
+  expect(
+    (await call('POST', '/api/measure/scale/preset', {
+      project_id: projectId,
+      page_index: 0,
+      preset_label: '1/4" = 1\'0"',
+    })).status
+  ).toBe(200);
+  const slab = crypto.randomUUID();
+  expect(
+    (await call('POST', '/api/measure/items', {
+      project_id: projectId,
+      id: slab,
+      label: 'Slab',
+      type: 'VOLUME',
+      color: '#10b981',
+      unit: 'cu ft',
+      depth: 1,
+    })).status
+  ).toBe(200);
+  // 30 shapes of 10 ft × 10 ft on one page.
+  const side = 10 * 18;
+  for (let i = 0; i < 30; i++) {
+    const x = i * (side + 5);
+    const res = await call('POST', '/api/measure/shapes/area', {
+      project_id: projectId,
+      page_index: 0,
+      item_id: slab,
+      snap: false,
+      points: [
+        { x, y: 0 },
+        { x: x + side, y: 0 },
+        { x: x + side, y: side },
+        { x, y: side },
+      ],
+    });
+    expect(res.status).toBe(200);
+  }
+  let item = (await listItems(call, projectId)).find((i) => i.id === slab)!;
+  expect(item.totalValue).toBeCloseTo(30 * 100 * 1, 3); // sq ft × 1 ft
+
+  // Recalibrate to metres with the same 18 points per unit: each square is
+  // now 10 m × 10 m, depth 1 ft → 0.3048 m.
+  expect(
+    (await call('POST', '/api/measure/scale/manual', {
+      project_id: projectId,
+      page_index: 0,
+      p1: { x: 0, y: 0 },
+      p2: { x: 18, y: 0 },
+      real_distance: 1,
+      unit: 'm',
+    })).status
+  ).toBe(200);
+  item = (await listItems(call, projectId)).find((i) => i.id === slab)!;
+  expect(item.unit).toBe('cu m');
+  expect(item.shapes.every((s) => Math.abs(s.value - 100) < 1e-6)).toBe(true);
+  expect(item.totalValue).toBeCloseTo(30 * 100 * 0.3048, 3);
+});

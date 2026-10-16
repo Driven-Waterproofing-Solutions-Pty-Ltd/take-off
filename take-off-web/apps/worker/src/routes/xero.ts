@@ -188,26 +188,25 @@ app.get('/oauth/callback', async (c) => {
   const encAccess = await encryptString(secret, token.access_token);
   const encRefresh = await encryptString(secret, token.refresh_token);
   const expires_at = Date.now() + token.expires_in * 1000;
-  await c.env.DB.prepare(
-    `INSERT INTO xero_tokens (tenant_id, tenant_name, access_token, refresh_token, expires_at, scopes, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(tenant_id) DO UPDATE SET
-       tenant_name = excluded.tenant_name,
-       access_token = excluded.access_token,
-       refresh_token = excluded.refresh_token,
-       expires_at = excluded.expires_at,
-       updated_at = excluded.updated_at`
-  )
-    .bind(
-      tenant.tenantId,
-      tenant.tenantName,
-      encAccess,
-      encRefresh,
-      expires_at,
-      XERO_SCOPES,
-      Date.now()
-    )
-    .run();
+  // The integration holds ONE active connection (getActiveXeroToken uses the
+  // newest row). Replace any other tenant's row in the same transaction:
+  // otherwise a refresh for the previous tenant that was already in flight
+  // could bump that row's updated_at past the new one and silently switch
+  // pushes back to the old organisation.
+  const now = Date.now();
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM xero_tokens WHERE tenant_id != ?').bind(tenant.tenantId),
+    c.env.DB.prepare(
+      `INSERT INTO xero_tokens (tenant_id, tenant_name, access_token, refresh_token, expires_at, scopes, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(tenant_id) DO UPDATE SET
+         tenant_name = excluded.tenant_name,
+         access_token = excluded.access_token,
+         refresh_token = excluded.refresh_token,
+         expires_at = excluded.expires_at,
+         updated_at = excluded.updated_at`
+    ).bind(tenant.tenantId, tenant.tenantName, encAccess, encRefresh, expires_at, XERO_SCOPES, now),
+  ]);
 
   c.header(
     'Set-Cookie',

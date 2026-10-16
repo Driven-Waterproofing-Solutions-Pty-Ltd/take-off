@@ -117,6 +117,13 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
     return jsonRpcError(null, -32700, 'Parse error: invalid JSON', undefined, 400);
   }
 
+  // JSON-RPC notifications (no `id`, e.g. `notifications/initialized` right
+  // after `initialize`) must not get a JSON-RPC response; Streamable HTTP
+  // acknowledges them with 202 and an empty body.
+  if (body.id === undefined) {
+    return new Response(null, { status: 202 });
+  }
+
   if (body.method === 'initialize') {
     return jsonRpcResult(body.id, {
       protocolVersion: '2025-06-18',

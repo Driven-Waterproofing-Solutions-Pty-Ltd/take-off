@@ -16,7 +16,7 @@ import {
 } from '@takeoff/shared';
 import type { D1PreparedStatement } from '@cloudflare/workers-types';
 import type { Env } from '../env';
-import { getPage, parseScale, upsertPage, upsertPageStatement, recalcItemTotalStatement } from '../db/queries';
+import { getPage, parseScale, upsertPage, upsertPageStatement } from '../db/queries';
 
 interface ShapeRowMin {
   id: string;
@@ -42,10 +42,12 @@ interface ItemRowMin {
  * handleUpdateScale recompute loop so REST/MCP scale changes match.
  *
  * Returns the write statements instead of running them: applyScale commits
- * them together with the new page scale in ONE db.batch() transaction.
- * Running a statement per shape after the scale had already been saved could
- * exceed D1's per-invocation query limit on a busy page and fail half-way,
- * leaving the new scale beside a mix of old and new shape values.
+ * them together with the new page scale in ONE db.batch() transaction, so a
+ * failure can't leave the new scale beside half-rewritten values. The writes
+ * are SET-BASED — at most three statements however many shapes/items the
+ * page has (new values travel as one JSON parameter expanded with
+ * json_each) — because every statement in a batch still counts toward D1's
+ * per-invocation query limit (50 on Workers Free).
  */
 async function recomputeStatementsForPage(
   env: Env,
@@ -56,7 +58,8 @@ async function recomputeStatementsForPage(
 ): Promise<D1PreparedStatement[]> {
   const ppu = scale.pixelsPerUnit;
   if (!Number.isFinite(ppu) || ppu <= 0) return [];
-  const stmts: D1PreparedStatement[] = [];
+  const shapeValues: Array<{ id: string; value: number }> = [];
+  const itemUpdates: Array<{ id: string; unit: string; depth: number | null }> = [];
 
   const shapeRows = (
     await env.DB.prepare(
@@ -112,7 +115,7 @@ async function recomputeStatementsForPage(
     } else {
       continue; // COUNT / NOTE carry annotation/count semantics independent of scale
     }
-    stmts.push(env.DB.prepare('UPDATE shapes SET value = ? WHERE id = ?').bind(nextValue, row.id));
+    shapeValues.push({ id: row.id, value: nextValue });
   }
 
   // Retune item units (AREA→sq_m, VOLUME→cu_m, LINEAR→m) and recompute totals.
@@ -143,27 +146,57 @@ async function recomputeStatementsForPage(
         prevUnit &&
         prevUnit !== scale.unit
       ) {
-        const nextDepth = convertLinearUnit(row.depth, prevUnit, scale.unit);
-        stmts.push(
-          env.DB.prepare('UPDATE items SET unit = ?, depth = ?, updated_at = ? WHERE id = ?').bind(
-            nextUnit,
-            nextDepth,
-            Date.now(),
-            row.id
-          )
-        );
+        itemUpdates.push({
+          id: row.id,
+          unit: nextUnit,
+          depth: convertLinearUnit(row.depth, prevUnit, scale.unit),
+        });
       } else {
-        stmts.push(
-          env.DB.prepare('UPDATE items SET unit = ?, updated_at = ? WHERE id = ?').bind(
-            nextUnit,
-            Date.now(),
-            row.id
-          )
-        );
+        // depth null = keep the stored depth (COALESCE below).
+        itemUpdates.push({ id: row.id, unit: nextUnit, depth: null });
       }
     }
-    stmts.push(recalcItemTotalStatement(env.DB, row.id));
   }
+
+  const now = Date.now();
+  const stmts: D1PreparedStatement[] = [];
+  if (shapeValues.length > 0) {
+    const payload = JSON.stringify(shapeValues);
+    stmts.push(
+      env.DB.prepare(
+        `UPDATE shapes
+            SET value = (SELECT json_extract(j.value, '$.value') FROM json_each(?1) j
+                          WHERE json_extract(j.value, '$.id') = shapes.id)
+          WHERE id IN (SELECT json_extract(value, '$.id') FROM json_each(?1))`
+      ).bind(payload)
+    );
+  }
+  if (itemUpdates.length > 0) {
+    const payload = JSON.stringify(itemUpdates);
+    stmts.push(
+      env.DB.prepare(
+        `UPDATE items
+            SET unit = (SELECT json_extract(j.value, '$.unit') FROM json_each(?1) j
+                         WHERE json_extract(j.value, '$.id') = items.id),
+                depth = COALESCE((SELECT json_extract(j.value, '$.depth') FROM json_each(?1) j
+                                   WHERE json_extract(j.value, '$.id') = items.id), depth),
+                updated_at = ?2
+          WHERE id IN (SELECT json_extract(value, '$.id') FROM json_each(?1))`
+      ).bind(payload, now)
+    );
+  }
+  // Every item with a shape on this page gets its total recomputed from the
+  // (just updated) shape values — one statement for all of them.
+  stmts.push(
+    env.DB.prepare(
+      `UPDATE items
+          SET total_value = (SELECT COALESCE(SUM(CASE WHEN s.deduction = 1 THEN -s.value ELSE s.value END), 0)
+                               FROM shapes s WHERE s.item_id = items.id),
+              updated_at = ?2
+        WHERE project_id = ?1
+          AND id IN (SELECT item_id FROM shapes WHERE page_index = ?3)`
+    ).bind(projectId, now, pageIndex)
+  );
   return stmts;
 }
 

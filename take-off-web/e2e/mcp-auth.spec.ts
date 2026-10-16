@@ -33,3 +33,14 @@ test('MCP endpoint rejects the bootstrap secret as a bearer token', async () => 
   });
   expect(withClientToken.status).toBe(200);
 });
+
+test('MCP notifications are acknowledged without a JSON-RPC body', async () => {
+  const token = await mintToken();
+  const res = await fetch(`${WORKER}/mcp`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+  });
+  expect(res.status).toBe(202);
+  expect(await res.text()).toBe('');
+});
