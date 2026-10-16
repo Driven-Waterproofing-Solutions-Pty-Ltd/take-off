@@ -19,9 +19,18 @@ app.post('/', async (c) => {
   return c.json({ id, name: body.name, created_at: now });
 });
 
+// Most recently worked-on first. projects.updated_at only moves on create,
+// so recency also takes the newest item write: items.updated_at is bumped by
+// every item create/update and every shape write (via the item total
+// recalc). Without it an actively edited older project sank, and past 100
+// projects fell off this capped list.
 app.get('/', async (c) => {
   const rows = await c.env.DB.prepare(
-    'SELECT id, name, customer_id, created_at, updated_at FROM projects ORDER BY updated_at DESC LIMIT 100'
+    `SELECT p.id, p.name, p.customer_id, p.created_at,
+            MAX(p.updated_at, COALESCE((SELECT MAX(i.updated_at) FROM items i WHERE i.project_id = p.id), 0)) AS updated_at
+       FROM projects p
+      ORDER BY updated_at DESC
+      LIMIT 100`
   ).all();
   return c.json(rows.results);
 });

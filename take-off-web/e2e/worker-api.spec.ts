@@ -482,6 +482,30 @@ test('server recalibration refuses to retag an assembly-priced item', async () =
   expect(item.totalValue).toBeCloseTo(25, 1);
 });
 
+test('project list puts the most recently edited project first', async () => {
+  const call = await bearerClient();
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
+  const older = await newProject(call, 'Recency older');
+  await tick();
+  const newer = await newProject(call, 'Recency newer');
+  const order = async () => {
+    const res = await call<Array<{ id: string }>>('GET', '/api/projects');
+    expect(res.status).toBe(200);
+    const ids = res.body.map((p) => p.id);
+    return { older: ids.indexOf(older), newer: ids.indexOf(newer) };
+  };
+  let pos = await order();
+  expect(pos.newer).toBeGreaterThanOrEqual(0);
+  expect(pos.newer).toBeLessThan(pos.older);
+
+  // Working on the older project moves it back to the top.
+  await tick();
+  await newItem(call, older, 'COUNT', 'EA');
+  pos = await order();
+  expect(pos.older).toBeGreaterThanOrEqual(0);
+  expect(pos.older).toBeLessThan(pos.newer);
+});
+
 test('projects with more than 100 items still hydrate and quote', async () => {
   const call = await bearerClient();
   const projectId = await newProject(call, 'Many items');
