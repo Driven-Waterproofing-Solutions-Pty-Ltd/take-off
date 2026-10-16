@@ -11,24 +11,12 @@ import {
   Unit,
 } from '@takeoff/shared';
 import type { Env } from '../env';
-import {
-  getOrCreateItem,
-  insertShape,
-  recalcItemTotal,
-  getPage,
-  parseScale,
-} from '../db/queries';
-import { snapToVector } from './snap';
+import { getOrCreateItem, persistShape, getPage, parseScale } from '../db/queries';
+import { snapPdfPoints } from './snap';
 
-// Vector cache is uploaded from the canvas in RENDER_SCALE × PDF-point space
-// (see apps/web/src/utils/vectorExtractor.ts), but shapes round-trip through
-// the REST/MCP surface in PDF-point space. Without this conversion the snap
-// compares a point near PDF (100, 100) against cache geometry near (200, 200),
-// so either no snap fires or it snaps to cache coords that then get stored as
-// shape points = double-sized geometry. Mirrors the agentTools snap_to_vector
-// executor — keep both in lockstep.
-const VECTOR_CACHE_SCALE = 2;
-
+// Shapes round-trip through REST/MCP in PDF-point space; snapPdfPoints does
+// the PDF-point ↔ vector-cache-space conversion (shared with the MCP and REST
+// snap_to_vector handlers so all three stay in lockstep).
 async function maybeSnap(
   env: Env,
   projectId: string,
@@ -37,19 +25,12 @@ async function maybeSnap(
   snap: boolean | undefined
 ): Promise<Point[]> {
   if (snap === false) return points;
-  const scaled = points.map((p) => ({
-    x: p.x * VECTOR_CACHE_SCALE,
-    y: p.y * VECTOR_CACHE_SCALE,
-  }));
-  const { snapped } = await snapToVector(env, {
+  const { snapped } = await snapPdfPoints(env, {
     project_id: projectId,
     page_index: pageIndex,
-    points: scaled,
+    points,
   });
-  return snapped.map((p) => ({
-    x: p.x / VECTOR_CACHE_SCALE,
-    y: p.y / VECTOR_CACHE_SCALE,
-  }));
+  return snapped;
 }
 
 interface AddCommon {
@@ -95,8 +76,7 @@ export async function addArea(
     value,
     deduction: args.deduction,
   };
-  await insertShape(env.DB, shape);
-  await recalcItemTotal(env.DB, item.id);
+  await persistShape(env.DB, shape);
   const { itemId: _itemId, ...result } = shape;
   return result;
 }
@@ -129,8 +109,7 @@ export async function addLinear(
     value,
     deduction: args.deduction,
   };
-  await insertShape(env.DB, shape);
-  await recalcItemTotal(env.DB, item.id);
+  await persistShape(env.DB, shape);
   const { itemId: _itemId, ...result } = shape;
   return result;
 }
@@ -155,8 +134,7 @@ export async function addCount(
     value: args.points.length,
     deduction: args.deduction,
   };
-  await insertShape(env.DB, shape);
-  await recalcItemTotal(env.DB, item.id);
+  await persistShape(env.DB, shape);
   const { itemId: _itemId, ...result } = shape;
   return result;
 }
@@ -184,8 +162,7 @@ export async function addNote(
     text: args.text,
     deduction: args.deduction,
   };
-  await insertShape(env.DB, shape);
-  await recalcItemTotal(env.DB, item.id);
+  await persistShape(env.DB, shape);
   const { itemId: _itemId, ...result } = shape;
   return result;
 }
@@ -218,8 +195,7 @@ export async function addArc(
     value,
     deduction: args.deduction,
   };
-  await insertShape(env.DB, shape);
-  await recalcItemTotal(env.DB, item.id);
+  await persistShape(env.DB, shape);
   const { itemId: _itemId, ...result } = shape;
   return result;
 }

@@ -189,13 +189,22 @@ export const tools = {
     output: ShapeZ,
   },
   add_arc: {
-    description: 'Add a single ARC segment between two points with a bulge factor.',
+    description:
+      'Add a single circular ARC segment between two points. `bulge` is HALF the arc\'s included angle in radians (not the DXF tan(θ/4) bulge factor).',
     input: z.object({
       project_id: z.string(),
       page_index: z.number().int().min(0),
       start: PointZ,
       end: PointZ,
-      bulge: z.number(),
+      // calculateArcLength (shared by the worker, the canvas and stored D1
+      // rows) uses radius = chord / (2·sin|bulge|), length = radius · 2|bulge|.
+      // Spell that out so MCP/agent callers don't pass a DXF bulge factor
+      // (tan(θ/4)) and get an under-counted length.
+      bulge: z
+        .number()
+        .describe(
+          'Half of the included angle in radians; sign = side of the chord. 0 = straight line, π/4 ≈ 0.7854 = quarter circle, π/2 ≈ 1.5708 = semicircle. NOT the DXF tan(θ/4) bulge factor.'
+        ),
       item_id: z.string().optional(),
       shape_id: z.string().optional(),
       name: z.string().optional(),

@@ -69,3 +69,25 @@ export async function snapToVector(
   const snapped = args.points.map((p) => snapOne(p, cache, tol));
   return { snapped };
 }
+
+// The vector cache is uploaded from the canvas in RENDER_SCALE × PDF-point
+// space (see apps/web/src/utils/vectorExtractor.ts), but every public caller
+// (REST /api/measure/snap, MCP snap_to_vector, add_area/add_linear) works in
+// PDF-point space — the same space shapes are stored in. Scale across that
+// boundary in ONE place so a point near PDF (100, 100) is compared against
+// cache geometry near (200, 200) and the snapped result comes back in PDF
+// points. `tolerance_px` stays in cache pixels (unchanged contract).
+export const VECTOR_CACHE_SCALE = 2;
+
+export async function snapPdfPoints(
+  env: Env,
+  args: { project_id: string; page_index: number; points: Point[]; tolerance_px?: number }
+): Promise<{ snapped: Point[] }> {
+  const { snapped } = await snapToVector(env, {
+    ...args,
+    points: args.points.map((p) => ({ x: p.x * VECTOR_CACHE_SCALE, y: p.y * VECTOR_CACHE_SCALE })),
+  });
+  return {
+    snapped: snapped.map((p) => ({ x: p.x / VECTOR_CACHE_SCALE, y: p.y / VECTOR_CACHE_SCALE })),
+  };
+}

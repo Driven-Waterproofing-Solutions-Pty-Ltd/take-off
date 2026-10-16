@@ -24,12 +24,6 @@ export interface AgentToolContext {
 // trip the model's image-resize.
 const MAX_IMAGE_EDGE = 1568;
 
-// Vector cache (used by snap_to_vector) lives in 2× content-pixel space —
-// see vectorExtractor.ts and the canvas's shapeRenderScale. The agent works
-// in PDF-point space (matches add_*/set_scale_*); scale points across that
-// boundary when calling snap so the agent never sees the discrepancy.
-const VECTOR_CACHE_SCALE = 2;
-
 interface ToolUseBlock {
   type: 'tool_use';
   id: string;
@@ -251,28 +245,16 @@ export async function executeAgentTool(
       }
 
       case 'snap_to_vector': {
-        // Agent works in PDF-point space; vector cache lives in 2× space.
-        // Scale across the boundary so the snap is meaningful — otherwise
-        // every PDF-point coord lands ~8 px from the nearest cache vertex
-        // and snap silently returns the input untouched.
-        const requested = (input.points as Point[]) ?? [];
-        const scaled = requested.map((p) => ({
-          x: p.x * VECTOR_CACHE_SCALE,
-          y: p.y * VECTOR_CACHE_SCALE,
-        }));
+        // /api/measure/snap takes and returns PDF-point coordinates (the
+        // worker converts to/from vector-cache space itself, same as the MCP
+        // handler), so forward the agent's points untouched.
         const out = await api.snap({
           project_id: pid,
           page_index: Number(input.page_index),
-          points: scaled,
+          points: (input.points as Point[]) ?? [],
           tolerance_px: input.tolerance_px as number | undefined,
         });
-        return textResult(id, {
-          ...out,
-          snapped: out.snapped.map((p) => ({
-            x: p.x / VECTOR_CACHE_SCALE,
-            y: p.y / VECTOR_CACHE_SCALE,
-          })),
-        });
+        return textResult(id, out);
       }
 
       case 'list_items': {

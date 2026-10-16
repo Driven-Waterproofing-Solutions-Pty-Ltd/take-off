@@ -3,7 +3,7 @@ import type { Env } from '../env';
 import { tools } from '@takeoff/shared';
 import { setScalePreset, setScaleManual } from '../tools/scale';
 import { addArea, addLinear, addCount, addArc, addNote } from '../tools/measure';
-import { snapToVector } from '../tools/snap';
+import { snapPdfPoints } from '../tools/snap';
 import { listItems } from '../tools/memory';
 import { createItem, updateItem, deleteItem, deleteShape, updateShape } from '../tools/items';
 import { upsertPage } from '../db/queries';
@@ -63,10 +63,12 @@ app.post('/shapes/note', async (c) => {
   return c.json(await addNote(c.env, body));
 });
 
+// Points in and out are PDF-point space (same as add_* and MCP
+// snap_to_vector); snapPdfPoints handles the vector-cache scale.
 app.post('/snap', async (c) => {
   const body = await c.req.json();
   const input = tools.snap_to_vector.input.parse(body);
-  return c.json(await snapToVector(c.env, input));
+  return c.json(await snapPdfPoints(c.env, input));
 });
 
 app.get('/items/:projectId', async (c) => {

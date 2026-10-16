@@ -5,6 +5,7 @@ import {
   QuoteDraft,
   QuoteLineItem,
   toVariableName,
+  Unit,
 } from '@takeoff/shared';
 
 // VOLUME depth is folded into item.totalValue by rowToTakeoffItem on hydration.
@@ -176,18 +177,74 @@ export async function listAssemblies(
     .filter((a) => (args.tag ? a.tags?.includes(args.tag) : true));
 }
 
+// Canonical form of a quantity unit, or null when it isn't a measurement
+// unit we can reason about (material units like "Rolls", free-text units).
+// Assembly units are admin-entered free text, so accept the common spellings
+// of the measurement units the canvas produces.
+const UNIT_ALIASES: Record<string, string> = {
+  m2: 'sq m', 'm²': 'sq m', sqm: 'sq m', 'sq.m': 'sq m',
+  m3: 'cu m', 'm³': 'cu m', cum: 'cu m',
+  lm: 'm', 'lin m': 'm', 'l/m': 'm',
+  ft2: 'sq ft', 'ft²': 'sq ft', sqft: 'sq ft',
+  ft3: 'cu ft', 'ft³': 'cu ft',
+  lf: 'ft', 'lin ft': 'ft',
+  ea: 'EA', each: 'EA', no: 'EA', 'no.': 'EA', item: 'EA', items: 'EA',
+};
+const MEASUREMENT_UNITS = new Set<string>([
+  Unit.FEET, Unit.INCHES, Unit.YARDS, Unit.MILES,
+  Unit.METERS, Unit.CENTIMETERS, Unit.MILLIMETERS, Unit.KILOMETERS,
+  Unit.SQ_FT, Unit.SQ_IN, Unit.SQ_YD, Unit.SQ_MI, Unit.ACRES,
+  Unit.SQ_M, Unit.SQ_CM, Unit.SQ_MM, Unit.SQ_KM, Unit.HECTARES,
+  Unit.CU_FT, Unit.CU_IN, Unit.CU_YD, Unit.CU_MI,
+  Unit.CU_M, Unit.CU_CM, Unit.CU_MM, Unit.CU_KM,
+  Unit.EACH,
+]);
+function canonicalMeasurementUnit(unit: string | null | undefined): string | null {
+  if (!unit) return null;
+  const trimmed = unit.trim();
+  const aliased = UNIT_ALIASES[trimmed.toLowerCase()] ?? trimmed;
+  return MEASUREMENT_UNITS.has(aliased) ? aliased : null;
+}
+
+// Gate every path that stamps assembly_id onto an item (apply_assembly, raw
+// item create/update). buildQuote treats any truthy assemblyId as
+// authoritative — it emits the assembly's material/labour lines and skips the
+// item's own price/sub-item fallback — and multiplies assembly quantities by
+// the item's raw quantity. So:
+//   * a missing assembly makes the item vanish from the quote, and
+//   * a "sq m" assembly on a linear "m" (or "sq ft") item silently prices the
+//     wrong dimension.
+// Both are refused here. When either unit is free text we can't classify, the
+// attach is allowed (we can't prove a mismatch).
+export async function assertAssemblyAttachable(
+  env: Env,
+  assemblyId: string,
+  itemUnit: string
+): Promise<void> {
+  const assembly = (await env.DB.prepare('SELECT unit FROM assemblies WHERE id = ?')
+    .bind(assemblyId)
+    .first()) as { unit: string } | null;
+  if (!assembly) throw new Error(`Assembly ${assemblyId} not found`);
+  const assemblyUnit = canonicalMeasurementUnit(assembly.unit);
+  const measuredUnit = canonicalMeasurementUnit(itemUnit);
+  if (assemblyUnit && measuredUnit && assemblyUnit !== measuredUnit) {
+    throw new Error(
+      `Assembly ${assemblyId} is priced per "${assembly.unit}" but the item is measured in "${itemUnit}" — cannot attach it without the quote pricing the wrong dimension.`
+    );
+  }
+}
+
 export async function applyAssembly(
   env: Env,
   args: { project_id: string; item_id: string; assembly_id: string }
 ): Promise<TakeoffItem> {
-  // Validate the assembly exists before attaching it. Without this check, a
-  // typoed or deleted assembly_id would silently land on the item, and
-  // buildQuote would skip it (no material lines, no priced-item fallback),
-  // making the item disappear from generated quotes.
-  const exists = await env.DB.prepare('SELECT 1 FROM assemblies WHERE id = ?')
-    .bind(args.assembly_id)
-    .first();
-  if (!exists) throw new Error(`Assembly ${args.assembly_id} not found`);
+  const target = (await env.DB.prepare(
+    'SELECT unit FROM items WHERE id = ? AND project_id = ?'
+  )
+    .bind(args.item_id, args.project_id)
+    .first()) as { unit: string } | null;
+  if (!target) throw new Error(`Item ${args.item_id} not found in project ${args.project_id}`);
+  await assertAssemblyAttachable(env, args.assembly_id, target.unit);
 
   const res = await env.DB.prepare(
     'UPDATE items SET assembly_id = ?, updated_at = ? WHERE id = ? AND project_id = ?'

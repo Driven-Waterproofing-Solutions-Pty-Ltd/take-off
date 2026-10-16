@@ -132,22 +132,52 @@ export function parseScale(row: PageRow | null): ScaleCalibration {
   return JSON.parse(row.scale_json) as ScaleCalibration;
 }
 
-export async function insertShape(
+// Create-or-replace a shape by its client-supplied id, then recompute the
+// owning item's total (and the previous owner's, if the retry moved it).
+//
+// Idempotent across useShapeSync retries: the hook supplies client-side UUIDs
+// and only snapshots a shape as "synced" on a successful POST. If the first
+// POST committed but its response was lost, the retry arrives with the same
+// id — possibly carrying NEWER points / value / item_id because the user kept
+// editing in between. An upsert lands that latest payload; the previous
+// INSERT OR IGNORE kept the stale first row while the hook snapshotted the
+// newer local shape as synced, so the server never got repaired.
+//
+// A shape id that already belongs to another project's item is refused, so a
+// caller can't use the create path to pull a foreign shape into its project.
+export async function persistShape(
   db: D1Database,
   shape: Shape & { itemId: string }
 ): Promise<void> {
-  // INSERT OR IGNORE makes the create idempotent across useShapeSync
-  // retries. The hook supplies client-side UUIDs and only snapshots a
-  // shape as "synced" on a successful POST; if the original POST committed
-  // but the response was lost, the retry sent the same id and a plain
-  // INSERT hit the PK constraint with a 500. The hook then never
-  // snapshotted, and future edits/deletes either re-ran the create or
-  // were skipped — the row was stuck until the user reloaded the project.
-  // Same id + same caller = "already saved", return success.
+  const existing = (await db
+    .prepare(
+      `SELECT s.item_id, i.project_id FROM shapes s
+         JOIN items i ON i.id = s.item_id
+        WHERE s.id = ?`
+    )
+    .bind(shape.id)
+    .first()) as { item_id: string; project_id: string } | null;
+  if (existing && existing.item_id !== shape.itemId) {
+    const target = (await db
+      .prepare('SELECT project_id FROM items WHERE id = ?')
+      .bind(shape.itemId)
+      .first()) as { project_id: string } | null;
+    if (!target || target.project_id !== existing.project_id) {
+      throw new Error(`Shape ${shape.id} already exists in a different project`);
+    }
+  }
   await db
     .prepare(
-      `INSERT OR IGNORE INTO shapes (id, item_id, page_index, points_json, bulges_json, value, deduction, text, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO shapes (id, item_id, page_index, points_json, bulges_json, value, deduction, text, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         item_id = excluded.item_id,
+         page_index = excluded.page_index,
+         points_json = excluded.points_json,
+         bulges_json = excluded.bulges_json,
+         value = excluded.value,
+         deduction = excluded.deduction,
+         text = excluded.text`
     )
     .bind(
       shape.id,
@@ -161,6 +191,10 @@ export async function insertShape(
       Date.now()
     )
     .run();
+  await recalcItemTotal(db, shape.itemId);
+  if (existing && existing.item_id !== shape.itemId) {
+    await recalcItemTotal(db, existing.item_id);
+  }
 }
 
 // Measurement families that share a value unit and can land shapes on the

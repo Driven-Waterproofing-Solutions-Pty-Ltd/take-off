@@ -72,66 +72,6 @@ async function recomputeShapesForPage(
   ).results as unknown as ItemRowMin[];
   const itemTypeById = new Map(itemRows.map((r) => [r.id, r.type as ToolType]));
 
-  // Multi-page guard: for any item that also has shapes on pages other than
-  // `pageIndex`, check whether every other page already shares the new
-  // linear unit. If not, the item gets its shape values recomputed on this
-  // page but keeps its current global unit — relabeling would silently sum
-  // ft values from page 2 under an m label. Mirrors the browser App.tsx
-  // recalc guard added in the previous commit; without it REST/MCP recal
-  // still corrupted totals on multi-page items.
-  const otherPageRows = (
-    await env.DB.prepare(
-      `SELECT s.item_id, s.page_index
-       FROM shapes s JOIN items i ON i.id = s.item_id
-       WHERE i.project_id = ? AND s.page_index != ? AND s.item_id IN (${itemIds.map(() => '?').join(',')})`
-    )
-      .bind(projectId, pageIndex, ...itemIds)
-      .all()
-  ).results as Array<{ item_id: string; page_index: number }>;
-  const otherPagesByItem = new Map<string, Set<number>>();
-  for (const r of otherPageRows) {
-    const set = otherPagesByItem.get(r.item_id) ?? new Set<number>();
-    set.add(r.page_index);
-    otherPagesByItem.set(r.item_id, set);
-  }
-  const allOtherPageIndexes = Array.from(
-    new Set(otherPageRows.map((r) => r.page_index))
-  );
-  const otherPageUnitByIndex = new Map<number, Unit | null>();
-  if (allOtherPageIndexes.length > 0) {
-    const pageScaleRows = (
-      await env.DB.prepare(
-        `SELECT page_index, scale_json FROM pages
-         WHERE project_id = ? AND page_index IN (${allOtherPageIndexes.map(() => '?').join(',')})`
-      )
-        .bind(projectId, ...allOtherPageIndexes)
-        .all()
-    ).results as Array<{ page_index: number; scale_json: string | null }>;
-    for (const r of pageScaleRows) {
-      if (!r.scale_json) {
-        otherPageUnitByIndex.set(r.page_index, null);
-        continue;
-      }
-      try {
-        const parsed = JSON.parse(r.scale_json) as ScaleCalibration;
-        otherPageUnitByIndex.set(
-          r.page_index,
-          parsed.isSet ? parsed.unit : null
-        );
-      } catch {
-        otherPageUnitByIndex.set(r.page_index, null);
-      }
-    }
-  }
-  const safeToRetag = (itemId: string): boolean => {
-    const pages = otherPagesByItem.get(itemId);
-    if (!pages || pages.size === 0) return true;
-    for (const p of pages) {
-      if (otherPageUnitByIndex.get(p) !== scale.unit) return false;
-    }
-    return true;
-  };
-
   const areaUnit = getAreaUnitFromLinear(scale.unit);
   const volumeUnit = getVolumeUnitFromLinear(scale.unit);
 
@@ -176,7 +116,10 @@ async function recomputeShapesForPage(
     ) {
       nextUnit = scale.unit;
     }
-    if (nextUnit && nextUnit !== row.unit && safeToRetag(row.id)) {
+    // Safe to retag: assertNoMixedUnitItems ran before the scale was saved,
+    // so no scaled item on this page also has shapes on a page measured in
+    // a different unit.
+    if (nextUnit && nextUnit !== row.unit) {
       // VOLUME items carry a depth in the page's linear unit. The browser
       // recalibration path converts it before folding into totalValue so a
       // 1 ft depth becomes 0.3048 m on a ft→m switch — without the same
@@ -204,6 +147,73 @@ async function recomputeShapesForPage(
   }
 }
 
+/**
+ * Refuse a recalibration that would leave an item summing shape values in
+ * two different units. If a scaled item on `pageIndex` also has shapes on
+ * another page whose scale is unset or uses a different linear unit, changing
+ * this page would rewrite only this page's shape values; the item's single
+ * unit label can't describe both, so totals and quotes would mix e.g. metres
+ * with feet. Runs BEFORE anything is written (the previous guard only skipped
+ * the unit retag after the shape values had already been rewritten).
+ * COUNT/NOTE are unit-independent and never block. Mirrors the browser's
+ * pre-scan in App.tsx handleUpdateScale.
+ */
+async function assertNoMixedUnitItems(
+  env: Env,
+  projectId: string,
+  pageIndex: number,
+  unit: Unit
+): Promise<void> {
+  const rows = (
+    await env.DB.prepare(
+      `SELECT DISTINCT i.id, i.label, s.page_index
+         FROM items i
+         JOIN shapes s ON s.item_id = i.id
+        WHERE i.project_id = ?
+          AND i.type NOT IN ('COUNT', 'NOTE')
+          AND s.page_index != ?
+          AND i.id IN (
+                SELECT s2.item_id FROM shapes s2
+                  JOIN items i2 ON i2.id = s2.item_id
+                 WHERE i2.project_id = ? AND s2.page_index = ?)`
+    )
+      .bind(projectId, pageIndex, projectId, pageIndex)
+      .all()
+  ).results as Array<{ id: string; label: string; page_index: number }>;
+  if (rows.length === 0) return;
+
+  const otherPages = Array.from(new Set(rows.map((r) => r.page_index)));
+  const pageRows = (
+    await env.DB.prepare(
+      `SELECT page_index, scale_json FROM pages
+        WHERE project_id = ? AND page_index IN (${otherPages.map(() => '?').join(',')})`
+    )
+      .bind(projectId, ...otherPages)
+      .all()
+  ).results as Array<{ page_index: number; scale_json: string | null }>;
+  const unitByPage = new Map<number, Unit | null>();
+  for (const r of pageRows) {
+    let pageUnit: Unit | null = null;
+    if (r.scale_json) {
+      try {
+        const parsed = JSON.parse(r.scale_json) as ScaleCalibration;
+        pageUnit = parsed.isSet ? parsed.unit : null;
+      } catch {
+        pageUnit = null;
+      }
+    }
+    unitByPage.set(r.page_index, pageUnit);
+  }
+  for (const r of rows) {
+    const otherUnit = unitByPage.get(r.page_index) ?? null;
+    if (otherUnit !== unit) {
+      throw new Error(
+        `Cannot recalibrate page ${pageIndex} to "${unit}": item "${r.label}" also has shapes on page ${r.page_index}, which is ${otherUnit ? `measured in "${otherUnit}"` : 'not calibrated'}. Recalibrate that page first or split the item.`
+      );
+    }
+  }
+}
+
 async function capturePrevUnit(
   env: Env,
   projectId: string,
@@ -227,6 +237,7 @@ export async function setScalePreset(
       `Unknown preset "${args.preset_label}". Available: ${PRESET_SCALES.map((p) => p.label).join(', ')}`
     );
   }
+  await assertNoMixedUnitItems(env, args.project_id, args.page_index, preset.unit);
   const prevUnit = await capturePrevUnit(env, args.project_id, args.page_index);
   const scale: ScaleCalibration = {
     isSet: true,
@@ -253,6 +264,7 @@ export async function setScaleManual(
   if (pixelDistance <= 0) throw new Error('Calibration points are identical');
   if (args.real_distance <= 0) throw new Error('Real distance must be > 0');
 
+  await assertNoMixedUnitItems(env, args.project_id, args.page_index, args.unit);
   const prevUnit = await capturePrevUnit(env, args.project_id, args.page_index);
   const scale: ScaleCalibration = {
     isSet: true,
