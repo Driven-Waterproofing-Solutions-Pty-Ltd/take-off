@@ -391,7 +391,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                 DueDate: dueDate,
                 Reference: reference || projectName,
                 Status: 'DRAFT',
-                LineAmountTypes: 'EXCLUSIVE',
+                LineAmountTypes: 'Exclusive',
             });
 
             addToast(`Invoice ${result.InvoiceNumber} created in Xero!`, 'success');

@@ -38,6 +38,8 @@ export interface XeroAccount {
     Code: string;
     Name: string;
     Type: string;
+    Class?: string;
+    Status?: string;
 }
 
 export interface XeroTaxRate {
@@ -66,7 +68,7 @@ export interface XeroInvoicePayload {
     DueDate?: string;  // YYYY-MM-DD
     Reference?: string;
     Status?: 'DRAFT' | 'SUBMITTED' | 'AUTHORISED';
-    LineAmountTypes?: 'EXCLUSIVE' | 'INCLUSIVE' | 'NOTAX';
+    LineAmountTypes?: 'Exclusive' | 'Inclusive' | 'NoTax';
     CurrencyCode?: string;
 }
 
@@ -234,7 +236,12 @@ export const xeroService = {
 
         const response = await fetch('https://identity.xero.com/connect/token', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                // Xero authenticates PKCE refreshes with the client ID alone:
+                // Basic base64("<client_id>:"), keeping the trailing colon.
+                Authorization: `Basic ${btoa(`${clientId}:`)}`,
+            },
             body: body.toString(),
         });
 
@@ -275,7 +282,9 @@ export const xeroService = {
 
     async getContacts(accessToken: string, tenantId: string): Promise<XeroContact[]> {
         const res = await fetch(
-            'https://api.xero.com/api.xro/2.0/Contacts?where=IsCustomer%3D%3Dtrue&order=Name',
+            // All active contacts: IsCustomer only becomes true after a contact's
+            // first sales invoice, so filtering on it would hide new customers.
+            'https://api.xero.com/api.xro/2.0/Contacts?order=Name',
             {
                 headers: {
                     Authorization: `Bearer ${accessToken}`,
@@ -291,7 +300,8 @@ export const xeroService = {
 
     async getAccounts(accessToken: string, tenantId: string): Promise<XeroAccount[]> {
         const res = await fetch(
-            'https://api.xero.com/api.xro/2.0/Accounts?where=Type%3D%3D%22REVENUE%22&order=Name',
+            // Revenue class covers the REVENUE, SALES and OTHERINCOME account types.
+            'https://api.xero.com/api.xro/2.0/Accounts?where=Class%3D%3D%22REVENUE%22&order=Name',
             {
                 headers: {
                     Authorization: `Bearer ${accessToken}`,
@@ -301,8 +311,8 @@ export const xeroService = {
             }
         );
         if (!res.ok) throw new Error('Failed to fetch Xero accounts');
-        const data = await res.json();
-        return data.Accounts ?? [];
+        const data: { Accounts?: XeroAccount[] } = await res.json();
+        return (data.Accounts ?? []).filter((a) => !a.Status || a.Status === 'ACTIVE');
     },
 
     /** Active tax rates that can be applied to sales (revenue) lines. */

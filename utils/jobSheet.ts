@@ -144,6 +144,12 @@ export function addDays(date: Date, days: number): Date {
     return next;
 }
 
+/** DD/MM/YYYY, the date format Xero's invoice import expects for an Australian organisation. */
+export function toXeroCsvDate(iso: string): string {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+    return match ? `${match[3]}/${match[2]}/${match[1]}` : '';
+}
+
 /** Formats a YYYY-MM-DD string as an en-AU date without shifting it through UTC. */
 export function formatIsoDate(iso: string): string {
     const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
@@ -167,12 +173,19 @@ export interface XeroCsvOptions {
     currency: string;
 }
 
+/** Every column of Xero's sales invoice import template, in template order. */
 export const XERO_CSV_HEADERS = [
-    '*ContactName', 'EmailAddress', 'POAddressLine1', 'POCity',
-    '*InvoiceNumber', 'Reference', '*InvoiceDate', '*DueDate',
-    'Total', '*InventoryItemCode', '*Description', '*Quantity',
-    '*UnitAmount', 'Discount', '*AccountCode', '*TaxType', 'TaxAmount', 'Currency',
-];
+    '*ContactName', 'EmailAddress',
+    'POAddressLine1', 'POAddressLine2', 'POAddressLine3', 'POAddressLine4',
+    'POCity', 'PORegion', 'POPostalCode', 'POCountry',
+    '*InvoiceNumber', 'Reference', '*InvoiceDate', '*DueDate', 'Total',
+    'InventoryItemCode', '*Description', '*Quantity', '*UnitAmount', 'Discount',
+    '*AccountCode', '*TaxType', 'TaxAmount',
+    'TrackingName1', 'TrackingOption1', 'TrackingName2', 'TrackingOption2',
+    'Currency', 'BrandingTheme',
+] as const;
+
+type XeroCsvColumn = (typeof XERO_CSV_HEADERS)[number];
 
 /** Description used for a billable row on the Xero invoice (API and CSV alike). */
 export function xeroLineDescription(row: ComputedLineItem): string {
@@ -184,35 +197,33 @@ function csvCell(value: string): string {
 }
 
 /**
- * Builds a Xero sales-invoice import CSV. Every row shares one invoice number
- * so Xero imports a single invoice, and each line is quantity 1 at the line
- * total, exactly like the API path, so both match the job sheet. TaxAmount is
- * left blank so Xero calculates GST from the tax rate.
+ * Builds a Xero sales-invoice import CSV with the full template header. Every
+ * row shares one invoice number so Xero imports a single invoice, and each line
+ * is quantity 1 at the line total, exactly like the API path, so both match the
+ * job sheet. TaxAmount is left blank so Xero calculates GST from the tax rate.
  */
 export function buildXeroCsv(opts: XeroCsvOptions): string {
     const lines = billableLines(opts.rows);
     const subtotal = (sumLineCents(lines) / 100).toFixed(2);
 
-    const body = lines.map((row, idx) => [
-        opts.contactName,
-        '',
-        opts.address,
-        '',
-        opts.invoiceNumber,
-        opts.reference,
-        opts.invoiceDate,
-        opts.dueDate,
-        idx === 0 ? subtotal : '',
-        '',
-        xeroLineDescription(row),
-        '1',
-        (toCents(row.total) / 100).toFixed(2),
-        '',
-        opts.accountCode,
-        opts.taxRateName,
-        '',
-        opts.currency,
-    ]);
+    const body = lines.map((row, idx) => {
+        const cells: Partial<Record<XeroCsvColumn, string>> = {
+            '*ContactName': opts.contactName,
+            POAddressLine1: opts.address,
+            '*InvoiceNumber': opts.invoiceNumber,
+            Reference: opts.reference,
+            '*InvoiceDate': toXeroCsvDate(opts.invoiceDate),
+            '*DueDate': toXeroCsvDate(opts.dueDate),
+            Total: idx === 0 ? subtotal : '',
+            '*Description': xeroLineDescription(row),
+            '*Quantity': '1',
+            '*UnitAmount': (toCents(row.total) / 100).toFixed(2),
+            '*AccountCode': opts.accountCode,
+            '*TaxType': opts.taxRateName,
+            Currency: opts.currency,
+        };
+        return XERO_CSV_HEADERS.map((h) => cells[h] ?? '');
+    });
 
     return [
         XERO_CSV_HEADERS.join(','),
