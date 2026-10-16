@@ -1905,8 +1905,14 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             const enclosedAreas = findEnclosedAreasFromVectors(currentVectors.paths, point);
             
             if (enclosedAreas.length > 0) {
-                const area = calculatePolygonArea(enclosedAreas[0]);
-                finalizeMeasurement(enclosedAreas[0]);
+                // Nested closed paths (a shower inside a room inside the
+                // building outline) all contain the click, in PDF operator
+                // order. The region the user clicked is the innermost one,
+                // i.e. the smallest containing loop.
+                const innermost = enclosedAreas.reduce((best, loop) =>
+                    calculatePolygonArea(loop) < calculatePolygonArea(best) ? loop : best
+                );
+                finalizeMeasurement(innermost);
                 return;
             }
         }

@@ -185,6 +185,10 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
         const n = parseFloat(raw);
         return Number.isFinite(n) && n >= 0 ? n : undefined;
     };
+    // Without a depth a VOLUME item's total falls back to the raw polygon
+    // area while keeping its cubic unit (10 m² would quote as 10 cu m), so
+    // saving one without a valid depth is refused.
+    const [depthError, setDepthError] = useState(false);
 
     const [subItems, setSubItems] = useState<SubItem[]>(item.subItems || []);
 
@@ -456,6 +460,10 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
     };
 
     const handleSave = () => {
+        if (isVolume && parseDepth(depth) === undefined) {
+            setDepthError(true);
+            return;
+        }
         const withVars = replaceLabelsWithVars(formula, variableSuggestions);
         const finalFormula = sanitizeFormula(withVars);
 
@@ -700,8 +708,17 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
                                             min={0}
                                             placeholder={depthUnitLabel}
                                             value={depth}
-                                            onChange={e => setDepth(e.target.value)}
+                                            aria-invalid={depthError}
+                                            onChange={e => {
+                                                setDepth(e.target.value);
+                                                setDepthError(false);
+                                            }}
                                         />
+                                        {depthError && (
+                                            <p className="text-xs text-red-600">
+                                                Enter a depth: a volume item can't be saved without one.
+                                            </p>
+                                        )}
                                     </div>
                                 )}
                             </div>

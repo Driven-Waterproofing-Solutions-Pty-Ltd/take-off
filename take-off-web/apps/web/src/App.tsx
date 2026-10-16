@@ -1145,7 +1145,9 @@ const AppContent: React.FC = () => {
       {showNewItemModal && pendingTool && <NewItemModal toolType={pendingTool} existingCount={items.length} scaleUnit={currentScale.unit} onCreate={handleCreateTakeoffItem} onCancel={() => { setShowNewItemModal(false); setPendingTool(null); }} />}
       {editingItem && <PropertiesModal item={editingItem} items={items} onSave={handleUpdateItem} onClose={() => setEditingItem(null)} />}
       <HelpModal isOpen={showHelpModal} onClose={() => setShowHelpModal(false)} initialTab={helpModalTab} />
-      <ExportModal isOpen={showExportModal} planSets={planSets} projectData={projectData} currentPageIndex={pageIndex} isExporting={isExporting} progress={exportProgress} onClose={() => setShowExportModal(false)} onExport={handleExportPDF} />
+      {/* Keyed by project: the modal stays mounted while closed, and a
+          Custom page selection from the previous project must not carry over. */}
+      <ExportModal key={projectId ?? 'no-project'} isOpen={showExportModal} planSets={planSets} projectData={projectData} currentPageIndex={pageIndex} isExporting={isExporting} progress={exportProgress} onClose={() => setShowExportModal(false)} onExport={handleExportPDF} />
       <PromptModal isOpen={showNewProjectPrompt} title="Create New Project" message="Enter a name for the new project." placeholder="My Project" onConfirm={(name) => handleNewProjectConfirmed(name).then(() => setViewMode('canvas'))} onCancel={() => setShowNewProjectPrompt(false)} confirmText="Create Project" />
       <ConfirmModal isOpen={showImportConfirm} title="Import Project?" message="Loading a project will replace the current workspace." onConfirm={() => handleImportConfirmed().then(() => setViewMode('canvas'))} onCancel={() => { setShowImportConfirm(false); setPendingImportPath(null); }} confirmText="Import Project" isDestructive />
       <ConfirmModal isOpen={showDeletePageConfirm} title="Delete Page?" message="Are you sure you want to delete this page?" onConfirm={() => { /* Logic to be implemented */ setShowDeletePageConfirm(false); }} onCancel={() => setShowDeletePageConfirm(false)} confirmText="Delete Page" isDestructive />
