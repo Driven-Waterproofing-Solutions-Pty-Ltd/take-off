@@ -162,9 +162,6 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
     // previously selected organisation can't overwrite the current one.
     const tenantLoadSeq = useRef(0);
     const autoLoaded = useRef(false);
-    // One idempotency key per distinct invoice, kept until Xero confirms it,
-    // so retrying after a lost response can't create a second draft.
-    const pendingSend = useRef<{ fingerprint: string; key: string } | null>(null);
 
     // ── Collapsible groups ──────────────────────────────────────────────────
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
@@ -403,6 +400,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
     const handleSendToXero = async () => {
         if (!selectedContact) { addToast('Please select a Xero contact', 'error'); return; }
         if (!selectedTenant) { addToast('Please select a Xero organisation', 'error'); return; }
+        if (!selectedAccountCode) { addToast('Please select a revenue account', 'error'); return; }
         if (billable.length === 0) { addToast('There are no line items to invoice', 'error'); return; }
         if (!datesSet) { addToast('Set both the invoice date and the due date', 'error'); return; }
 
@@ -414,7 +412,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                 Description: xeroLineDescription(row),
                 Quantity: 1,
                 UnitAmount: toCents(row.total) / 100,
-                AccountCode: selectedAccountCode || undefined,
+                AccountCode: selectedAccountCode,
                 // The same rate the job sheet and CSV use (see defaultTaxType).
                 TaxType: selectedTaxType || undefined,
             }));
@@ -433,13 +431,11 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                 // them in the organisation's base currency.
                 CurrencyCode: 'AUD',
             };
-            const fingerprint = JSON.stringify([selectedTenant, payload]);
-            if (pendingSend.current?.fingerprint !== fingerprint) {
-                pendingSend.current = { fingerprint, key: crypto.randomUUID() };
-            }
-
-            const result = await xeroService.createInvoice(token, selectedTenant, payload, pendingSend.current.key);
-            pendingSend.current = null;
+            // One idempotency key per distinct invoice, stored until Xero confirms
+            // it, so a retry after a lost response can't create a second draft.
+            const idempotencyKey = await xeroService.idempotencyKeyFor(JSON.stringify([selectedTenant, payload]));
+            const result = await xeroService.createInvoice(token, selectedTenant, payload, idempotencyKey);
+            await xeroService.clearPendingSend();
 
             addToast(`Invoice ${result.InvoiceNumber} created in Xero!`, 'success');
             // Opening the browser is optional: a failure here must not read as a
@@ -663,11 +659,11 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                                                     {row.qty.toFixed(2)} <span className="text-xs text-gray-400">{row.unit}</span>
                                                                 </td>
                                                                 <td className="py-2 text-right text-gray-600">
-                                                                    {row.unitPrice > 0 ? fmt.format(row.unitPrice) : '—'}
+                                                                    {row.unitPrice !== 0 ? fmt.format(row.unitPrice) : '—'}
                                                                 </td>
                                                                 <td className="py-2 text-right font-medium">
                                                                     {/* Sub-items are a breakdown of the row above, not extra charges */}
-                                                                    {row.isSubItem ? '' : row.total > 0 ? fmt.format(row.total) : '—'}
+                                                                    {row.isSubItem ? '' : row.total !== 0 ? fmt.format(row.total) : '—'}
                                                                 </td>
                                                             </tr>
                                                         ))}
@@ -873,7 +869,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                             )}
                                         </div>
                                         <div>
-                                            <label className="text-xs font-medium text-muted-foreground mb-1 block">Revenue Account <span className="font-normal">(optional when sending, required for CSV)</span></label>
+                                            <label className="text-xs font-medium text-muted-foreground mb-1 block">Revenue Account</label>
                                             {loadingXero ? (
                                                 <div className="flex items-center gap-2 text-xs text-muted-foreground h-8"><Loader2 size={12} className="animate-spin" /> Loading accounts…</div>
                                             ) : (
@@ -882,7 +878,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                                     onChange={(e) => setSelectedAccount(e.target.value)}
                                                     className="w-full h-8 text-sm border border-border rounded-md px-2 bg-background"
                                                 >
-                                                    <option value="">No account / use Xero default</option>
+                                                    <option value="">Select account…</option>
                                                     {accounts.map((a) => (
                                                         <option key={a.AccountID} value={a.AccountID}>{a.Code} – {a.Name}</option>
                                                     ))}
@@ -969,7 +965,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                 <Button
                                     className="flex-1 h-9 text-sm"
                                     onClick={handleSendToXero}
-                                    disabled={isSending || !selectedContact || !selectedTenant || billable.length === 0 || !datesSet}
+                                    disabled={isSending || !selectedContact || !selectedTenant || !selectedAccountCode || billable.length === 0 || !datesSet}
                                 >
                                     {isSending ? (
                                         <Loader2 size={14} className="mr-2 animate-spin" />

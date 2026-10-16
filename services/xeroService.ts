@@ -11,6 +11,7 @@ const KEY_TOKENS = 'xero_tokens';
 const KEY_TENANT_ID = 'xero_tenant_id';
 const KEY_CODE_VERIFIER = 'xero_code_verifier';
 const KEY_STATE = 'xero_state';
+const KEY_PENDING_SEND = 'xero_pending_send';
 
 // ── Public types ─────────────────────────────────────────────────────────────
 export interface XeroTokens {
@@ -126,6 +127,8 @@ const store = new LazyStore('xero-settings.json');
 // Xero rotates the refresh token on every use, so only one refresh may run at
 // a time; concurrent callers share the in-flight one.
 let refreshInFlight: Promise<XeroTokens> | null = null;
+// Set while disconnecting so no new refresh can write tokens back afterwards.
+let disconnecting = false;
 
 export const XERO_REDIRECT_URI = 'https://poyashauvewhifohkxeg.supabase.co/functions/v1/xero-oauth/callback';
 
@@ -281,28 +284,37 @@ export const xeroService = {
      * Returns false if Xero could not confirm the revocation.
      */
     async disconnect(clientId: string): Promise<boolean> {
-        const tokens = await this.getTokens();
-        let revoked = !tokens?.refresh_token;
-        if (tokens?.refresh_token && clientId) {
-            try {
-                const response = await fetch('https://identity.xero.com/connect/revocation', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        Authorization: pkceClientAuth(clientId),
-                    },
-                    body: new URLSearchParams({ token: tokens.refresh_token, client_id: clientId }).toString(),
-                });
-                revoked = response.ok;
-            } catch {
-                revoked = false;
+        disconnecting = true;
+        try {
+            // Let a refresh already under way store its rotated tokens, so the
+            // newest refresh token is the one revoked and nothing is written back.
+            while (refreshInFlight) await refreshInFlight.catch(() => undefined);
+            const tokens = await this.getTokens();
+            let revoked = !tokens?.refresh_token;
+            if (tokens?.refresh_token && clientId) {
+                try {
+                    const response = await fetch('https://identity.xero.com/connect/revocation', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                            Authorization: pkceClientAuth(clientId),
+                        },
+                        body: new URLSearchParams({ token: tokens.refresh_token, client_id: clientId }).toString(),
+                    });
+                    revoked = response.ok;
+                } catch {
+                    revoked = false;
+                }
             }
+            await this.clearTokens();
+            return revoked;
+        } finally {
+            disconnecting = false;
         }
-        await this.clearTokens();
-        return revoked;
     },
 
     async getValidToken(clientId: string): Promise<string> {
+        if (disconnecting) throw new Error('Disconnecting from Xero.');
         let tokens = await this.getTokens();
         if (!tokens) throw new Error('Not connected to Xero. Please connect first.');
         // Refresh if expiring within 5 minutes
@@ -371,6 +383,24 @@ export const xeroService = {
         if (!res.ok) throw new Error('Failed to fetch Xero tax rates');
         const data: { TaxRates?: XeroTaxRate[] } = await res.json();
         return (data.TaxRates ?? []).filter((r) => r.Status === 'ACTIVE' && r.CanApplyToRevenue !== false);
+    },
+
+    /**
+     * The idempotency key for an invoice, identified by `fingerprint`. It is
+     * stored until `clearPendingSend`, so a retry of the same invoice reuses it
+     * even after the view or the app has been reopened.
+     */
+    async idempotencyKeyFor(fingerprint: string): Promise<string> {
+        const pending = await store.get<{ fingerprint: string; key: string }>(KEY_PENDING_SEND);
+        if (pending?.fingerprint === fingerprint) return pending.key;
+        const key = crypto.randomUUID();
+        await store.set(KEY_PENDING_SEND, { fingerprint, key });
+        await store.save();
+        return key;
+    },
+    async clearPendingSend(): Promise<void> {
+        await store.delete(KEY_PENDING_SEND);
+        await store.save();
     },
 
     /**
