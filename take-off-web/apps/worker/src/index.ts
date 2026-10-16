@@ -10,6 +10,7 @@ import ai from './routes/ai';
 import { handleMcp, mintMcpClientToken } from './mcp/server';
 import { syncXeroContacts } from './tools/xero';
 import { pruneExpiredSessions } from './lib/sessions';
+import { pruneLoginAttempts } from './lib/loginThrottle';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -82,6 +83,11 @@ export default {
       if (deleted > 0) console.log(`pruned ${deleted} expired sessions`);
     } catch (err) {
       console.error('session prune failed', err);
+    }
+    try {
+      await pruneLoginAttempts(env.DB);
+    } catch (err) {
+      console.error('login-attempt prune failed', err);
     }
   },
 };

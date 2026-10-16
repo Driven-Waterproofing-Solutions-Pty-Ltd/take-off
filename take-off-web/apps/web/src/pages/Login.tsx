@@ -21,6 +21,10 @@ export function LoginPage() {
         setError('Incorrect email or password.');
         return;
       }
+      if (res.status === 429) {
+        setError('Too many failed sign-in attempts. Wait a few minutes and try again.');
+        return;
+      }
       if (!res.ok) {
         setError(`Login failed (${res.status}).`);
         return;

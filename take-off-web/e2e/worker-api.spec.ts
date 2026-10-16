@@ -390,3 +390,70 @@ test('projects with more than 100 items still hydrate and quote', async () => {
   const quote = await call('GET', `/api/memory/quote/${projectId}`);
   expect(quote.status).toBe(200);
 });
+
+test('formulas that evaluate to Infinity never reach the quote', async () => {
+  const call = await bearerClient();
+  const projectId = await newProject(call, 'Non-finite formula');
+  const itemId = crypto.randomUUID();
+  expect(
+    (await call('POST', '/api/measure/items', {
+      project_id: projectId,
+      id: itemId,
+      label: 'Floor waste',
+      type: 'COUNT',
+      color: '#ef4444',
+      unit: 'EA',
+      price: 45,
+      formula: 'Qty / 0',
+    })).status
+  ).toBe(200);
+  expect(
+    (await call('POST', '/api/measure/shapes/count', {
+      project_id: projectId,
+      page_index: 0,
+      item_id: itemId,
+      points: [{ x: 1, y: 1 }],
+    })).status
+  ).toBe(200);
+
+  const quote = await call<{
+    lines: Array<{ qty: number | null; lineTotal: number | null }>;
+    subtotal: number | null;
+    total: number | null;
+  }>('GET', `/api/memory/quote/${projectId}`);
+  expect(quote.status).toBe(200);
+  for (const line of quote.body.lines) {
+    expect(Number.isFinite(line.qty)).toBe(true);
+    expect(Number.isFinite(line.lineTotal)).toBe(true);
+  }
+  expect(Number.isFinite(quote.body.subtotal)).toBe(true);
+  expect(Number.isFinite(quote.body.total)).toBe(true);
+});
+
+test('login is throttled after repeated failures for an account', async () => {
+  const ts = Date.now();
+  const email = `e2e-throttle-${ts}@drivenwp.com`;
+  const password = `correct-horse-${ts}`;
+  const created = await fetch(`${WORKER}/admin/users`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${BOOTSTRAP}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, role: 'member' }),
+  });
+  expect(created.status).toBe(200);
+
+  const attempt = (pw: string) =>
+    fetch(`${WORKER}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: pw }),
+    });
+
+  for (let i = 0; i < 10; i++) {
+    expect((await attempt(`wrong-password-${i}`)).status).toBe(401);
+  }
+  const blocked = await attempt(`wrong-password-final`);
+  expect(blocked.status).toBe(429);
+  expect(Number(blocked.headers.get('Retry-After'))).toBeGreaterThan(0);
+  // Even the right password waits out the window once the account is locked.
+  expect((await attempt(password)).status).toBe(429);
+});

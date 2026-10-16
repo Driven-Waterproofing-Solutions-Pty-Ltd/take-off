@@ -10,6 +10,12 @@ import {
   COOKIE_NAME,
 } from '../lib/sessions';
 import { requireAuth } from '../lib/auth';
+import {
+  throttleKeys,
+  loginRetryAfterSeconds,
+  recordLoginFailure,
+  clearLoginFailures,
+} from '../lib/loginThrottle';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -32,6 +38,14 @@ const LoginZ = z.object({
 
 app.post('/login', async (c) => {
   const body = LoginZ.parse(await c.req.json());
+
+  // Refuse throttled emails/IPs before doing any PBKDF2 work.
+  const keys = await throttleKeys(body.email, c.req.header('CF-Connecting-IP') ?? undefined);
+  const retryAfter = await loginRetryAfterSeconds(c.env.DB, keys);
+  if (retryAfter > 0) {
+    c.header('Retry-After', String(retryAfter));
+    return c.json({ error: 'too many failed sign-in attempts — try again later' }, 429);
+  }
 
   // Always run the hash even when the user doesn't exist, to avoid leaking
   // existence via response time. Cheap defense; the real anti-enumeration
@@ -58,8 +72,10 @@ app.post('/login', async (c) => {
   );
 
   if (!row || !ok) {
+    await recordLoginFailure(c.env.DB, keys);
     return c.json({ error: 'invalid credentials' }, 401);
   }
+  await clearLoginFailures(c.env.DB, keys);
 
   // Rotate session on login: nothing prior to delete on first-time use,
   // but if someone hijacks an old cookie and the legit user logs in fresh,

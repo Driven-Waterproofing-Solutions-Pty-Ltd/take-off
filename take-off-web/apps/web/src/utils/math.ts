@@ -176,9 +176,11 @@ export const evaluateFormula = (
   }
 
   try {
-    const result = limitedEvaluate(formulaToUse, scope);
+    const result: unknown = limitedEvaluate(formulaToUse, scope);
 
-    if (isNaN(result) || result === undefined || result === null) {
+    // Same rule as the worker's shared evaluateFormula: only a finite number
+    // is a quantity (Qty / 0 = Infinity must not reach estimates or quotes).
+    if (typeof result !== 'number' || !Number.isFinite(result)) {
       return 0;
     }
 

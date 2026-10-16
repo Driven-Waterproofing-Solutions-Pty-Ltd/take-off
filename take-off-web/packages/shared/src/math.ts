@@ -123,8 +123,12 @@ export const evaluateFormula = (
   }
 
   try {
-    const result = limitedEvaluate(formulaToUse, scope);
-    if (isNaN(result) || result === undefined || result === null) return 0;
+    const result: unknown = limitedEvaluate(formulaToUse, scope);
+    // Only finite numbers are quantities. `Qty / 0` evaluates to Infinity,
+    // which slipped past isNaN and reached buildQuote / Xero as qty, line
+    // total and GST — serialised to JSON as null. Matrices, units, strings
+    // etc. are not quantities either.
+    if (typeof result !== 'number' || !Number.isFinite(result)) return 0;
     return result;
   } catch {
     return formulaOverride ? 0 : qty;
