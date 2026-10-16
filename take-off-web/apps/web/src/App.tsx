@@ -87,6 +87,7 @@ const AppContent: React.FC = () => {
     currentFilePath: projectId,
     openProjectById,
     refreshProject,
+    recordUploadedR2Key,
   } = useProjectManager(isLicensed);
 
   // Ready-to-Invoice queue → load the project, then drop the user on
@@ -106,16 +107,11 @@ const AppContent: React.FC = () => {
   // Persist every local state change back to D1 + R2.
   useShapeSync(projectId, items);
   useScaleSync(projectId, projectData);
-  usePlanSetSync(projectId, planSets, (planSetId, fileKey) => {
-    // Stamp the resolved R2 key onto the plan set in history state so
-    // exportProjectToZip can serialize r2_key for plans uploaded mid-session
-    // (without this, Save Project loses the reference and a re-imported
-    // snapshot opens the drawing as a placeholder).
-    setHistory((draft) => {
-      const planSet = draft.planSets.find((p) => p.id === planSetId);
-      if (planSet) (planSet as PlanSet & { __r2_key?: string }).__r2_key = fileKey;
-    });
-  });
+  // Record the resolved R2 key so exportProjectToZip can serialize r2_key for
+  // plans uploaded mid-session (without it, Save Project loses the reference
+  // and a re-imported snapshot opens the drawing as a placeholder). Kept out
+  // of the undo history on purpose — see recordUploadedR2Key.
+  usePlanSetSync(projectId, planSets, recordUploadedR2Key);
 
   const historyState = { items, projectData, planSets, totalPages };
 

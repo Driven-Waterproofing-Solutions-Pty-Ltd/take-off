@@ -133,6 +133,18 @@ export const useProjectManager = (_isLicensed = true) => {
   // snapshot so a downstream import can refetch the PDFs; otherwise the
   // round-tripped snapshot opens with blank plan placeholders.
   const [sourceProjectId, setSourceProjectId] = useState<string | null>(null);
+  // R2 keys resolved for plan sets uploaded THIS session, kept OUTSIDE the
+  // undo history. Stamping them into history made the stamp itself an
+  // undoable entry: Undo stripped the key while the plan stayed, the sync
+  // hook (which had already marked the plan as uploaded) never re-stamped
+  // it, and Save Project then refused forever ("still uploading").
+  // Hydrated / imported plan sets carry __r2_key from their initial state.
+  const [uploadedR2Keys, setUploadedR2Keys] = useState<Record<string, string>>({});
+  const recordUploadedR2Key = useCallback((planSetId: string, fileKey: string) => {
+    setUploadedR2Keys((prev) => (prev[planSetId] === fileKey ? prev : { ...prev, [planSetId]: fileKey }));
+  }, []);
+  const r2KeyOf = (p: PlanSet): string | undefined =>
+    uploadedR2Keys[p.id] ?? (p as PlanSet & { __r2_key?: string }).__r2_key;
   const [isSaving, setIsSaving] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
@@ -299,9 +311,7 @@ export const useProjectManager = (_isLicensed = true) => {
     // undefined; importing the snapshot then has no key to fetch and the
     // drawing reopens as a blank placeholder. Block the save and tell them
     // to wait until plan sync completes.
-    const stillUploading = planSets.find(
-      (p) => !(p as PlanSet & { __r2_key?: string }).__r2_key
-    );
+    const stillUploading = planSets.find((p) => !r2KeyOf(p));
     if (stillUploading) {
       addToast(
         `Plan "${stillUploading.name}" is still uploading — wait a moment and try Save again.`,
@@ -314,7 +324,7 @@ export const useProjectManager = (_isLicensed = true) => {
       const blob = await exportProjectToZip(
         items,
         projectData,
-        planSets,
+        planSets.map((p) => ({ ...p, __r2_key: r2KeyOf(p) })),
         totalPages,
         projectName,
         // After Import, projectId is null but the plan sets' r2_keys still
@@ -455,5 +465,6 @@ export const useProjectManager = (_isLicensed = true) => {
     handleImportConfirmed,
     openProjectById,
     refreshProject,
+    recordUploadedR2Key,
   };
 };
