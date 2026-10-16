@@ -48,6 +48,7 @@ import {
     XeroTenant,
     XeroTaxRate,
     XeroLineItem,
+    XeroInvoicePayload,
 } from '../services/xeroService';
 
 // ── Local types ───────────────────────────────────────────────────────────────
@@ -160,6 +161,9 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
     // previously selected organisation can't overwrite the current one.
     const tenantLoadSeq = useRef(0);
     const autoLoaded = useRef(false);
+    // One idempotency key per distinct invoice, kept until Xero confirms it,
+    // so retrying after a lost response can't create a second draft.
+    const pendingSend = useRef<{ fingerprint: string; key: string } | null>(null);
 
     // ── Collapsible groups ──────────────────────────────────────────────────
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
@@ -413,7 +417,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                 TaxType: selectedTaxType || undefined,
             }));
 
-            const result = await xeroService.createInvoice(token, selectedTenant, {
+            const payload: XeroInvoicePayload = {
                 Type: 'ACCREC',
                 Contact: { ContactID: selectedContact },
                 LineItems: xeroLineItems,
@@ -425,7 +429,14 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                 // Every amount in this view is AUD; without this Xero would read
                 // them in the organisation's base currency.
                 CurrencyCode: 'AUD',
-            });
+            };
+            const fingerprint = JSON.stringify([selectedTenant, payload]);
+            if (pendingSend.current?.fingerprint !== fingerprint) {
+                pendingSend.current = { fingerprint, key: crypto.randomUUID() };
+            }
+
+            const result = await xeroService.createInvoice(token, selectedTenant, payload, pendingSend.current.key);
+            pendingSend.current = null;
 
             addToast(`Invoice ${result.InvoiceNumber} created in Xero!`, 'success');
             // Opening the browser is optional: a failure here must not read as a

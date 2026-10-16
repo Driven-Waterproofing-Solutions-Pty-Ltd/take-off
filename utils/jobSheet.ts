@@ -200,13 +200,13 @@ function csvCell(value: string): string {
  * Builds a Xero sales-invoice import CSV with the full template header. Every
  * row shares one invoice number so Xero imports a single invoice, and each line
  * is quantity 1 at the line total, exactly like the API path, so both match the
- * job sheet. TaxAmount is left blank so Xero calculates GST from the tax rate.
+ * job sheet. Total and TaxAmount are left blank so Xero calculates GST from
+ * the tax rate rather than checking against a figure written here.
  */
 export function buildXeroCsv(opts: XeroCsvOptions): string {
     const lines = billableLines(opts.rows);
-    const subtotal = (sumLineCents(lines) / 100).toFixed(2);
 
-    const body = lines.map((row, idx) => {
+    const body = lines.map((row) => {
         const cells: Partial<Record<XeroCsvColumn, string>> = {
             '*ContactName': opts.contactName,
             POAddressLine1: opts.address,
@@ -214,7 +214,7 @@ export function buildXeroCsv(opts: XeroCsvOptions): string {
             Reference: opts.reference,
             '*InvoiceDate': toXeroCsvDate(opts.invoiceDate),
             '*DueDate': toXeroCsvDate(opts.dueDate),
-            Total: idx === 0 ? subtotal : '',
+            // Total is left blank: Xero works it out (lines plus tax) on import.
             '*Description': xeroLineDescription(row),
             '*Quantity': '1',
             '*UnitAmount': (toCents(row.total) / 100).toFixed(2),

@@ -122,6 +122,10 @@ async function generateCodeChallenge(verifier: string): Promise<string> {
 // ── Service ──────────────────────────────────────────────────────────────────
 const store = new LazyStore('xero-settings.json');
 
+// Xero rotates the refresh token on every use, so only one refresh may run at
+// a time; concurrent callers share the in-flight one.
+let refreshInFlight: Promise<XeroTokens> | null = null;
+
 export const XERO_REDIRECT_URI = 'https://poyashauvewhifohkxeg.supabase.co/functions/v1/xero-oauth/callback';
 
 export const xeroService = {
@@ -299,7 +303,10 @@ export const xeroService = {
         if (!tokens) throw new Error('Not connected to Xero. Please connect first.');
         // Refresh if expiring within 5 minutes
         if (tokens.expires_at < Date.now() + 5 * 60 * 1000) {
-            tokens = await this.refreshTokens(clientId);
+            refreshInFlight ??= this.refreshTokens(clientId).finally(() => {
+                refreshInFlight = null;
+            });
+            tokens = await refreshInFlight;
         }
         return tokens.access_token;
     },
@@ -362,10 +369,15 @@ export const xeroService = {
         return (data.TaxRates ?? []).filter((r) => r.Status === 'ACTIVE' && r.CanApplyToRevenue !== false);
     },
 
+    /**
+     * Creates the invoice. Reusing `idempotencyKey` when retrying the same
+     * invoice makes Xero return the original result instead of a second draft.
+     */
     async createInvoice(
         accessToken: string,
         tenantId: string,
-        payload: XeroInvoicePayload
+        payload: XeroInvoicePayload,
+        idempotencyKey: string
     ): Promise<{ InvoiceID: string; InvoiceNumber: string }> {
         const res = await fetch('https://api.xero.com/api.xro/2.0/Invoices', {
             method: 'POST',
@@ -374,6 +386,7 @@ export const xeroService = {
                 'Xero-Tenant-Id': tenantId,
                 'Content-Type': 'application/json',
                 Accept: 'application/json',
+                'Idempotency-Key': idempotencyKey,
             },
             body: JSON.stringify({ Invoices: [payload] }),
         });
