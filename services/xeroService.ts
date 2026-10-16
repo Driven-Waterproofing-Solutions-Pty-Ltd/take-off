@@ -94,6 +94,14 @@ export const XERO_SCOPES = [
 ].join(' ');
 
 // ── Internal PKCE helpers ────────────────────────────────────────────────────
+/**
+ * Xero authenticates a PKCE (secret-less) client on the token and revocation
+ * endpoints with Basic base64("<client_id>:"), keeping the trailing colon.
+ */
+function pkceClientAuth(clientId: string): string {
+    return `Basic ${btoa(`${clientId}:`)}`;
+}
+
 function base64UrlEncode(bytes: Uint8Array): string {
     const base64 = btoa(String.fromCharCode(...Array.from(bytes)));
     return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
@@ -238,9 +246,7 @@ export const xeroService = {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                // Xero authenticates PKCE refreshes with the client ID alone:
-                // Basic base64("<client_id>:"), keeping the trailing colon.
-                Authorization: `Basic ${btoa(`${clientId}:`)}`,
+                Authorization: pkceClientAuth(clientId),
             },
             body: body.toString(),
         });
@@ -259,6 +265,33 @@ export const xeroService = {
 
         await this.setTokens(newTokens);
         return newTokens;
+    },
+
+    /**
+     * Revokes the refresh token at Xero, which also removes the app's
+     * connections to the user's organisations, then clears the local copy.
+     * Returns false if Xero could not confirm the revocation.
+     */
+    async disconnect(clientId: string): Promise<boolean> {
+        const tokens = await this.getTokens();
+        let revoked = !tokens?.refresh_token;
+        if (tokens?.refresh_token && clientId) {
+            try {
+                const response = await fetch('https://identity.xero.com/connect/revocation', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        Authorization: pkceClientAuth(clientId),
+                    },
+                    body: new URLSearchParams({ token: tokens.refresh_token, client_id: clientId }).toString(),
+                });
+                revoked = response.ok;
+            } catch {
+                revoked = false;
+            }
+        }
+        await this.clearTokens();
+        return revoked;
     },
 
     async getValidToken(clientId: string): Promise<string> {

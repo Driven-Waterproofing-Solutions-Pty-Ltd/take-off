@@ -40,6 +40,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '../contexts/ToastContext';
+import { isMobilePlatform } from '../utils/platform';
 import {
     xeroService,
     XeroContact,
@@ -93,6 +94,9 @@ const fmt = new Intl.NumberFormat('en-AU', {
     minimumFractionDigits: 2,
 });
 const fmtCents = (cents: number) => fmt.format(cents / 100);
+
+// Tauri's Android/iOS WebViews ignore window.print() and blob downloads.
+const IS_MOBILE = isMobilePlatform();
 
 function errorMessage(e: unknown): string {
     return e instanceof Error ? e.message : String(e);
@@ -168,6 +172,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
     const groupTotalCents = (group: string) => sumLineCents(lineItems.filter((r) => r.group === group));
     const selectedAccountCode = accounts.find((a) => a.AccountID === selectedAccount)?.Code ?? '';
     const csvAccountCode = (isConnected ? selectedAccountCode : manualAccountCode).trim();
+    const selectedContactName = contacts.find((c) => c.ContactID === selectedContact)?.Name ?? '';
 
     // ── Load saved settings on mount ────────────────────────────────────────
     useEffect(() => {
@@ -237,8 +242,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
     };
 
     /** Contacts, accounts and tax rates belong to one organisation: drop them on switch. */
-    const resetTenantData = useCallback(() => {
-        tenantLoadSeq.current += 1;
+    const clearTenantData = useCallback(() => {
         setContacts([]);
         setAccounts([]);
         setTaxRates([]);
@@ -248,8 +252,9 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
     }, []);
 
     const handleDisconnect = async () => {
-        await xeroService.clearTokens();
-        resetTenantData();
+        const revoked = await xeroService.disconnect(clientId.trim());
+        tenantLoadSeq.current += 1;
+        clearTenantData();
         autoLoaded.current = false;
         setIsConnected(false);
         setTenants([]);
@@ -257,11 +262,15 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
         setAwaitingCode(false);
         setAuthCode('');
         setAuthState('');
-        addToast('Disconnected from Xero', 'info');
+        if (revoked) {
+            addToast('Disconnected from Xero', 'info');
+        } else {
+            addToast('Disconnected here, but Xero could not confirm the access was revoked. Remove ProTakeoff under Connected apps in Xero.', 'error');
+        }
     };
 
-    const loadTenantData = useCallback(async (token: string, tenantId: string) => {
-        const seq = ++tenantLoadSeq.current;
+    /** Loads one organisation's data; `seq` is the load generation taken before any await. */
+    const loadTenantData = useCallback(async (token: string, tenantId: string, seq: number) => {
         const [fetchedContacts, fetchedAccounts, fetchedTaxRates] = await Promise.all([
             xeroService.getContacts(token, tenantId),
             xeroService.getAccounts(token, tenantId),
@@ -279,44 +288,48 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
     }, []);
 
     const handleTenantSelect = async (tenantId: string) => {
+        const seq = ++tenantLoadSeq.current;
         setSelectedTenant(tenantId);
-        resetTenantData();
+        clearTenantData();
         if (!tenantId) return;
-        await xeroService.setTenantId(tenantId);
         setLoadingXero(true);
         try {
+            await xeroService.setTenantId(tenantId);
             const token = await xeroService.getValidToken(clientId);
-            await loadTenantData(token, tenantId);
+            if (seq !== tenantLoadSeq.current) return;
+            await loadTenantData(token, tenantId, seq);
         } catch (e: unknown) {
-            addToast(`Failed to load Xero data: ${errorMessage(e)}`, 'error');
+            if (seq === tenantLoadSeq.current) addToast(`Failed to load Xero data: ${errorMessage(e)}`, 'error');
         } finally {
-            setLoadingXero(false);
+            if (seq === tenantLoadSeq.current) setLoadingXero(false);
         }
     };
 
     const handleLoadXeroData = useCallback(async () => {
+        const seq = ++tenantLoadSeq.current;
         setLoadingXero(true);
         try {
             const token = await xeroService.getValidToken(clientId);
             // Always fetch organisations, so a tenant that was never chosen (or
             // has since been disconnected in Xero) can still be picked.
             const fetchedTenants = await xeroService.getTenants(token);
+            if (seq !== tenantLoadSeq.current) return;
             setTenants(fetchedTenants);
             const savedTenant = selectedTenant || (await xeroService.getTenantId()) || '';
             let tenantId = fetchedTenants.some((t) => t.tenantId === savedTenant) ? savedTenant : '';
             if (!tenantId && fetchedTenants.length === 1) tenantId = fetchedTenants[0].tenantId;
             if (tenantId !== selectedTenant) {
-                resetTenantData();
+                clearTenantData();
                 setSelectedTenant(tenantId);
             }
             if (tenantId && tenantId !== savedTenant) await xeroService.setTenantId(tenantId);
-            if (tenantId) await loadTenantData(token, tenantId);
+            if (tenantId) await loadTenantData(token, tenantId, seq);
         } catch (e: unknown) {
-            addToast(`Failed to refresh Xero data: ${errorMessage(e)}`, 'error');
+            if (seq === tenantLoadSeq.current) addToast(`Failed to refresh Xero data: ${errorMessage(e)}`, 'error');
         } finally {
-            setLoadingXero(false);
+            if (seq === tenantLoadSeq.current) setLoadingXero(false);
         }
-    }, [clientId, selectedTenant, loadTenantData, resetTenantData, addToast]);
+    }, [clientId, selectedTenant, loadTenantData, clearTenantData, addToast]);
 
     // When we switch to the Xero tab and are connected, load data once
     useEffect(() => {
@@ -328,6 +341,10 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
 
     // ── CSV export for Xero ─────────────────────────────────────────────────
     const handleExportCSV = () => {
+        if (IS_MOBILE) {
+            addToast('CSV export is only available in the desktop app', 'error');
+            return;
+        }
         if (billable.length === 0) {
             addToast('There are no line items to export', 'error');
             return;
@@ -339,7 +356,8 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
         try {
             const csvContent = buildXeroCsv({
                 rows: lineItems,
-                contactName: clientName || projectName,
+                // The chosen Xero contact wins, so the import bills that customer.
+                contactName: (isConnected && selectedContactName) || clientName || projectName,
                 address: clientAddress,
                 // One invoice number for every row, so Xero imports a single invoice.
                 invoiceNumber: reference || `INV-${Date.now().toString().slice(-6)}`,
@@ -395,7 +413,13 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
             });
 
             addToast(`Invoice ${result.InvoiceNumber} created in Xero!`, 'success');
-            await xeroService.openInvoiceInXero(result.InvoiceID);
+            // Opening the browser is optional: a failure here must not read as a
+            // failed send, or a retry would create a second draft invoice.
+            try {
+                await xeroService.openInvoiceInXero(result.InvoiceID);
+            } catch {
+                addToast(`Couldn't open the browser. Invoice ${result.InvoiceNumber} is in Xero as a draft.`, 'info');
+            }
         } catch (e: unknown) {
             addToast(`Failed to send to Xero: ${errorMessage(e)}`, 'error');
         } finally {
@@ -468,7 +492,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                     <div className="p-5 max-w-4xl mx-auto">
                         {/* Job sheet controls (no-print) */}
                         <div className="flex items-center gap-3 mb-5 no-print">
-                            <div className="flex-1 grid grid-cols-2 gap-3">
+                            <div className="flex-1 grid grid-cols-2 md:grid-cols-3 gap-3">
                                 <div>
                                     <label className="text-xs font-medium text-muted-foreground mb-1 block">Client / Contact</label>
                                     <Input
@@ -505,10 +529,25 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                         className="h-8 text-sm"
                                     />
                                 </div>
+                                <div>
+                                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Due Date</label>
+                                    <Input
+                                        type="date"
+                                        value={dueDate}
+                                        onChange={(e) => setDueDate(e.target.value)}
+                                        className="h-8 text-sm"
+                                    />
+                                </div>
                             </div>
-                            <Button onClick={handlePrint} className="h-8 text-xs shrink-0" variant="outline">
-                                <Printer size={13} className="mr-1.5" /> Print / Save PDF
-                            </Button>
+                            {IS_MOBILE ? (
+                                <span className="text-xs text-muted-foreground shrink-0 max-w-[10rem]">
+                                    Printing is only available in the desktop app.
+                                </span>
+                            ) : (
+                                <Button onClick={handlePrint} className="h-8 text-xs shrink-0" variant="outline">
+                                    <Printer size={13} className="mr-1.5" /> Print / Save PDF
+                                </Button>
+                            )}
                         </div>
 
                         {/* Printable job sheet */}
@@ -882,8 +921,14 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                 variant="outline"
                                 className="flex-1 h-9 text-sm"
                                 onClick={handleExportCSV}
-                                disabled={billable.length === 0 || !csvAccountCode}
-                                title={!csvAccountCode ? 'A revenue account code is required for the Xero CSV' : undefined}
+                                disabled={IS_MOBILE || billable.length === 0 || !csvAccountCode}
+                                title={
+                                    IS_MOBILE
+                                        ? 'CSV export is only available in the desktop app'
+                                        : !csvAccountCode
+                                            ? 'A revenue account code is required for the Xero CSV'
+                                            : undefined
+                                }
                             >
                                 <FileDown size={14} className="mr-2" /> Export CSV for Xero
                             </Button>
@@ -992,10 +1037,12 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                                 onChange={(e) => setClientId(e.target.value)}
                                                 placeholder="Xero OAuth2 Client ID"
                                                 className="h-8 text-sm flex-1"
+                                                disabled={isConnected}
                                             />
                                             <Button
                                                 variant="outline"
                                                 className="h-8 text-xs shrink-0"
+                                                disabled={isConnected}
                                                 onClick={async () => {
                                                     if (clientId) {
                                                         await xeroService.setClientId(clientId);
@@ -1006,6 +1053,11 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                                 Save
                                             </Button>
                                         </div>
+                                        {isConnected && (
+                                            <p className="text-[11px] text-muted-foreground mt-1">
+                                                Disconnect from Xero to change the Client ID; the current connection is tied to it.
+                                            </p>
+                                        )}
                                     </div>
                                     <p className="text-xs text-muted-foreground">
                                         You need a Xero developer app to connect. Visit{' '}
