@@ -1029,7 +1029,13 @@ const AppContent: React.FC = () => {
             autoOpenXero={autoOpenXero}
             onAutoOpenXeroHandled={() => setAutoOpenXero(false)} />
         ) : viewMode === '3d' ? (
-          <ThreeDView items={items} onBack={() => setViewMode('canvas')} planSets={planSets} pageIndex={pageIndex} />
+          <ThreeDView
+            items={items}
+            onBack={() => setViewMode('canvas')}
+            planSets={planSets}
+            pageIndex={pageIndex}
+            pixelsPerUnit={currentScale.isSet ? currentScale.pixelsPerUnit : undefined}
+          />
         ) : viewMode === 'invoices' ? (
           <ReadyToInvoiceView
             onBack={() => setViewMode('canvas')}

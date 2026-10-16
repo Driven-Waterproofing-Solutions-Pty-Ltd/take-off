@@ -10,6 +10,10 @@ interface ThreeDViewProps {
   onBack: () => void;
   planSets?: PlanSet[];
   pageIndex?: number;
+  // PDF points per linear unit on `pageIndex` (undefined when uncalibrated).
+  // Shape X/Y are PDF points but a VOLUME item's depth is in the page's
+  // linear unit, so the extrusion is scaled by this to share one space.
+  pixelsPerUnit?: number;
 }
 
 const Shape3D: React.FC<{ shape: Shape; itemType: ToolType; color: string; depth: number }> = ({ shape, itemType, color, depth }) => {
@@ -136,7 +140,8 @@ const PDFPlane: React.FC<{ planSets?: PlanSet[]; pageIndex?: number }> = ({ plan
   );
 };
 
-const ThreeDView: React.FC<ThreeDViewProps> = ({ items, onBack, planSets, pageIndex }) => {
+const ThreeDView: React.FC<ThreeDViewProps> = ({ items, onBack, planSets, pageIndex, pixelsPerUnit }) => {
+  const depthScale = pixelsPerUnit && pixelsPerUnit > 0 ? pixelsPerUnit : 1;
   return (
     <div className="h-full w-full bg-gray-900 relative">
       <button
@@ -179,7 +184,7 @@ const ThreeDView: React.FC<ThreeDViewProps> = ({ items, onBack, planSets, pageIn
               itemType={item.type}
               color={item.color}
               // `??` not `||`: an explicit depth of 0 is a flat (zero-volume) item.
-              depth={item.depth ?? 1}
+              depth={(item.depth ?? 1) * depthScale}
             />
           ))
         ))}
