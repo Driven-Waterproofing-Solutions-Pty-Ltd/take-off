@@ -159,6 +159,31 @@
   .no-print {
     display: none !important;
   }
+
+  /* The app shell is a fixed-height, overflow-clipped flex layout, which would
+     cut a long job sheet off at the first page. Where :has() is available,
+     let every ancestor of the job sheet grow and flow normally, and drop all
+     other UI from the layout so it cannot add blank pages. */
+  @supports selector(:has(*)) {
+    html,
+    body,
+    :has(.printable) {
+      display: block !important;
+      position: static !important;
+      height: auto !important;
+      min-height: 0 !important;
+      max-height: none !important;
+      overflow: visible !important;
+    }
+
+    body :not(.printable, .printable *, :has(.printable)) {
+      display: none !important;
+    }
+
+    .printable {
+      position: static !important;
+    }
+  }
 }
 
 /* P7: Enlarge icon-button touch targets on coarse pointers (touch) only.
