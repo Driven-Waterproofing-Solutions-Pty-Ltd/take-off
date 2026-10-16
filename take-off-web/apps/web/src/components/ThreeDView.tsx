@@ -71,6 +71,9 @@ const PDFPlane: React.FC<{ planSets?: PlanSet[]; pageIndex?: number }> = ({ plan
   const [pageBounds, setPageBounds] = useState<{ width: number; height: number } | null>(null);
 
   useEffect(() => {
+    // A slower load for a page the user already left must not land last and
+    // put the wrong drawing (and bounds) under the current page's solids.
+    let cancelled = false;
     const loadPDFTexture = async () => {
       if (!planSets || planSets.length === 0 || pageIndex === undefined) return;
 
@@ -96,10 +99,13 @@ const PDFPlane: React.FC<{ planSets?: PlanSet[]; pageIndex?: number }> = ({ plan
         const canvas = document.createElement('canvas');
 
         const arrayBuffer = await planSet.file.arrayBuffer();
+        if (cancelled) return;
         await mupdfController.loadDocument(new Uint8Array(arrayBuffer));
+        if (cancelled) return;
 
         // Render with appropriate scale
         await mupdfController.renderPageToCanvas(localPageIndex, canvas, 2.0);
+        if (cancelled) return;
 
         // Page bounds (PDF points) — the texture is rendered at 2× resolution
         // but represents this same coordinate space. Sizing the plane to
@@ -111,13 +117,20 @@ const PDFPlane: React.FC<{ planSets?: PlanSet[]; pageIndex?: number }> = ({ plan
         // Create texture from canvas
         const canvasTexture = new THREE.CanvasTexture(canvas);
         canvasTexture.flipY = false;
-        setTexture(canvasTexture);
+        // Free the GPU copy of the texture this one supersedes.
+        setTexture((previous) => {
+          previous?.dispose();
+          return canvasTexture;
+        });
       } catch (error) {
         console.error('Failed to load PDF texture:', error);
       }
     };
 
     loadPDFTexture();
+    return () => {
+      cancelled = true;
+    };
   }, [planSets, pageIndex]);
 
   const width = pageBounds?.width ?? 4000;

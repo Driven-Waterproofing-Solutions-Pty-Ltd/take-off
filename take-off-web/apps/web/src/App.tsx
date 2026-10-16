@@ -120,19 +120,20 @@ const AppContent: React.FC = () => {
   // True when every local edit has reached the worker (nothing in flight,
   // nothing waiting to retry). Gates quote review/push and project switches.
   const isSyncIdle = () => shapeSync.isIdle() && scaleSync.isIdle();
-  // Switching projects resets the sync hooks to the new project, so any
-  // write still pending (in flight or failed and waiting to retry) for the
-  // current one would be dropped silently. Ask first.
-  const confirmDiscardPendingSync = (): boolean =>
-    isSyncIdle() ||
-    window.confirm(
-      'Some changes in this project have not been saved to the server yet. Switch anyway and discard them?'
-    );
   // Record the resolved R2 key so exportProjectToZip can serialize r2_key for
   // plans uploaded mid-session (without it, Save Project loses the reference
   // and a re-imported snapshot opens the drawing as a placeholder). Kept out
   // of the undo history on purpose — see recordUploadedR2Key.
-  usePlanSetSync(projectId, planSets, recordUploadedR2Key);
+  const planSetSync = usePlanSetSync(projectId, planSets, recordUploadedR2Key);
+  // Switching projects resets the sync hooks to the new project, so any
+  // write still pending (in flight or failed and waiting to retry) for the
+  // current one would be dropped silently — including a newly added PDF
+  // that hasn't finished uploading. Ask first.
+  const confirmDiscardPendingSync = (): boolean =>
+    (isSyncIdle() && planSetSync.isIdle()) ||
+    window.confirm(
+      'Some changes in this project have not been saved to the server yet. Switch anyway and discard them?'
+    );
 
   const historyState = { items, projectData, planSets, totalPages };
 

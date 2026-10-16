@@ -1,8 +1,9 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import type { PlanSet } from '../types';
 import { api } from '../lib/api';
 import { mupdfController } from '../utils/mupdfController';
 import { useRetryBackoff } from './useRetryBackoff';
+import type { SyncStatus } from './useShapeSync';
 
 // Upload newly-added PlanSet PDFs to R2 + register them in D1.
 // First render after a projectId change primes snapshots without uploading
@@ -17,7 +18,7 @@ export function usePlanSetSync(
   projectId: string | null,
   planSets: PlanSet[],
   onR2KeyResolved?: (planSetId: string, fileKey: string) => void,
-): void {
+): SyncStatus {
   const lastProjectId = useRef<string | null>(null);
   // Per-project dedup state. `seen` covers planSets we don't need to (re)upload;
   // `r2Keys` remembers the R2 file_key we got back for each upload so we don't
@@ -147,4 +148,18 @@ export function usePlanSetSync(
       })();
     }
   }, [projectId, planSets, backoff.tick]);
+
+  // True when every plan set added this session has been uploaded and
+  // registered: nothing unsent, in flight or waiting to retry.
+  const planSetsRef = useRef(planSets);
+  planSetsRef.current = planSets;
+  const isIdle = useCallback(
+    () =>
+      lastProjectId.current === null ||
+      (inflight.current.size === 0 &&
+        !backoff.hasPendingFailures() &&
+        planSetsRef.current.every((s) => seen.current.has(s.id) || r2Keys.current.has(s.id) || !s.file)),
+    [backoff]
+  );
+  return { isIdle };
 }
