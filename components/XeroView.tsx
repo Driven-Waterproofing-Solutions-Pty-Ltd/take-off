@@ -1,6 +1,20 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { TakeoffItem, ToolType, Unit } from '../types';
-import { evaluateFormula, convertValue, toVariableName } from '../utils/math';
+import { TakeoffItem } from '../types';
+import {
+    DEFAULT_GST_PERCENT,
+    DEFAULT_XERO_TAX_RATE_NAME,
+    DEFAULT_XERO_TAX_TYPE,
+    addDays,
+    billableLines,
+    buildXeroCsv,
+    computeLineItems,
+    computeTotals,
+    formatIsoDate,
+    sumLineCents,
+    toCents,
+    toLocalIsoDate,
+    xeroLineDescription,
+} from '../utils/jobSheet';
 import {
     ArrowLeft,
     Receipt,
@@ -31,6 +45,7 @@ import {
     XeroContact,
     XeroAccount,
     XeroTenant,
+    XeroTaxRate,
     XeroLineItem,
 } from '../services/xeroService';
 
@@ -47,77 +62,12 @@ interface CompanySettings {
     website: string;
 }
 
-interface ComputedLineItem {
-    group: string;
-    label: string;
-    type: string;
-    qty: number;
-    unit: string;
-    unitPrice: number;
-    total: number;
-    isSubItem?: boolean;
-}
-
 // ── Props ─────────────────────────────────────────────────────────────────────
 
 interface XeroViewProps {
     items: TakeoffItem[];
     projectName: string;
     onBack: () => void;
-}
-
-// ── Helper: compute line items from TakeoffItems ──────────────────────────────
-
-function computeLineItems(items: TakeoffItem[]): ComputedLineItem[] {
-    const rows: ComputedLineItem[] = [];
-
-    items
-        .filter((i) => i.type !== ToolType.NOTE)
-        .forEach((item) => {
-            const convertedQty = convertValue(item.totalValue, Unit.FEET, item.unit, item.type);
-            const calculated = evaluateFormula(item, convertedQty);
-
-            const subContext: Record<string, number> = {};
-            let subTotal = 0;
-            const subRows: ComputedLineItem[] = [];
-
-            if (item.subItems && item.subItems.length > 0) {
-                item.subItems.forEach((sub) => {
-                    const subQty = evaluateFormula(item, convertedQty, sub.formula, subContext);
-                    const varName = toVariableName(sub.label);
-                    if (varName) subContext[varName] = subQty;
-                    const lineTotal = subQty * sub.price;
-                    subTotal += lineTotal;
-                    subRows.push({
-                        group: item.group || 'General',
-                        label: `  ↳ ${sub.label}`,
-                        type: 'Sub-Item',
-                        qty: subQty,
-                        unit: sub.unit,
-                        unitPrice: sub.price,
-                        total: lineTotal,
-                        isSubItem: true,
-                    });
-                });
-            }
-
-            const baseTotal = calculated * (item.price || 0);
-            const totalCost = baseTotal + subTotal;
-            const unitPrice = calculated > 0 ? totalCost / calculated : item.price || 0;
-
-            rows.push({
-                group: item.group || 'General',
-                label: item.label,
-                type: item.type,
-                qty: calculated,
-                unit: item.unit,
-                unitPrice,
-                total: totalCost,
-            });
-            rows.push(...subRows);
-        });
-
-    return rows;
 }
 
 const COMPANY_SETTINGS_KEY = 'xero_company_settings';
@@ -142,6 +92,19 @@ const fmt = new Intl.NumberFormat('en-AU', {
     currency: 'AUD',
     minimumFractionDigits: 2,
 });
+const fmtCents = (cents: number) => fmt.format(cents / 100);
+
+function errorMessage(e: unknown): string {
+    return e instanceof Error ? e.message : String(e);
+}
+
+/** Xero's Australian GST on Income rate if the organisation has it; '' falls back to the account default. */
+function defaultTaxType(rates: XeroTaxRate[]): string {
+    const preferred =
+        rates.find((r) => r.TaxType === DEFAULT_XERO_TAX_TYPE) ??
+        rates.find((r) => r.ReportTaxType === DEFAULT_XERO_TAX_TYPE);
+    return preferred?.TaxType ?? '';
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // XeroView Component
@@ -163,12 +126,8 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
     const [clientName, setClientName] = useState('');
     const [clientAddress, setClientAddress] = useState('');
     const [reference, setReference] = useState('');
-    const [invoiceDate, setInvoiceDate] = useState(() => new Date().toISOString().slice(0, 10));
-    const [dueDate, setDueDate] = useState(() => {
-        const d = new Date();
-        d.setDate(d.getDate() + 30);
-        return d.toISOString().slice(0, 10);
-    });
+    const [invoiceDate, setInvoiceDate] = useState(() => toLocalIsoDate(new Date()));
+    const [dueDate, setDueDate] = useState(() => toLocalIsoDate(addDays(new Date(), 30)));
 
     // ── Xero connection ─────────────────────────────────────────────────────
     const [clientId, setClientId] = useState('');
@@ -183,16 +142,32 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
     const [selectedContact, setSelectedContact] = useState('');
     const [accounts, setAccounts] = useState<XeroAccount[]>([]);
     const [selectedAccount, setSelectedAccount] = useState('');
+    const [taxRates, setTaxRates] = useState<XeroTaxRate[]>([]);
+    const [selectedTaxType, setSelectedTaxType] = useState('');
+    const [manualAccountCode, setManualAccountCode] = useState('');
     const [isSending, setIsSending] = useState(false);
     const [loadingXero, setLoadingXero] = useState(false);
+    // Each organisation load gets a sequence number so a slow response for a
+    // previously selected organisation can't overwrite the current one.
+    const tenantLoadSeq = useRef(0);
+    const autoLoaded = useRef(false);
 
     // ── Collapsible groups ──────────────────────────────────────────────────
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
     // ── Computed data ───────────────────────────────────────────────────────
     const lineItems = computeLineItems(items);
-    const grandTotal = lineItems.reduce((s, r) => (!r.isSubItem ? s + r.total : s), 0);
+    const billable = billableLines(lineItems);
     const groups = Array.from(new Set(lineItems.map((r) => r.group)));
+    const selectedTaxRate = taxRates.find((r) => r.TaxType === selectedTaxType);
+    const gstPercent =
+        isConnected && selectedTaxRate && Number.isFinite(Number(selectedTaxRate.EffectiveRate))
+            ? Number(selectedTaxRate.EffectiveRate)
+            : DEFAULT_GST_PERCENT;
+    const totals = computeTotals(lineItems, gstPercent);
+    const groupTotalCents = (group: string) => sumLineCents(lineItems.filter((r) => r.group === group));
+    const selectedAccountCode = accounts.find((a) => a.AccountID === selectedAccount)?.Code ?? '';
+    const csvAccountCode = (isConnected ? selectedAccountCode : manualAccountCode).trim();
 
     // ── Load saved settings on mount ────────────────────────────────────────
     useEffect(() => {
@@ -228,8 +203,8 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
             await xeroService.setClientId(clientId.trim());
             await xeroService.startOAuthFlow(clientId.trim());
             setAwaitingCode(true);
-        } catch (e: any) {
-            addToast(`Failed to start authorization: ${e.message}`, 'error');
+        } catch (e: unknown) {
+            addToast(`Failed to start authorization: ${errorMessage(e)}`, 'error');
         } finally {
             setIsConnecting(false);
         }
@@ -247,128 +222,134 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
         setIsConnecting(true);
         try {
             await xeroService.exchangeCode(authCode.trim(), clientId.trim(), authState.trim());
-            const token = await xeroService.getValidToken(clientId.trim());
-            const fetchedTenants = await xeroService.getTenants(token);
-            setTenants(fetchedTenants);
-            if (fetchedTenants.length === 1) {
-                setSelectedTenant(fetchedTenants[0].tenantId);
-                await xeroService.setTenantId(fetchedTenants[0].tenantId);
-            }
+            // Organisations, contacts and accounts load via the auto-load effect below.
+            autoLoaded.current = false;
             setIsConnected(true);
             setAwaitingCode(false);
             setAuthCode('');
             setAuthState('');
             addToast('Connected to Xero successfully!', 'success');
-        } catch (e: any) {
-            addToast(`Connection failed: ${e.message}`, 'error');
+        } catch (e: unknown) {
+            addToast(`Connection failed: ${errorMessage(e)}`, 'error');
         } finally {
             setIsConnecting(false);
         }
     };
 
-    const handleDisconnect = async () => {
-        await xeroService.clearTokens();
-        setIsConnected(false);
-        setTenants([]);
+    /** Contacts, accounts and tax rates belong to one organisation: drop them on switch. */
+    const resetTenantData = useCallback(() => {
+        tenantLoadSeq.current += 1;
         setContacts([]);
         setAccounts([]);
-        setSelectedTenant('');
+        setTaxRates([]);
         setSelectedContact('');
         setSelectedAccount('');
+        setSelectedTaxType('');
+    }, []);
+
+    const handleDisconnect = async () => {
+        await xeroService.clearTokens();
+        resetTenantData();
+        autoLoaded.current = false;
+        setIsConnected(false);
+        setTenants([]);
+        setSelectedTenant('');
         setAwaitingCode(false);
         setAuthCode('');
         setAuthState('');
         addToast('Disconnected from Xero', 'info');
     };
 
+    const loadTenantData = useCallback(async (token: string, tenantId: string) => {
+        const seq = ++tenantLoadSeq.current;
+        const [fetchedContacts, fetchedAccounts, fetchedTaxRates] = await Promise.all([
+            xeroService.getContacts(token, tenantId),
+            xeroService.getAccounts(token, tenantId),
+            xeroService.getTaxRates(token, tenantId),
+        ]);
+        if (seq !== tenantLoadSeq.current) return;
+        setContacts(fetchedContacts);
+        setAccounts(fetchedAccounts);
+        setTaxRates(fetchedTaxRates);
+        setSelectedContact((prev) => (fetchedContacts.some((c) => c.ContactID === prev) ? prev : ''));
+        setSelectedAccount((prev) => (fetchedAccounts.some((a) => a.AccountID === prev) ? prev : ''));
+        setSelectedTaxType((prev) =>
+            fetchedTaxRates.some((r) => r.TaxType === prev) ? prev : defaultTaxType(fetchedTaxRates)
+        );
+    }, []);
+
     const handleTenantSelect = async (tenantId: string) => {
         setSelectedTenant(tenantId);
+        resetTenantData();
+        if (!tenantId) return;
         await xeroService.setTenantId(tenantId);
         setLoadingXero(true);
         try {
             const token = await xeroService.getValidToken(clientId);
-            const [fetchedContacts, fetchedAccounts] = await Promise.all([
-                xeroService.getContacts(token, tenantId),
-                xeroService.getAccounts(token, tenantId),
-            ]);
-            setContacts(fetchedContacts);
-            setAccounts(fetchedAccounts);
-        } catch (e: any) {
-            addToast(`Failed to load Xero data: ${e.message}`, 'error');
+            await loadTenantData(token, tenantId);
+        } catch (e: unknown) {
+            addToast(`Failed to load Xero data: ${errorMessage(e)}`, 'error');
         } finally {
             setLoadingXero(false);
         }
     };
 
     const handleLoadXeroData = useCallback(async () => {
-        const tenantId = selectedTenant || (await xeroService.getTenantId());
-        if (!tenantId) return;
         setLoadingXero(true);
         try {
             const token = await xeroService.getValidToken(clientId);
-            const [fetchedContacts, fetchedAccounts, fetchedTenants] = await Promise.all([
-                xeroService.getContacts(token, tenantId),
-                xeroService.getAccounts(token, tenantId),
-                tenants.length === 0 ? xeroService.getTenants(token) : Promise.resolve(tenants),
-            ]);
-            setContacts(fetchedContacts);
-            setAccounts(fetchedAccounts);
-            if (tenants.length === 0) setTenants(fetchedTenants);
-            if (!selectedTenant && tenantId) setSelectedTenant(tenantId);
-        } catch (e: any) {
-            addToast(`Failed to refresh Xero data: ${e.message}`, 'error');
+            // Always fetch organisations, so a tenant that was never chosen (or
+            // has since been disconnected in Xero) can still be picked.
+            const fetchedTenants = await xeroService.getTenants(token);
+            setTenants(fetchedTenants);
+            const savedTenant = selectedTenant || (await xeroService.getTenantId()) || '';
+            let tenantId = fetchedTenants.some((t) => t.tenantId === savedTenant) ? savedTenant : '';
+            if (!tenantId && fetchedTenants.length === 1) tenantId = fetchedTenants[0].tenantId;
+            if (tenantId !== selectedTenant) {
+                resetTenantData();
+                setSelectedTenant(tenantId);
+            }
+            if (tenantId && tenantId !== savedTenant) await xeroService.setTenantId(tenantId);
+            if (tenantId) await loadTenantData(token, tenantId);
+        } catch (e: unknown) {
+            addToast(`Failed to refresh Xero data: ${errorMessage(e)}`, 'error');
         } finally {
             setLoadingXero(false);
         }
-    }, [clientId, selectedTenant, tenants, addToast]);
+    }, [clientId, selectedTenant, loadTenantData, resetTenantData, addToast]);
 
-    // When we switch to the Xero tab and are connected, load data lazily
+    // When we switch to the Xero tab and are connected, load data once
     useEffect(() => {
-        if (activeTab === 'xero' && isConnected && contacts.length === 0) {
-            handleLoadXeroData();
+        if (activeTab === 'xero' && isConnected && !autoLoaded.current) {
+            autoLoaded.current = true;
+            void handleLoadXeroData();
         }
     }, [activeTab, isConnected, handleLoadXeroData]);
 
     // ── CSV export for Xero ─────────────────────────────────────────────────
     const handleExportCSV = () => {
+        if (billable.length === 0) {
+            addToast('There are no line items to export', 'error');
+            return;
+        }
+        if (!csvAccountCode) {
+            addToast('Enter or select a revenue account code for the Xero CSV', 'error');
+            return;
+        }
         try {
-            const headers = [
-                '*ContactName', 'EmailAddress', 'POAddressLine1', 'POCity',
-                '*InvoiceNumber', 'Reference', '*InvoiceDate', '*DueDate',
-                'Total', '*InventoryItemCode', '*Description', '*Quantity',
-                '*UnitAmount', 'Discount', '*AccountCode', '*TaxType', 'TaxAmount', 'Currency',
-            ];
-
-            const mainRows = lineItems.filter((r) => !r.isSubItem);
-            const csvRows: string[][] = [];
-
-            mainRows.forEach((row, idx) => {
-                csvRows.push([
-                    clientName || projectName,
-                    '',
-                    clientAddress,
-                    '',
-                    reference || `INV-${Date.now().toString().slice(-6)}`,
-                    projectName,
-                    invoiceDate,
-                    dueDate,
-                    idx === 0 ? grandTotal.toFixed(2) : '',
-                    '',
-                    `${row.group}: ${row.label}`,
-                    row.qty.toFixed(2),
-                    row.unitPrice.toFixed(2),
-                    '',
-                    selectedAccount ? (accounts.find((a) => a.AccountID === selectedAccount)?.Code || '') : '',
-                    'OUTPUT2',
-                    '0',
-                    'AUD',
-                ]);
+            const csvContent = buildXeroCsv({
+                rows: lineItems,
+                contactName: clientName || projectName,
+                address: clientAddress,
+                // One invoice number for every row, so Xero imports a single invoice.
+                invoiceNumber: reference || `INV-${Date.now().toString().slice(-6)}`,
+                reference: projectName,
+                invoiceDate,
+                dueDate,
+                accountCode: csvAccountCode,
+                taxRateName: (isConnected && selectedTaxRate?.Name) || DEFAULT_XERO_TAX_RATE_NAME,
+                currency: 'AUD',
             });
-
-            const csvContent = [
-                headers.join(','),
-                ...csvRows.map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(',')),
-            ].join('\n');
 
             const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
             const url = URL.createObjectURL(blob);
@@ -378,8 +359,8 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
             a.click();
             URL.revokeObjectURL(url);
             addToast('Xero CSV exported successfully', 'success');
-        } catch (e: any) {
-            addToast(`CSV export failed: ${e.message}`, 'error');
+        } catch (e: unknown) {
+            addToast(`CSV export failed: ${errorMessage(e)}`, 'error');
         }
     };
 
@@ -387,22 +368,20 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
     const handleSendToXero = async () => {
         if (!selectedContact) { addToast('Please select a Xero contact', 'error'); return; }
         if (!selectedTenant) { addToast('Please select a Xero organisation', 'error'); return; }
+        if (billable.length === 0) { addToast('There are no line items to invoice', 'error'); return; }
 
         setIsSending(true);
         try {
             const token = await xeroService.getValidToken(clientId);
 
-            const xeroLineItems: XeroLineItem[] = lineItems
-                .filter((r) => !r.isSubItem)
-                .map((row) => ({
-                    Description: `${row.group}: ${row.label} (${row.qty.toFixed(2)} ${row.unit})`,
-                    Quantity: 1,
-                    UnitAmount: row.total,
-                    AccountCode: selectedAccount
-                        ? (accounts.find((a) => a.AccountID === selectedAccount)?.Code)
-                        : undefined,
-                    TaxType: 'OUTPUT2',
-                }));
+            const xeroLineItems: XeroLineItem[] = billable.map((row) => ({
+                Description: xeroLineDescription(row),
+                Quantity: 1,
+                UnitAmount: toCents(row.total) / 100,
+                AccountCode: selectedAccountCode || undefined,
+                // Omitted when no rate is chosen, so Xero applies the account's default.
+                TaxType: selectedTaxType || undefined,
+            }));
 
             const result = await xeroService.createInvoice(token, selectedTenant, {
                 Type: 'ACCREC',
@@ -417,8 +396,8 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
 
             addToast(`Invoice ${result.InvoiceNumber} created in Xero!`, 'success');
             await xeroService.openInvoiceInXero(result.InvoiceID);
-        } catch (e: any) {
-            addToast(`Failed to send to Xero: ${e.message}`, 'error');
+        } catch (e: unknown) {
+            addToast(`Failed to send to Xero: ${errorMessage(e)}`, 'error');
         } finally {
             setIsSending(false);
         }
@@ -489,13 +468,22 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                     <div className="p-5 max-w-4xl mx-auto">
                         {/* Job sheet controls (no-print) */}
                         <div className="flex items-center gap-3 mb-5 no-print">
-                            <div className="flex-1 grid grid-cols-3 gap-3">
+                            <div className="flex-1 grid grid-cols-2 gap-3">
                                 <div>
                                     <label className="text-xs font-medium text-muted-foreground mb-1 block">Client / Contact</label>
                                     <Input
                                         value={clientName}
                                         onChange={(e) => setClientName(e.target.value)}
                                         placeholder="Client name"
+                                        className="h-8 text-sm"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Client Address</label>
+                                    <Input
+                                        value={clientAddress}
+                                        onChange={(e) => setClientAddress(e.target.value)}
+                                        placeholder="Billing address"
                                         className="h-8 text-sm"
                                     />
                                 </div>
@@ -541,8 +529,8 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                     <div className="mt-2 text-sm text-gray-600">
                                         <div><span className="font-medium">Project:</span> {projectName}</div>
                                         {reference && <div><span className="font-medium">Ref:</span> {reference}</div>}
-                                        <div><span className="font-medium">Date:</span> {new Date(invoiceDate).toLocaleDateString('en-AU')}</div>
-                                        {dueDate && <div><span className="font-medium">Due:</span> {new Date(dueDate).toLocaleDateString('en-AU')}</div>}
+                                        <div><span className="font-medium">Date:</span> {formatIsoDate(invoiceDate)}</div>
+                                        {dueDate && <div><span className="font-medium">Due:</span> {formatIsoDate(dueDate)}</div>}
                                     </div>
                                 </div>
                             </div>
@@ -558,8 +546,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
 
                             {/* Line items by group */}
                             {groups.map((group) => {
-                                const groupRows = lineItems.filter((r) => r.group === group && !r.isSubItem);
-                                const groupTotal = groupRows.reduce((s, r) => s + r.total, 0);
+                                const groupTotal = groupTotalCents(group);
                                 const isCollapsed = collapsedGroups.has(group);
 
                                 return (
@@ -573,11 +560,11 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                                 {isCollapsed ? <ChevronRight size={14} className="text-gray-400" /> : <ChevronDown size={14} className="text-gray-400" />}
                                                 <span className="font-semibold text-sm text-gray-700">{group}</span>
                                             </div>
-                                            <span className="text-sm font-medium text-gray-600">{fmt.format(groupTotal)}</span>
+                                            <span className="text-sm font-medium text-gray-600">{fmtCents(groupTotal)}</span>
                                         </div>
                                         <div className="font-semibold text-sm text-gray-700 py-2 border-b-2 border-gray-200 print-only hidden print:flex justify-between">
                                             <span>{group}</span>
-                                            <span>{fmt.format(groupTotal)}</span>
+                                            <span>{fmtCents(groupTotal)}</span>
                                         </div>
 
                                         <table className={`w-full text-sm mt-2 ${isCollapsed ? 'hidden print:table' : ''}`}>
@@ -611,7 +598,8 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                                                     {row.unitPrice > 0 ? fmt.format(row.unitPrice) : '—'}
                                                                 </td>
                                                                 <td className="py-2 text-right font-medium">
-                                                                    {row.total > 0 ? fmt.format(row.total) : '—'}
+                                                                    {/* Sub-items are a breakdown of the row above, not extra charges */}
+                                                                    {row.isSubItem ? '' : row.total > 0 ? fmt.format(row.total) : '—'}
                                                                 </td>
                                                             </tr>
                                                         ))}
@@ -626,16 +614,16 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                 <div className="w-64">
                                     <div className="flex justify-between py-2 text-sm">
                                         <span className="text-gray-600">Subtotal</span>
-                                        <span className="font-medium">{fmt.format(grandTotal)}</span>
+                                        <span className="font-medium">{fmtCents(totals.subtotalCents)}</span>
                                     </div>
                                     <div className="flex justify-between py-2 text-sm text-gray-400">
-                                        <span>GST (10%)</span>
-                                        <span>{fmt.format(grandTotal * 0.1)}</span>
+                                        <span>GST ({gstPercent}%)</span>
+                                        <span>{fmtCents(totals.gstCents)}</span>
                                     </div>
                                     <Separator className="my-1" />
                                     <div className="flex justify-between py-2 font-bold text-base">
                                         <span>Total (inc. GST)</span>
-                                        <span className="text-primary">{fmt.format(grandTotal * 1.1)}</span>
+                                        <span className="text-primary">{fmtCents(totals.totalCents)}</span>
                                     </div>
                                 </div>
                             </div>
@@ -813,7 +801,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                             )}
                                         </div>
                                         <div>
-                                            <label className="text-xs font-medium text-muted-foreground mb-1 block">Revenue Account <span className="font-normal">(optional)</span></label>
+                                            <label className="text-xs font-medium text-muted-foreground mb-1 block">Revenue Account <span className="font-normal">(optional when sending, required for CSV)</span></label>
                                             {loadingXero ? (
                                                 <div className="flex items-center gap-2 text-xs text-muted-foreground h-8"><Loader2 size={12} className="animate-spin" /> Loading accounts…</div>
                                             ) : (
@@ -829,7 +817,39 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                                 </select>
                                             )}
                                         </div>
+                                        <div>
+                                            <label className="text-xs font-medium text-muted-foreground mb-1 block">Tax Rate</label>
+                                            {loadingXero ? (
+                                                <div className="flex items-center gap-2 text-xs text-muted-foreground h-8"><Loader2 size={12} className="animate-spin" /> Loading tax rates…</div>
+                                            ) : (
+                                                <select
+                                                    value={selectedTaxType}
+                                                    onChange={(e) => setSelectedTaxType(e.target.value)}
+                                                    className="w-full h-8 text-sm border border-border rounded-md px-2 bg-background"
+                                                >
+                                                    <option value="">Account default tax rate</option>
+                                                    {taxRates.map((r) => (
+                                                        <option key={r.TaxType} value={r.TaxType}>{r.Name}</option>
+                                                    ))}
+                                                </select>
+                                            )}
+                                        </div>
                                     </>
+                                )}
+
+                                {!isConnected && (
+                                    <div>
+                                        <label className="text-xs font-medium text-muted-foreground mb-1 block">Revenue Account Code <span className="font-normal">(required for CSV)</span></label>
+                                        <Input
+                                            value={manualAccountCode}
+                                            onChange={(e) => setManualAccountCode(e.target.value)}
+                                            placeholder="Xero account code, e.g. 200"
+                                            className="h-8 text-sm"
+                                        />
+                                        <p className="text-[11px] text-muted-foreground mt-1">
+                                            CSV lines use the &ldquo;{DEFAULT_XERO_TAX_RATE_NAME}&rdquo; tax rate.
+                                        </p>
+                                    </div>
                                 )}
                             </CardContent>
                         </Card>
@@ -837,21 +857,20 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                         {/* ── Summary ───────────────────────────────────────── */}
                         <Card>
                             <CardContent className="p-4">
-                                <div className="font-semibold text-sm mb-3">Summary ({lineItems.filter((r) => !r.isSubItem).length} items)</div>
+                                <div className="font-semibold text-sm mb-3">Summary ({billable.length} items)</div>
                                 <div className="space-y-1 text-sm">
                                     {groups.map((g) => {
-                                        const gTotal = lineItems.filter((r) => r.group === g && !r.isSubItem).reduce((s, r) => s + r.total, 0);
                                         return (
                                             <div key={g} className="flex justify-between text-muted-foreground">
                                                 <span>{g}</span>
-                                                <span>{fmt.format(gTotal)}</span>
+                                                <span>{fmtCents(groupTotalCents(g))}</span>
                                             </div>
                                         );
                                     })}
                                     <Separator className="my-2" />
                                     <div className="flex justify-between font-semibold">
                                         <span>Total (ex GST)</span>
-                                        <span>{fmt.format(grandTotal)}</span>
+                                        <span>{fmtCents(totals.subtotalCents)}</span>
                                     </div>
                                 </div>
                             </CardContent>
@@ -859,14 +878,20 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
 
                         {/* ── Action buttons ────────────────────────────────── */}
                         <div className="flex gap-3">
-                            <Button variant="outline" className="flex-1 h-9 text-sm" onClick={handleExportCSV}>
+                            <Button
+                                variant="outline"
+                                className="flex-1 h-9 text-sm"
+                                onClick={handleExportCSV}
+                                disabled={billable.length === 0 || !csvAccountCode}
+                                title={!csvAccountCode ? 'A revenue account code is required for the Xero CSV' : undefined}
+                            >
                                 <FileDown size={14} className="mr-2" /> Export CSV for Xero
                             </Button>
                             {isConnected && (
                                 <Button
                                     className="flex-1 h-9 text-sm"
                                     onClick={handleSendToXero}
-                                    disabled={isSending || !selectedContact}
+                                    disabled={isSending || !selectedContact || !selectedTenant || billable.length === 0}
                                 >
                                     {isSending ? (
                                         <Loader2 size={14} className="mr-2 animate-spin" />
