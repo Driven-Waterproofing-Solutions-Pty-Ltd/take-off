@@ -812,7 +812,7 @@ const AppContent: React.FC = () => {
         onToggleVisibility={handleToggleItemVisibility}
         onShowEstimates={() => { handleStopTakeoff(); setViewMode('estimates'); }}
         onShow3D={() => { handleStopTakeoff(); setViewMode('3d'); }}
-        onShowXero={() => { handleStopTakeoff(); setViewMode('xero'); }}
+        onShowXero={() => { handleStopTakeoff(); setViewMode('xero'); setSidebarOpen(false); }}
         onRenamePage={(i, n) => setHistory(draft => {
           if (!draft.projectData[i]) {
             draft.projectData[i] = { scale: { isSet: false, pixelsPerUnit: 1, unit: Unit.FEET } };

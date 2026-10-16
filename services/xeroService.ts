@@ -127,8 +127,18 @@ const store = new LazyStore('xero-settings.json');
 // Xero rotates the refresh token on every use, so only one refresh may run at
 // a time; concurrent callers share the in-flight one.
 let refreshInFlight: Promise<XeroTokens> | null = null;
-// Set while disconnecting so no new refresh can write tokens back afterwards.
+// Set while disconnecting so no new refresh can start; the epoch changes on
+// every disconnect so a refresh that started earlier can't write tokens back.
 let disconnecting = false;
+let tokenEpoch = 0;
+/** Xero only remembers an idempotency key for a few minutes. */
+const IDEMPOTENCY_WINDOW_MS = 5 * 60 * 1000;
+
+export interface PendingSend {
+    key: string;
+    /** True when an earlier attempt of this invoice is older than Xero's idempotency window. */
+    stale: boolean;
+}
 
 export const XERO_REDIRECT_URI = 'https://poyashauvewhifohkxeg.supabase.co/functions/v1/xero-oauth/callback';
 
@@ -244,6 +254,7 @@ export const xeroService = {
     },
 
     async refreshTokens(clientId: string): Promise<XeroTokens> {
+        const epoch = tokenEpoch;
         const tokens = await this.getTokens();
         if (!tokens?.refresh_token) throw new Error('No refresh token available');
 
@@ -274,6 +285,7 @@ export const xeroService = {
             expires_at: Date.now() + (data.expires_in ?? 1800) * 1000,
         };
 
+        if (epoch !== tokenEpoch) throw new Error('Disconnected from Xero.');
         await this.setTokens(newTokens);
         return newTokens;
     },
@@ -289,6 +301,7 @@ export const xeroService = {
             // Let a refresh already under way store its rotated tokens, so the
             // newest refresh token is the one revoked and nothing is written back.
             while (refreshInFlight) await refreshInFlight.catch(() => undefined);
+            tokenEpoch += 1;
             const tokens = await this.getTokens();
             let revoked = !tokens?.refresh_token;
             if (tokens?.refresh_token && clientId) {
@@ -317,6 +330,8 @@ export const xeroService = {
         if (disconnecting) throw new Error('Disconnecting from Xero.');
         let tokens = await this.getTokens();
         if (!tokens) throw new Error('Not connected to Xero. Please connect first.');
+        // A disconnect may have started while the tokens were being read.
+        if (disconnecting) throw new Error('Disconnecting from Xero.');
         // Refresh if expiring within 5 minutes
         if (tokens.expires_at < Date.now() + 5 * 60 * 1000) {
             refreshInFlight ??= this.refreshTokens(clientId).finally(() => {
@@ -388,15 +403,23 @@ export const xeroService = {
     /**
      * The idempotency key for an invoice, identified by `fingerprint`. It is
      * stored until `clearPendingSend`, so a retry of the same invoice reuses it
-     * even after the view or the app has been reopened.
+     * even after the view or the app has been reopened. Once an attempt is
+     * older than Xero's idempotency window the key no longer protects a retry,
+     * so `stale` is set and the caller should have the user check Xero first.
      */
-    async idempotencyKeyFor(fingerprint: string): Promise<string> {
-        const pending = await store.get<{ fingerprint: string; key: string }>(KEY_PENDING_SEND);
-        if (pending?.fingerprint === fingerprint) return pending.key;
+    async idempotencyKeyFor(fingerprint: string): Promise<PendingSend> {
+        const pending = await store.get<{ fingerprint: string; key: string; createdAt?: number }>(KEY_PENDING_SEND);
+        if (pending?.fingerprint === fingerprint) {
+            const age = Date.now() - (pending.createdAt ?? 0);
+            if (age <= IDEMPOTENCY_WINDOW_MS) return { key: pending.key, stale: false };
+            await store.delete(KEY_PENDING_SEND);
+            await store.save();
+            return { key: pending.key, stale: true };
+        }
         const key = crypto.randomUUID();
-        await store.set(KEY_PENDING_SEND, { fingerprint, key });
+        await store.set(KEY_PENDING_SEND, { fingerprint, key, createdAt: Date.now() });
         await store.save();
-        return key;
+        return { key, stale: false };
     },
     async clearPendingSend(): Promise<void> {
         await store.delete(KEY_PENDING_SEND);

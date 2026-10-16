@@ -96,6 +96,12 @@ const fmt = new Intl.NumberFormat('en-AU', {
 });
 const fmtCents = (cents: number) => fmt.format(cents / 100);
 
+/** INV-YYYYMMDD-HHMMSS: unique per second and never wraps, unlike a truncated timestamp. */
+function fallbackInvoiceNumber(now: Date): string {
+    const time = [now.getHours(), now.getMinutes(), now.getSeconds()].map((n) => String(n).padStart(2, '0')).join('');
+    return `INV-${toLocalIsoDate(now).replace(/-/g, '')}-${time}`;
+}
+
 // Tauri's Android/iOS WebViews ignore window.print() and blob downloads.
 const IS_MOBILE = isMobilePlatform();
 
@@ -373,7 +379,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                 contactName: (isConnected && selectedContactName) || clientName || projectName,
                 address: clientAddress,
                 // One invoice number for every row, so Xero imports a single invoice.
-                invoiceNumber: invoiceNumber.trim() || `INV-${Date.now().toString().slice(-6)}`,
+                invoiceNumber: invoiceNumber.trim() || fallbackInvoiceNumber(new Date()),
                 // Same meaning as the direct send: the Reference field, else the project.
                 reference: reference || projectName,
                 invoiceDate,
@@ -433,8 +439,13 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
             };
             // One idempotency key per distinct invoice, stored until Xero confirms
             // it, so a retry after a lost response can't create a second draft.
-            const idempotencyKey = await xeroService.idempotencyKeyFor(JSON.stringify([selectedTenant, payload]));
-            const result = await xeroService.createInvoice(token, selectedTenant, payload, idempotencyKey);
+            const pending = await xeroService.idempotencyKeyFor(JSON.stringify([selectedTenant, payload]));
+            if (pending.stale) {
+                // Too old for Xero to deduplicate: the user checks Xero, then clicks again.
+                addToast('An earlier send of this invoice was not confirmed and may already be in Xero. Check your draft invoices, then click Send again to send it anyway.', 'error');
+                return;
+            }
+            const result = await xeroService.createInvoice(token, selectedTenant, payload, pending.key);
             await xeroService.clearPendingSend();
 
             addToast(`Invoice ${result.InvoiceNumber} created in Xero!`, 'success');
