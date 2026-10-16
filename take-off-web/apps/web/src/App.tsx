@@ -98,15 +98,34 @@ const AppContent: React.FC = () => {
   // still in state, and auto-opening the modal would offer to push that
   // project's invoice instead.
   const handleOpenAndInvoice = async (id: string) => {
+    if (!confirmDiscardPendingSync()) return;
     const opened = await openProjectById(id);
     if (!opened) return;
+    // The new project's plans start at page 0; a page index (and selection)
+    // carried over from the previous project can point past its last page
+    // and leave a blank canvas.
+    setPageIndex(0);
+    setSelectedShapes([]);
+    setActiveTakeoffId(null);
+    setActiveTool(ToolType.SELECT);
     setAutoOpenXero(true);
     setViewMode('estimates');
   };
 
   // Persist every local state change back to D1 + R2.
-  useShapeSync(projectId, items);
-  useScaleSync(projectId, projectData);
+  const shapeSync = useShapeSync(projectId, items);
+  const scaleSync = useScaleSync(projectId, projectData);
+  // True when every local edit has reached the worker (nothing in flight,
+  // nothing waiting to retry). Gates quote review/push and project switches.
+  const isSyncIdle = () => shapeSync.isIdle() && scaleSync.isIdle();
+  // Switching projects resets the sync hooks to the new project, so any
+  // write still pending (in flight or failed and waiting to retry) for the
+  // current one would be dropped silently. Ask first.
+  const confirmDiscardPendingSync = (): boolean =>
+    isSyncIdle() ||
+    window.confirm(
+      'Some changes in this project have not been saved to the server yet. Switch anyway and discard them?'
+    );
   // Record the resolved R2 key so exportProjectToZip can serialize r2_key for
   // plans uploaded mid-session (without it, Save Project loses the reference
   // and a re-imported snapshot opens the drawing as a placeholder). Kept out
@@ -991,7 +1010,10 @@ const AppContent: React.FC = () => {
         onDeletePage={(i) => { setPageToDelete(i); setShowDeletePageConfirm(true); }}
         onEditItem={setEditingItem} onRenameItem={(id, n) => handleUpdateItem(id, { label: n })}
         onMoveShapesToItem={handleMoveShapesToItem}
-        projectName={projectName} onNewProject={handleNewProjectRequest} onSaveProject={handleSaveProject} onLoadProject={handleLoadProjectClick}
+        projectName={projectName}
+        onNewProject={() => { if (confirmDiscardPendingSync()) handleNewProjectRequest(); }}
+        onSaveProject={handleSaveProject}
+        onLoadProject={() => { if (confirmDiscardPendingSync()) handleLoadProjectClick(); }}
         isSaving={isSaving} lastSavedAt={lastSavedAt} activeTool={activeTool} onOpenExportModal={() => setShowExportModal(true)}
         onOpenHelp={() => setShowHelpModal(true)}
         onDeleteShapes={handleDeleteShapes}
@@ -1001,6 +1023,7 @@ const AppContent: React.FC = () => {
           <EstimatesView items={items} onBack={() => setViewMode('canvas')} onDeleteItem={handleDeleteItem} onUpdateItem={handleUpdateItem}
             onReorderItems={(newItems) => setHistory(draft => { draft.items = newItems; })} onEditItem={setEditingItem}
             projectId={projectId} projectName={projectName}
+            isSyncIdle={isSyncIdle}
             autoOpenXero={autoOpenXero}
             onAutoOpenXeroHandled={() => setAutoOpenXero(false)} />
         ) : viewMode === '3d' ? (

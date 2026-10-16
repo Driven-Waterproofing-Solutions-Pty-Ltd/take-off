@@ -27,6 +27,8 @@ export interface RetryBackoff {
   wake: () => void;
   /** Forget all keys (e.g. when the project changes). */
   reset: () => void;
+  /** True while any key has an unresolved failure (waiting to retry). */
+  hasPendingFailures: () => boolean;
 }
 
 export function useRetryBackoff(): RetryBackoff {
@@ -83,5 +85,7 @@ export function useRetryBackoff(): RetryBackoff {
     retryAt.current = new Map();
   }, []);
 
-  return { tick, isBackingOff, succeeded, failed, wake, reset };
+  const hasPendingFailures = useCallback(() => failures.current.size > 0, []);
+
+  return { tick, isBackingOff, succeeded, failed, wake, reset, hasPendingFailures };
 }

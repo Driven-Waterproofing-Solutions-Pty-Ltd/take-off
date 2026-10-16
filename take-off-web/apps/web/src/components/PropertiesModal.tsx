@@ -172,6 +172,12 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
     // wrong depth entered at creation can be corrected without recreating the
     // item and all of its measurements.
     const isVolume = item.type === ToolType.VOLUME;
+    // A measured item's unit comes from the calibration its shapes were
+    // measured under. Changing it here only relabels the same numbers (10 ft
+    // would quote as 10 m), so it's locked once there are measurements;
+    // recalibrate the page to change units. COUNT/NOTE units are labels.
+    const unitLocked =
+        item.shapes.length > 0 && item.type !== ToolType.COUNT && item.type !== ToolType.NOTE;
     const depthUnitLabel = item.unit.startsWith('cu ') ? item.unit.slice(3) : item.unit;
     const [depth, setDepth] = useState<string>(item.depth != null ? item.depth.toString() : '');
     const parseDepth = (raw: string): number | undefined => {
@@ -657,7 +663,7 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
                                     <Label className="flex items-center gap-1">
                                         {item.type === ToolType.AREA ? <LayoutGrid size={14} /> : <Ruler size={14} />} Unit
                                     </Label>
-                                    <Select value={unit} onValueChange={(val) => setUnit(val as Unit)}>
+                                    <Select value={unit} onValueChange={(val) => setUnit(val as Unit)} disabled={unitLocked}>
                                         <SelectTrigger>
                                             <SelectValue />
                                         </SelectTrigger>
@@ -667,6 +673,9 @@ const PropertiesModal: React.FC<PropertiesModalProps> = ({ item, items, onSave, 
                                             ))}
                                         </SelectContent>
                                     </Select>
+                                    {unitLocked && (
+                                        <p className="text-xs text-muted-foreground">Set by the page calibration — recalibrate to change units.</p>
+                                    )}
                                 </div>
                                 <div className="space-y-2">
                                     <Label className="flex items-center gap-1"><DollarSign size={14} /> Price</Label>

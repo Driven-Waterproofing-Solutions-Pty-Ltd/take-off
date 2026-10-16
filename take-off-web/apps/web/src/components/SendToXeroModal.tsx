@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -19,7 +19,14 @@ interface SendToXeroModalProps {
   projectId: string;
   projectName?: string;
   onClose: () => void;
+  // True once every local edit has reached the worker. The quote is
+  // rebuilt server-side, so reviewing (or pushing) while edits are still in
+  // flight would show and send stale pricing.
+  isSyncIdle?: () => boolean;
 }
+
+const SYNC_WAIT_MS = 15_000;
+const SYNC_POLL_MS = 300;
 
 interface XeroDoc {
   id: string;
@@ -45,8 +52,13 @@ const SendToXeroModal: React.FC<SendToXeroModalProps> = ({
   projectId,
   projectName,
   onClose,
+  isSyncIdle,
 }) => {
   const { addToast } = useToast();
+  const isSyncIdleRef = useRef(isSyncIdle);
+  isSyncIdleRef.current = isSyncIdle;
+  const syncIdle = () => isSyncIdleRef.current?.() ?? true;
+  const [waitingForSync, setWaitingForSync] = useState(false);
 
   const [quote, setQuote] = useState<QuoteDraft | null>(null);
   const [docs, setDocs] = useState<XeroDoc[]>([]);
@@ -88,10 +100,31 @@ const SendToXeroModal: React.FC<SendToXeroModalProps> = ({
     setPushed(null);
     setLoadingDocs(true);
 
-    api.memory
-      .quote(projectId)
+    const waitForSync = async (): Promise<boolean> => {
+      if (syncIdle()) return true;
+      setWaitingForSync(true);
+      const deadline = Date.now() + SYNC_WAIT_MS;
+      while (!cancelled && !syncIdle() && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, SYNC_POLL_MS));
+      }
+      if (!cancelled) setWaitingForSync(false);
+      return syncIdle();
+    };
+
+    waitForSync()
+      .then((idle) => {
+        if (cancelled) return null;
+        if (!idle) {
+          addToast(
+            "Some changes haven't saved to the server yet, so the quote can't be reviewed. Close this and try again in a moment.",
+            'error'
+          );
+          return null;
+        }
+        return api.memory.quote(projectId);
+      })
       .then((q) => {
-        if (!cancelled) setQuote(q);
+        if (!cancelled && q) setQuote(q);
       })
       .catch((e) => {
         if (cancelled) return;
@@ -169,6 +202,10 @@ const SendToXeroModal: React.FC<SendToXeroModalProps> = ({
   };
 
   const send = async () => {
+    if (!syncIdle()) {
+      addToast("Changes are still saving — reopen the review once they've synced.", 'error');
+      return;
+    }
     setPushing(true);
     try {
       const contactId = await resolveContactId();
@@ -239,6 +276,12 @@ const SendToXeroModal: React.FC<SendToXeroModalProps> = ({
                 </a>
               ))
             )}
+          </div>
+        )}
+
+        {waitingForSync && (
+          <div className="text-sm text-muted-foreground flex items-center gap-2">
+            <Loader2 className="w-4 h-4 animate-spin" /> Saving your latest changes before building the quote…
           </div>
         )}
 

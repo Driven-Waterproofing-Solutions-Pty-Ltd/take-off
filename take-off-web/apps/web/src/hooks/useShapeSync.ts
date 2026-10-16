@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import type { TakeoffItem, Shape } from '../types';
 import { ToolType } from '../types';
 import { api } from '../lib/api';
@@ -114,7 +114,12 @@ function pickItemPatch(item: TakeoffItem): Parameters<typeof api.items.update>[1
   };
 }
 
-export function useShapeSync(projectId: string | null, items: TakeoffItem[]): void {
+export interface SyncStatus {
+  /** True when nothing is in flight and no failed write is waiting to retry. */
+  isIdle: () => boolean;
+}
+
+export function useShapeSync(projectId: string | null, items: TakeoffItem[]): SyncStatus {
   const itemSnapshots = useRef<Map<string, ItemSnapshot>>(new Map());
   const shapeSnapshots = useRef<Map<string, ShapeSnapshot>>(new Map());
   const inflight = useRef<Map<string, SyncOp>>(new Map());
@@ -405,7 +410,14 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
             text: shape.text,
             item_id: prev.itemId !== nextSnap.itemId ? nextSnap.itemId : undefined,
           })
-          .then(() => {
+          .then((res) => {
+            if (!res.updated) {
+              // The row is gone server-side (deleted from another tab/user).
+              // Drop the snapshot so the next pass re-creates the shape from
+              // the local copy, instead of marking a no-op as synced.
+              shapeSnaps.delete(shapeId);
+              return true;
+            }
             shapeSnaps.set(shapeId, nextSnap);
             return true;
           })
@@ -442,6 +454,15 @@ export function useShapeSync(projectId: string | null, items: TakeoffItem[]): vo
         .then((ok) => settle(`shape:${shapeId}`, ok));
     }
   }, [projectId, items, backoff.tick]);
+
+  // Read from refs at call time (no re-render per request). Callers use it
+  // to hold off reviewing/pushing a quote, or switching projects, while
+  // local edits haven't reached the server yet.
+  const isIdle = useCallback(
+    () => inflight.current.size === 0 && !backoff.hasPendingFailures(),
+    [backoff]
+  );
+  return { isIdle };
 }
 
 export function primeShapeSyncFromServerState(

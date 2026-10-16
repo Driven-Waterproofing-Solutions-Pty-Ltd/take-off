@@ -273,6 +273,9 @@ const TemplateManager: React.FC<TemplateManagerProps> = ({ mode = 'manage', filt
             properties: updates.properties || editingTemplateItem.properties,
             subItems: updates.subItems || editingTemplateItem.subItems,
             group: updates.group || editingTemplateItem.group || 'General',
+            // VOLUME templates carry their depth; dropping it here made items
+            // created from the template total as area under a cubic unit.
+            depth: 'depth' in updates ? updates.depth : editingTemplateItem.depth,
             createdAt: isCreatingNew ? Date.now() : (localTemplates.find(t => t.id === id)?.createdAt || Date.now())
         };
 

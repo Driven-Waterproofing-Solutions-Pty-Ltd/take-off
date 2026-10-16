@@ -47,9 +47,21 @@ const PDFSearch: React.FC<PDFSearchProps> = ({
         }
     }, [isOpen]);
 
+    // Cancel a search still in its debounce window when the panel closes or
+    // unmounts — otherwise it fired afterwards, navigated to its first hit
+    // and re-populated highlights for a closed panel (or a different plan).
+    const cancelPendingSearch = () => {
+        if (debounceRef.current) {
+            clearTimeout(debounceRef.current);
+            debounceRef.current = null;
+        }
+    };
+    useEffect(() => cancelPendingSearch, []);
+
     // Clear on close
     useEffect(() => {
         if (!isOpen) {
+            cancelPendingSearch();
             setQuery('');
             setResults(null);
             setSelectedResultIndex(0);

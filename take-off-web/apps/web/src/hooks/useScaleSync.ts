@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import type { LegendSettings, ProjectData, ScaleCalibration, Unit } from '../types';
 import { api } from '../lib/api';
 import { useRetryBackoff } from './useRetryBackoff';
+import type { SyncStatus } from './useShapeSync';
 
 // Push per-page scale + legend changes to the worker so area/linear/arc tools
 // can persist and exported markups keep the user's layout across reloads.
@@ -18,7 +19,7 @@ function legendKey(l: LegendSettings | undefined): string {
   return `${l.x.toFixed(2)}:${l.y.toFixed(2)}:${l.scale.toFixed(3)}:${l.visible ?? true}`;
 }
 
-export function useScaleSync(projectId: string | null, projectData: ProjectData): void {
+export function useScaleSync(projectId: string | null, projectData: ProjectData): SyncStatus {
   const lastProjectId = useRef<string | null>(null);
   const snapshots = useRef<Map<number, string>>(new Map());
   const legendSnapshots = useRef<Map<number, string>>(new Map());
@@ -212,4 +213,14 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
       }
     }
   }, [projectId, projectData, backoff.tick]);
+
+  const isIdle = useCallback(
+    () =>
+      inflight.current.size === 0 &&
+      legendInflight.current.size === 0 &&
+      nameInflight.current.size === 0 &&
+      !backoff.hasPendingFailures(),
+    [backoff]
+  );
+  return { isIdle };
 }

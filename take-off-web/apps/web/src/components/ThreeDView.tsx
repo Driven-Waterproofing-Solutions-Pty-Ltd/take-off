@@ -178,7 +178,8 @@ const ThreeDView: React.FC<ThreeDViewProps> = ({ items, onBack, planSets, pageIn
               shape={shape}
               itemType={item.type}
               color={item.color}
-              depth={item.depth || 1}
+              // `??` not `||`: an explicit depth of 0 is a flat (zero-volume) item.
+              depth={item.depth ?? 1}
             />
           ))
         ))}

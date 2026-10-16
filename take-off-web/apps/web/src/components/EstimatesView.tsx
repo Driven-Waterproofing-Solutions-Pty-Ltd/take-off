@@ -28,9 +28,12 @@ interface EstimatesViewProps {
     // straight on the push flow.
     autoOpenXero?: boolean;
     onAutoOpenXeroHandled?: () => void;
+    // True once every local edit has reached the worker; the Xero review
+    // waits for it so it never reviews/pushes a stale server quote.
+    isSyncIdle?: () => boolean;
 }
 
-const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteItem, onUpdateItem, onReorderItems, onEditItem, projectId, projectName, autoOpenXero, onAutoOpenXeroHandled }) => {
+const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteItem, onUpdateItem, onReorderItems, onEditItem, projectId, projectName, autoOpenXero, onAutoOpenXeroHandled, isSyncIdle }) => {
     const { addToast } = useToast();
     const [activeTab, setActiveTab] = useState<'estimates' | 'templates'>('estimates');
     const [showXeroModal, setShowXeroModal] = useState(false);
@@ -47,13 +50,19 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
     // export match the draft quote/invoice the Xero action creates, instead
     // of showing an assembly-priced item as $0 or as its stale parent price.
     const [assemblyTotals, setAssemblyTotals] = useState<Map<string, number>>(new Map());
+    // 'ready' only once the totals reflect the CURRENT items; while loading
+    // (or after a failed refresh) assembly items show as pending instead of
+    // a misleading $0 / stale figure, and the export waits.
+    const [assemblyStatus, setAssemblyStatus] = useState<'ready' | 'loading' | 'error'>('ready');
     const hasAssemblies = items.some(i => !!i.assemblyId);
     useEffect(() => {
         if (!projectId || !hasAssemblies) {
             setAssemblyTotals(new Map());
+            setAssemblyStatus('ready');
             return;
         }
         let cancelled = false;
+        setAssemblyStatus('loading');
         // Debounced: the sync hooks push local edits first.
         const timer = setTimeout(() => {
             api.memory.quote(projectId)
@@ -65,16 +74,26 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                         totals.set(line.itemId, (totals.get(line.itemId) ?? 0) + line.lineTotal);
                     }
                     setAssemblyTotals(totals);
+                    setAssemblyStatus('ready');
                 })
-                .catch((e) => console.warn('assembly pricing fetch failed', e));
+                .catch((e) => {
+                    if (cancelled) return;
+                    console.warn('assembly pricing fetch failed', e);
+                    setAssemblyStatus('error');
+                });
         }, 800);
         return () => {
             cancelled = true;
             clearTimeout(timer);
         };
     }, [projectId, hasAssemblies, items]);
-    const assemblyTotalFor = (item: TakeoffItem): number | undefined =>
-        item.assemblyId ? assemblyTotals.get(item.id) ?? 0 : undefined;
+    // undefined = not assembly-priced; null = assembly total not known yet.
+    const assemblyTotalFor = (item: TakeoffItem): number | null | undefined => {
+        if (!item.assemblyId) return undefined;
+        if (assemblyStatus !== 'ready') return null;
+        return assemblyTotals.get(item.id) ?? 0;
+    };
+    const PENDING = assemblyStatus === 'error' ? 'unavailable' : '…';
 
     const [groups, setGroups] = useState<string[]>([]);
     const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
@@ -142,6 +161,15 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
     }, []);
 
     const handleExport = () => {
+        if (items.some(i => assemblyTotalFor(i) === null)) {
+            addToast(
+                assemblyStatus === 'error'
+                    ? 'Assembly pricing could not be loaded — reopen Estimates and try the export again.'
+                    : 'Assembly pricing is still loading — try the export again in a moment.',
+                'error'
+            );
+            return;
+        }
         try {
             const allData: any[] = [];
 
@@ -174,7 +202,10 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                             Qty: Number(subQty.toFixed(2)),
                             Unit: sub.unit,
                             UnitPrice: sub.price,
-                            TotalCost: subTotal,
+                            // Breakdown only: the main row's TotalCost already carries the
+                            // item's charge (parent price, sub-item sum or assembly), so
+                            // repeating it in TotalCost double-counted when summed.
+                            SubItemCost: subTotal,
                             Pages: '',
                         });
                     });
@@ -193,7 +224,7 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                     totalCost = calculated * (item.price || 0);
                 }
                 const assemblyTotal = assemblyTotalFor(item);
-                if (assemblyTotal !== undefined) {
+                if (assemblyTotal != null) {
                     totalCost = assemblyTotal;
                     unitPrice = calculated > 0 ? assemblyTotal / calculated : 0;
                 }
@@ -611,6 +642,7 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                                         const groupItems = items.filter(i => (i.group || 'General') === group && i.type !== ToolType.NOTE);
 
                                         // Calculate Total Cost for the Group (Including Sub-items)
+                                        let groupHasPendingAssembly = false;
                                         const groupTotalCost = groupItems.reduce((sum, item) => {
                                             const convertedQty = convertValue(item.totalValue, Unit.FEET, item.unit, item.type);
                                             const qty = evaluateFormula(item, convertedQty);
@@ -638,7 +670,8 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                                                 itemTotal = subItemsTotal;
                                             }
                                             const assemblyTotal = assemblyTotalFor(item);
-                                            if (assemblyTotal !== undefined) itemTotal = assemblyTotal;
+                                            if (assemblyTotal === null) groupHasPendingAssembly = true;
+                                            else if (assemblyTotal !== undefined) itemTotal = assemblyTotal;
 
                                             return sum + itemTotal;
                                         }, 0);
@@ -688,7 +721,9 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                                                                 <Badge variant="secondary" className="font-normal text-xs">{groupItems.length} items</Badge>
                                                             </div>
                                                             <div className="text-sm font-semibold text-foreground pr-4">
-                                                                {groupTotalCost > 0 && `Subtotal: $${groupTotalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                                                                {groupHasPendingAssembly
+                                                                    ? `Subtotal: ${PENDING}`
+                                                                    : groupTotalCost > 0 && `Subtotal: $${groupTotalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                                                             </div>
                                                         </div>
                                                     </TableCell>
@@ -722,7 +757,8 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                                                         itemTotalCost = calculatedValue * (item.price || 0);
                                                     }
                                                     const assemblyTotal = assemblyTotalFor(item);
-                                                    if (assemblyTotal !== undefined) {
+                                                    const assemblyPending = assemblyTotal === null;
+                                                    if (assemblyTotal != null) {
                                                         itemTotalCost = assemblyTotal;
                                                         displayUnitPrice = calculatedValue > 0 ? assemblyTotal / calculatedValue : 0;
                                                     }
@@ -770,10 +806,10 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                                                                     {item.unit}
                                                                 </TableCell>
                                                                 <TableCell className="text-right text-muted-foreground text-sm font-medium">
-                                                                    {displayUnitPrice > 0 ? `$${displayUnitPrice.toFixed(2)}` : '-'}
+                                                                    {assemblyPending ? PENDING : displayUnitPrice > 0 ? `$${displayUnitPrice.toFixed(2)}` : '-'}
                                                                 </TableCell>
                                                                 <TableCell className="text-right font-semibold text-foreground">
-                                                                    {itemTotalCost > 0 ? `$${itemTotalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}
+                                                                    {assemblyPending ? PENDING : itemTotalCost > 0 ? `$${itemTotalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}
                                                                 </TableCell>
                                                                 <TableCell className="text-center">
                                                                     <Button
@@ -896,6 +932,7 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                     open={showXeroModal}
                     projectId={projectId}
                     projectName={projectName}
+                    isSyncIdle={isSyncIdle}
                     onClose={() => setShowXeroModal(false)}
                 />
             )}
