@@ -39,18 +39,23 @@ export async function createItem(
   // — a UUID collision across projects is statistically impossible but a
   // malicious caller could try it.
   const existing = (await env.DB.prepare(
-    'SELECT project_id, assembly_id FROM items WHERE id = ?'
+    'SELECT project_id, assembly_id, unit FROM items WHERE id = ?'
   )
     .bind(id)
-    .first()) as { project_id: string; assembly_id: string | null } | null;
+    .first()) as { project_id: string; assembly_id: string | null; unit: string } | null;
   if (existing && existing.project_id !== args.project_id) {
     throw new Error(`Item ${id} already exists in a different project`);
   }
   // Same gate as apply_assembly: a stale/typoed assembly_id (or one priced
   // in a different unit) would make buildQuote drop or misprice the item.
-  // Only checked when the link is being set/changed, so a retried create
-  // that carries the already-stored link isn't re-litigated.
-  if (args.assembly_id && args.assembly_id !== existing?.assembly_id) {
+  // Only checked when the link or the unit is being set/changed, so a
+  // retried create that carries the already-stored link and unit isn't
+  // re-litigated — but a retry whose payload changed the unit is (the
+  // upsert below rewrites the unit and would keep a now-mismatched link).
+  if (
+    args.assembly_id &&
+    (args.assembly_id !== existing?.assembly_id || args.unit !== existing?.unit)
+  ) {
     await assertAssemblyAttachable(env, args.assembly_id, args.unit);
   }
   // ON CONFLICT … UPDATE rather than INSERT OR IGNORE: if the user edited

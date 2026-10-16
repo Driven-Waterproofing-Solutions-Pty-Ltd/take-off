@@ -307,6 +307,25 @@ test('assemblies only attach to items measured in a compatible unit', async () =
   expect(unitChange.status).toBe(400);
   expect(unitChange.body.error).toMatch(/cannot attach/);
 
+  // So is a retried create (same id, same link) whose payload changed the
+  // unit since the first attempt committed.
+  const retried = crypto.randomUUID();
+  const createWith = (unit: string) =>
+    call<{ error: string }>('POST', '/api/measure/items', {
+      project_id: projectId,
+      id: retried,
+      label: 'Retried assembly item',
+      type: 'AREA',
+      color: '#10b981',
+      unit,
+      assembly_id: assembly.body.id,
+    });
+  expect((await createWith('sq m')).status).toBe(200);
+  const retriedAsLinear = await createWith('m');
+  expect(retriedAsLinear.status).toBe(400);
+  expect(retriedAsLinear.body.error).toMatch(/cannot attach/);
+  expect((await listItems(call, projectId)).find((i) => i.id === retried)!.unit).toBe('sq m');
+
   // The quote prices the area item from the assembly's lines.
   const quote = await call<{ lines: Array<{ itemId?: string; assemblyId?: string; unitPrice: number }> }>(
     'GET',

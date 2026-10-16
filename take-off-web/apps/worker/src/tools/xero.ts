@@ -105,12 +105,18 @@ async function refreshXeroToken(
   const encRefresh = await encryptString(key, body.refresh_token);
   const updatedAt = Math.max(Date.now(), claim + 1);
   // Only persist if our claim still stands (nobody re-connected meanwhile).
-  await env.DB.prepare(
+  const persisted = await env.DB.prepare(
     `UPDATE xero_tokens SET access_token = ?, refresh_token = ?, expires_at = ?, updated_at = ?
      WHERE tenant_id = ? AND updated_at = ?`
   )
     .bind(encAccess, encRefresh, expires_at, updatedAt, current.tenant_id, claim)
     .run();
+  if ((persisted.meta?.changes ?? 0) === 0) {
+    // An OAuth reconnect replaced (or removed) this row while we refreshed.
+    // The token we hold belongs to the superseded connection — possibly an
+    // organisation that was just disconnected — so it must not be used.
+    throw new Error('Xero was reconnected while this request was refreshing its token, so it cannot continue — retry.');
+  }
   return {
     ...current,
     access_token: body.access_token,
