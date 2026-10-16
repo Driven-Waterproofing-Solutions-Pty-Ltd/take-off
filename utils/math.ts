@@ -127,23 +127,21 @@ math.import({
 }, { override: true });
 
 /**
- * Safely evaluates a math formula.
- * @param item The takeoff item containing properties and formula.
- * @param overrideQty Optional. If provided, uses this value for 'Qty' instead of item.totalValue.
- * @param formulaOverride Optional. If provided, evaluates this formula instead of the item's default formula.
- * @param extraVariables Optional. Additional variables to inject into the context (e.g. calculated sub-items).
+ * Like `evaluateFormula`, but also reports whether the formula really
+ * evaluated (`ok: false` when it threw or gave no number and the fallback
+ * value was used), so money calculations can refuse a silent fallback.
  */
-export const evaluateFormula = (
+export const evaluateFormulaChecked = (
   item: TakeoffItem,
   overrideQty?: number,
   formulaOverride?: string,
   extraVariables?: Record<string, number>
-): number => {
+): { value: number; ok: boolean } => {
   const qty = overrideQty !== undefined ? overrideQty : item.totalValue;
   const formulaToUse = formulaOverride !== undefined ? formulaOverride : item.formula;
 
   if (!formulaToUse || !formulaToUse.trim()) {
-    return qty;
+    return { value: qty, ok: true };
   }
 
   // Create a map of variables
@@ -179,12 +177,26 @@ export const evaluateFormula = (
     const result = limitedEvaluate(formulaToUse, scope);
 
     if (isNaN(result) || result === undefined || result === null) {
-      return 0;
+      return { value: 0, ok: false };
     }
 
-    return result;
+    return { value: result, ok: true };
   } catch (e) {
     // If formula fails, return 0 (safe fallback for sub-items) or Qty (safe fallback for main items if no override)
-    return formulaOverride ? 0 : qty;
+    return { value: formulaOverride ? 0 : qty, ok: false };
   }
 };
+
+/**
+ * Safely evaluates a math formula.
+ * @param item The takeoff item containing properties and formula.
+ * @param overrideQty Optional. If provided, uses this value for 'Qty' instead of item.totalValue.
+ * @param formulaOverride Optional. If provided, evaluates this formula instead of the item's default formula.
+ * @param extraVariables Optional. Additional variables to inject into the context (e.g. calculated sub-items).
+ */
+export const evaluateFormula = (
+  item: TakeoffItem,
+  overrideQty?: number,
+  formulaOverride?: string,
+  extraVariables?: Record<string, number>
+): number => evaluateFormulaChecked(item, overrideQty, formulaOverride, extraVariables).value;

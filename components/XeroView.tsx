@@ -392,13 +392,14 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
         }
     }, [clientId, selectedTenant, loadTenantData, clearTenantData, addToast]);
 
-    // When we switch to the Xero tab and are connected, load data once
+    // Load the organisation's data as soon as the view is connected, whichever
+    // tab is open, so the job sheet's GST uses the organisation's tax rate.
     useEffect(() => {
-        if (activeTab === 'xero' && isConnected && !autoLoaded.current) {
+        if (isConnected && !autoLoaded.current) {
             autoLoaded.current = true;
             void handleLoadXeroData();
         }
-    }, [activeTab, isConnected, handleLoadXeroData]);
+    }, [isConnected, handleLoadXeroData]);
 
     // ── CSV export for Xero ─────────────────────────────────────────────────
     const handleExportCSV = () => {
@@ -414,6 +415,10 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
             addToast(invalidMessage, 'error');
             return;
         }
+        if (!billToName) {
+            addToast('Choose a Xero contact or enter the client name for the CSV', 'error');
+            return;
+        }
         if (!csvAccountCode) {
             addToast('Enter or select a revenue account code for the Xero CSV', 'error');
             return;
@@ -425,7 +430,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
         try {
             const csvContent = buildXeroCsv({
                 rows: lineItems,
-                contactName: billToName || projectName,
+                contactName: billToName,
                 address: clientAddress,
                 // One invoice number for every row, so Xero imports a single invoice.
                 invoiceNumber: invoiceNumber.trim() || fallbackInvoiceNumber(new Date()),
@@ -1039,13 +1044,15 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                 variant="outline"
                                 className="flex-1 h-9 text-sm"
                                 onClick={handleExportCSV}
-                                disabled={IS_MOBILE || billable.length === 0 || !!invalidMessage || !csvAccountCode || !datesSet}
+                                disabled={IS_MOBILE || billable.length === 0 || !!invalidMessage || !billToName || !csvAccountCode || !datesSet}
                                 title={
                                     IS_MOBILE
                                         ? 'CSV export is only available in the desktop app'
-                                        : !csvAccountCode
-                                            ? 'A revenue account code is required for the Xero CSV'
-                                            : undefined
+                                        : !billToName
+                                            ? 'Choose a Xero contact or enter the client name'
+                                            : !csvAccountCode
+                                                ? 'A revenue account code is required for the Xero CSV'
+                                                : undefined
                                 }
                             >
                                 <FileDown size={14} className="mr-2" /> Export CSV for Xero

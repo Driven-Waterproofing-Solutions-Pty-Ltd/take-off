@@ -1,5 +1,5 @@
 import { TakeoffItem, ToolType, Unit } from '../types';
-import { evaluateFormula, convertValue, toVariableName } from './math';
+import { evaluateFormulaChecked, convertValue, toVariableName } from './math';
 
 /**
  * Pure helpers behind the Job Sheet & Xero view: line-item pricing, GST maths,
@@ -63,14 +63,16 @@ export function computeLineItems(items: TakeoffItem[]): ComputedLineItem[] {
         .forEach((item) => {
             const group = item.group || 'General';
             const convertedQty = convertValue(item.totalValue, Unit.FEET, item.unit, item.type);
-            const calculated = evaluateFormula(item, convertedQty);
+            const main = evaluateFormulaChecked(item, convertedQty);
+            const calculated = main.value;
 
             const subContext: Record<string, number> = {};
             let subTotal = 0;
             const subRows: ComputedLineItem[] = [];
 
             (item.subItems ?? []).forEach((sub) => {
-                const subQty = evaluateFormula(item, convertedQty, sub.formula, subContext);
+                const subEval = evaluateFormulaChecked(item, convertedQty, sub.formula, subContext);
+                const subQty = subEval.value;
                 const varName = toVariableName(sub.label);
                 if (varName) subContext[varName] = subQty;
                 const subPrice = sub.price || 0;
@@ -85,7 +87,7 @@ export function computeLineItems(items: TakeoffItem[]): ComputedLineItem[] {
                     unitPrice: subPrice,
                     total: centsToDollars(toCents(lineTotal)),
                     isSubItem: true,
-                    invalid: !Number.isFinite(subQty) || !Number.isFinite(lineTotal),
+                    invalid: !subEval.ok || !Number.isFinite(subQty) || !Number.isFinite(lineTotal),
                 });
             });
 
@@ -105,7 +107,7 @@ export function computeLineItems(items: TakeoffItem[]): ComputedLineItem[] {
                 unitPrice,
                 total: centsToDollars(toCents(totalCost)),
                 // A broken sub-item formula makes its parent unbillable too.
-                invalid: !Number.isFinite(calculated) || !Number.isFinite(totalCost) || subRows.some((r) => r.invalid),
+                invalid: !main.ok || !Number.isFinite(calculated) || !Number.isFinite(totalCost) || subRows.some((r) => r.invalid),
             });
             rows.push(...subRows);
         });
