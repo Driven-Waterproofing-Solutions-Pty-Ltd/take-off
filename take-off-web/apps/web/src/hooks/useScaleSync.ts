@@ -127,6 +127,34 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
               settle(retryKey, ok);
             });
         }
+      } else if (scale) {
+        // Calibration undone (or otherwise cleared) after it had synced:
+        // persist the unset state, otherwise a reload resurrects the old
+        // scale and server-side measurements keep using it.
+        const retryKey = `scale:${pageIndex}`;
+        const prevKey = scaleSnaps.get(pageIndex);
+        if (
+          prevKey !== undefined &&
+          prevKey !== 'unset' &&
+          !scaleInflight.has(pageIndex) &&
+          !backoff.isBackingOff(retryKey)
+        ) {
+          scaleInflight.add(pageIndex);
+          api.scale
+            .clear(projectId, pageIndex)
+            .then(() => {
+              scaleSnaps.set(pageIndex, 'unset');
+              return true;
+            })
+            .catch((e) => {
+              console.error('sync: scale clear failed', pageIndex, e);
+              return false;
+            })
+            .then((ok) => {
+              scaleInflight.delete(pageIndex);
+              settle(retryKey, ok);
+            });
+        }
       }
 
       // --- Legend ---

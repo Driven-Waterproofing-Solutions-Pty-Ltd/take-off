@@ -23,6 +23,27 @@ interface ProjectSnapshot {
   planSets: PlanSet[];
   totalPages: number;
   projectName: string;
+  // Plans whose PDF couldn't be downloaded (after retries); their plan set
+  // has no `file`, so the caller must tell the user instead of showing a
+  // silently blank drawing.
+  failedPlanNames: string[];
+}
+
+const PDF_DOWNLOAD_ATTEMPTS = 3;
+
+async function fetchPdfWithRetry(projectId: string, r2Key: string): Promise<Blob> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= PDF_DOWNLOAD_ATTEMPTS; attempt++) {
+    try {
+      return await api.projects.fetchPdfBlob(projectId, r2Key);
+    } catch (e) {
+      lastError = e;
+      if (attempt < PDF_DOWNLOAD_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+      }
+    }
+  }
+  throw lastError;
 }
 
 // `includePdfBytes: false` skips downloading every plan PDF from R2 — for
@@ -61,15 +82,17 @@ async function fetchProject(
     }
     // Fetch each PDF blob and reconstruct File objects so MuPDF can render.
     // PlanSets are typically 1–3 per project; eager fetch is acceptable.
+    const failedPlanNames: string[] = [];
     const planSets: PlanSet[] = await Promise.all(
       meta.pdfs.map(async (pdf) => {
         let file = undefined as unknown as File;
         if (includePdfBytes) {
           try {
-            const blob = await api.projects.fetchPdfBlob(projectId, pdf.r2_key);
+            const blob = await fetchPdfWithRetry(projectId, pdf.r2_key);
             file = new File([blob], pdf.name ?? 'plan.pdf', { type: 'application/pdf' });
           } catch (e) {
             console.error('fetchPdfBlob failed for', pdf.id, e);
+            failedPlanNames.push(pdf.name ?? 'plan.pdf');
           }
         }
         return {
@@ -90,6 +113,7 @@ async function fetchProject(
       planSets,
       totalPages,
       projectName: meta.project.name,
+      failedPlanNames,
     };
   } catch (e) {
     console.error('fetchProject failed', e);
@@ -153,6 +177,16 @@ export const useProjectManager = (_isLicensed = true) => {
   const [showNewProjectPrompt, setShowNewProjectPrompt] = useState(false);
   const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
 
+  // A plan whose PDF couldn't be downloaded renders as a blank sheet; say so
+  // instead of letting the open look successful.
+  const warnFailedPlans = (names: string[]) => {
+    if (names.length === 0) return;
+    addToast(
+      `Couldn't download ${names.length === 1 ? 'plan' : 'plans'} ${names.map((n) => `"${n}"`).join(', ')} — reload the project to try again.`,
+      'error'
+    );
+  };
+
   // Initial load — read ?project=ID from URL if present, otherwise just leave empty.
   useEffect(() => {
     const init = async () => {
@@ -179,6 +213,7 @@ export const useProjectManager = (_isLicensed = true) => {
             setSourceProjectId(null);
             setProjectName(snap.projectName);
             setLastSavedAt(new Date());
+            warnFailedPlans(snap.failedPlanNames);
           }
         }
       } catch (e) {
@@ -268,6 +303,7 @@ export const useProjectManager = (_isLicensed = true) => {
         setSourceProjectId(null);
         setProjectName(snap.projectName);
         setLastSavedAt(new Date());
+        warnFailedPlans(snap.failedPlanNames);
         const url = new URL(window.location.href);
         url.searchParams.set('project', id);
         window.history.replaceState({}, '', url.toString());

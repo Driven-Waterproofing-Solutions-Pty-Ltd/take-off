@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
 import { executeAgentTurn, type AgentToolContext } from '../lib/agentTools';
 
@@ -54,6 +54,16 @@ export function useTakeoffAgent() {
 
   const abort = useCallback(() => {
     abortRef.current = true;
+  }, []);
+
+  // Stop the loop when the panel that owns it unmounts (e.g. the user
+  // closes it mid-run). Otherwise the hidden loop kept spending tokens and
+  // running mutating tools, and reopening the panel could start a second
+  // run alongside it.
+  useEffect(() => {
+    return () => {
+      abortRef.current = true;
+    };
   }, []);
 
   const run = useCallback(

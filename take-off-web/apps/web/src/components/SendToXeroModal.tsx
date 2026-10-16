@@ -176,7 +176,10 @@ const SendToXeroModal: React.FC<SendToXeroModalProps> = ({
       // Send Reference verbatim — including an explicit empty string the user
       // typed to clear it. The server only auto-fills `Take-off: <name>` when
       // the field is OMITTED, not when it's an explicit empty string.
-      const res = await api.xero.pushInvoice(projectId, contactId, reference);
+      // Bind the push to the quote shown above: if pricing changed after the
+      // modal loaded it, the worker refuses instead of invoicing different
+      // lines than the user reviewed.
+      const res = await api.xero.pushInvoice(projectId, contactId, reference, quote?.fingerprint);
       setPushed({ deep_link: res.deep_link });
       addToast('DRAFT invoice created in Xero', 'success');
       // Refresh the docs list so the new draft shows immediately.

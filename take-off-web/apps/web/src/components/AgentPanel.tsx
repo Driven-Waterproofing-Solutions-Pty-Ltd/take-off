@@ -111,7 +111,8 @@ const AgentPanel: React.FC<AgentPanelProps> = ({ projectId, planSets, activePlan
     if (!projectId || !selectedXeroId) return;
     setPushing(true);
     try {
-      const res = await api.xero.pushQuote(projectId, selectedXeroId);
+      // Bind the push to the draft shown in the review gate.
+      const res = await api.xero.pushQuote(projectId, selectedXeroId, undefined, quote?.fingerprint);
       setPushed({ deep_link: res.deep_link });
       addToast('DRAFT quote pushed to Xero', 'success');
     } catch (e) {
@@ -127,7 +128,15 @@ const AgentPanel: React.FC<AgentPanelProps> = ({ projectId, planSets, activePlan
         <div className="flex items-center gap-2 font-semibold">
           <Bot className="w-5 h-5 text-blue-600" /> Takeoff Agent
         </div>
-        <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>
+        <button
+          onClick={() => {
+            abort(); // stop an in-flight run before the panel goes away
+            onClose();
+          }}
+          className="text-gray-400 hover:text-gray-600 text-sm"
+        >
+          ✕
+        </button>
       </div>
 
       {!projectId && (

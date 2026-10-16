@@ -211,6 +211,12 @@ const extractVectorPaths = async (file: File): Promise<CachedVectorData[]> => {
     }));
 };
 
+// Vector-cache pages already uploaded (or deliberately skipped) this session,
+// keyed by project + plan file + global page. App remounts BlueprintCanvas on
+// every page change, and a per-instance set re-uploaded the whole document's
+// caches to D1 on each navigation.
+const UPLOADED_VECTOR_PAGES = new Set<string>();
+
 // Upper bound for an uploaded vector cache's serialised size. D1's maximum
 // string/row size is 2,000,000 bytes and the page row also holds scale, name
 // and legend JSON, so leave headroom. (The cache is ASCII JSON, so characters
@@ -491,7 +497,9 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     const legendContainerRef = useRef<HTMLDivElement>(null); // For Legend (CSS Transform, Top Layer)
     const loupeRef = useRef<HTMLCanvasElement>(null);
     // Dedup vector-cache uploads: `${projectId}:${globalPageIndex}` once sent.
-    const uploadedVectorPages = useRef<Set<string>>(new Set());
+    // Module-level (see UPLOADED_VECTOR_PAGES) so it survives the per-page
+    // remount App does via `key={pageIndex}`.
+    const uploadedVectorPages = useRef<Set<string>>(UPLOADED_VECTOR_PAGES);
 
     const [contentWidth, setContentWidth] = useState(0);
     const [originalPdfWidth, setOriginalPdfWidth] = useState(0);
@@ -844,7 +852,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
     }, [localPageIndex, muPdfLoaded]);
 
     // Vector-cache upload: dedicated effect with snapshot-on-success and
-    // tick-based retry. Pages are dedup'd by (projectId, globalPageIndex);
+    // tick-based retry. Pages are dedup'd by (projectId, fileId, globalPageIndex);
     // a transient API failure leaves the key out of uploadedVectorPages so
     // the next vectorRetryTick bump re-tries instead of stranding the page
     // server-side (which would silently disable snap_to_vector for it).
@@ -859,7 +867,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             const promises: Promise<boolean>[] = [];
             for (const page of cachedVectors) {
                 const globalIdx = planStartPageIndex + page.pageIndex;
-                const dedupKey = `${projectId}:${globalIdx}`;
+                const dedupKey = `${projectId}:${fileId}:${globalIdx}`;
                 if (uploadedVectorPages.current.has(dedupKey)) continue;
                 // Skip pages with no extractable paths — sending empty vertices
                 // would mark the page synced with zero data, masking the actual
@@ -2660,7 +2668,11 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                     if (processedIds.has(sel.shapeId)) return;
 
                                     const item = items.find(i => i.id === sel.itemId);
-                                    if (item && item.type === rightClickedItemType) {
+                                    // Same type AND same unit as the right-clicked item: the
+                                    // target list is filtered against that item, and moving a
+                                    // shape measured in another unit would be refused by the
+                                    // worker's reparent check, leaving local totals unsyncable.
+                                    if (item && item.type === rightClickedItemType && item.unit === rightClickedItem.unit) {
                                         shapeIdsToChange.add(sel.shapeId);
                                         processedIds.add(sel.shapeId);
 
@@ -2689,7 +2701,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
                                 });
 
                                 if (incompatibleCount > 0) {
-                                    addToast(`${incompatibleCount} selected item(s) will not be changed due to incompatible types.`, 'info');
+                                    addToast(`${incompatibleCount} selected item(s) will not be changed due to incompatible types or units.`, 'info');
                                 }
 
                                 if (shapeIdsToChange.size > 0) {
