@@ -34,10 +34,15 @@ export const DEFAULT_GST_PERCENT = 10;
 export const DEFAULT_XERO_TAX_RATE_NAME = 'GST on Income';
 export const DEFAULT_XERO_TAX_TYPE = 'OUTPUT';
 
-/** Dollars to whole cents, clearing binary float noise first (1.005 → 101). */
+/** Rounds half away from zero (-0.5 → -1), like currency rounding, unlike Math.round. */
+function roundHalfAwayFromZero(value: number): number {
+    return Math.sign(value) * Math.round(Math.abs(value));
+}
+
+/** Dollars to whole cents, clearing binary float noise first (1.005 → 101, -1.005 → -101). */
 export function toCents(amount: number): number {
     if (!Number.isFinite(amount)) return 0;
-    return Math.round(Number((amount * 100).toPrecision(15)));
+    return roundHalfAwayFromZero(Number((amount * 100).toPrecision(15)));
 }
 
 export function centsToDollars(cents: number): number {
@@ -133,7 +138,7 @@ export function computeTotals(rows: ComputedLineItem[], gstPercent: number = DEF
     billableLines(rows).forEach((r) => {
         const lineCents = toCents(r.total);
         subtotalCents += lineCents;
-        gstCents += Math.round(Number(((lineCents * gstPercent) / 100).toPrecision(15)));
+        gstCents += roundHalfAwayFromZero(Number(((lineCents * gstPercent) / 100).toPrecision(15)));
     });
     return { subtotalCents, gstCents, totalCents: subtotalCents + gstCents };
 }

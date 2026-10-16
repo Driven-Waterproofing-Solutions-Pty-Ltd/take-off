@@ -97,10 +97,14 @@ const fmt = new Intl.NumberFormat('en-AU', {
 });
 const fmtCents = (cents: number) => fmt.format(cents / 100);
 
-/** INV-YYYYMMDD-HHMMSS: unique per second and never wraps, unlike a truncated timestamp. */
+/**
+ * INV-YYYYMMDD-HHMMSS-XXXX: readable, never wraps, and the random suffix keeps
+ * two exports in the same second apart.
+ */
 function fallbackInvoiceNumber(now: Date): string {
     const time = [now.getHours(), now.getMinutes(), now.getSeconds()].map((n) => String(n).padStart(2, '0')).join('');
-    return `INV-${toLocalIsoDate(now).replace(/-/g, '')}-${time}`;
+    const suffix = Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('');
+    return `INV-${toLocalIsoDate(now).replace(/-/g, '')}-${time}-${suffix}`;
 }
 
 // Tauri's Android/iOS WebViews ignore window.print() and blob downloads.
@@ -235,6 +239,8 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
         }
         setIsConnecting(true);
         try {
+            // Keep the trimmed ID in state too: every later token call uses it.
+            setClientId(clientId.trim());
             await xeroService.setClientId(clientId.trim());
             await xeroService.startOAuthFlow(clientId.trim());
             setAwaitingCode(true);
@@ -324,7 +330,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
         const seq = tenantLoadSeq.current;
         setSearchingContacts(true);
         try {
-            const token = await xeroService.getValidToken(clientId);
+            const token = await xeroService.getValidToken(clientId.trim());
             const found = await xeroService.getContacts(token, selectedTenant, contactSearch);
             if (seq !== tenantLoadSeq.current) return;
             setContacts((prev) => {
@@ -342,11 +348,14 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
         const seq = ++tenantLoadSeq.current;
         setSelectedTenant(tenantId);
         clearTenantData();
-        if (!tenantId) return;
+        if (!tenantId) {
+            setLoadingXero(false);
+            return;
+        }
         setLoadingXero(true);
         try {
             await xeroService.setTenantId(tenantId);
-            const token = await xeroService.getValidToken(clientId);
+            const token = await xeroService.getValidToken(clientId.trim());
             if (seq !== tenantLoadSeq.current) return;
             await loadTenantData(token, tenantId, seq);
         } catch (e: unknown) {
@@ -360,7 +369,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
         const seq = ++tenantLoadSeq.current;
         setLoadingXero(true);
         try {
-            const token = await xeroService.getValidToken(clientId);
+            const token = await xeroService.getValidToken(clientId.trim());
             // Always fetch organisations, so a tenant that was never chosen (or
             // has since been disconnected in Xero) can still be picked.
             const fetchedTenants = await xeroService.getTenants(token);
@@ -453,7 +462,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
 
         setIsSending(true);
         try {
-            const token = await xeroService.getValidToken(clientId);
+            const token = await xeroService.getValidToken(clientId.trim());
 
             const xeroLineItems: XeroLineItem[] = billable.map((row) => ({
                 Description: xeroLineDescription(row),
@@ -521,7 +530,8 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
     return (
         <div className="flex flex-col h-full bg-background">
             {/* ── Header ───────────────────────────────────────────────────── */}
-            <div className="flex items-center gap-3 px-5 py-3 border-b border-border bg-background/95 shrink-0">
+            {/* pl-14 below md keeps the Back button clear of App's floating menu button */}
+            <div className="flex items-center gap-3 pl-14 pr-5 md:px-5 py-3 border-b border-border bg-background/95 shrink-0">
                 <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onBack}>
                     <ArrowLeft size={16} />
                 </Button>
@@ -927,6 +937,8 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                                 <select
                                                     value={selectedContact}
                                                     onChange={(e) => setSelectedContact(e.target.value)}
+                                                    // Locked while searching, so the result can't drop a contact picked meanwhile.
+                                                    disabled={searchingContacts}
                                                     className="w-full h-8 text-sm border border-border rounded-md px-2 bg-background"
                                                 >
                                                     <option value="">Select contact…</option>
