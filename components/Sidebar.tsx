@@ -331,8 +331,8 @@ const Sidebar: React.FC<SidebarProps> = ({
                 </div>
             </div>
 
-            {/* Estimates, Xero & Export Buttons */}
-            <div className="p-3 border-b border-border bg-background flex gap-2 shrink-0">
+            {/* Estimates, Xero & Export Buttons (wrap so all four fit narrow drawers) */}
+            <div className="p-3 border-b border-border bg-background flex flex-wrap gap-2 shrink-0">
                 <Button onClick={onShowEstimates} variant="outline" className="flex-1 h-8 text-xs font-medium border-dashed border-border hover:border-primary/50 hover:bg-primary/5 text-muted-foreground hover:text-primary">
                     <Table size={14} className="mr-2" /> Estimates
                 </Button>

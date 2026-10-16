@@ -102,11 +102,16 @@ function errorMessage(e: unknown): string {
     return e instanceof Error ? e.message : String(e);
 }
 
-/** Xero's Australian GST on Income rate if the organisation has it; '' falls back to the account default. */
+/**
+ * Xero's Australian GST on Income rate if the organisation has it, else its
+ * first sales rate. A rate is always chosen explicitly, so the job sheet, the
+ * CSV and the draft invoice all use the same one.
+ */
 function defaultTaxType(rates: XeroTaxRate[]): string {
     const preferred =
         rates.find((r) => r.TaxType === DEFAULT_XERO_TAX_TYPE) ??
-        rates.find((r) => r.ReportTaxType === DEFAULT_XERO_TAX_TYPE);
+        rates.find((r) => r.ReportTaxType === DEFAULT_XERO_TAX_TYPE) ??
+        rates[0];
     return preferred?.TaxType ?? '';
 }
 
@@ -173,6 +178,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
     const selectedAccountCode = accounts.find((a) => a.AccountID === selectedAccount)?.Code ?? '';
     const csvAccountCode = (isConnected ? selectedAccountCode : manualAccountCode).trim();
     const selectedContactName = contacts.find((c) => c.ContactID === selectedContact)?.Name ?? '';
+    const datesSet = Boolean(invoiceDate && dueDate);
 
     // ── Load saved settings on mount ────────────────────────────────────────
     useEffect(() => {
@@ -316,6 +322,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
             if (seq !== tenantLoadSeq.current) return;
             setTenants(fetchedTenants);
             const savedTenant = selectedTenant || (await xeroService.getTenantId()) || '';
+            if (seq !== tenantLoadSeq.current) return;
             let tenantId = fetchedTenants.some((t) => t.tenantId === savedTenant) ? savedTenant : '';
             if (!tenantId && fetchedTenants.length === 1) tenantId = fetchedTenants[0].tenantId;
             if (tenantId !== selectedTenant) {
@@ -323,7 +330,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                 setSelectedTenant(tenantId);
             }
             if (tenantId && tenantId !== savedTenant) await xeroService.setTenantId(tenantId);
-            if (tenantId) await loadTenantData(token, tenantId, seq);
+            if (tenantId && seq === tenantLoadSeq.current) await loadTenantData(token, tenantId, seq);
         } catch (e: unknown) {
             if (seq === tenantLoadSeq.current) addToast(`Failed to refresh Xero data: ${errorMessage(e)}`, 'error');
         } finally {
@@ -351,6 +358,10 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
         }
         if (!csvAccountCode) {
             addToast('Enter or select a revenue account code for the Xero CSV', 'error');
+            return;
+        }
+        if (!datesSet) {
+            addToast('Set both the invoice date and the due date', 'error');
             return;
         }
         try {
@@ -387,6 +398,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
         if (!selectedContact) { addToast('Please select a Xero contact', 'error'); return; }
         if (!selectedTenant) { addToast('Please select a Xero organisation', 'error'); return; }
         if (billable.length === 0) { addToast('There are no line items to invoice', 'error'); return; }
+        if (!datesSet) { addToast('Set both the invoice date and the due date', 'error'); return; }
 
         setIsSending(true);
         try {
@@ -397,7 +409,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                 Quantity: 1,
                 UnitAmount: toCents(row.total) / 100,
                 AccountCode: selectedAccountCode || undefined,
-                // Omitted when no rate is chosen, so Xero applies the account's default.
+                // The same rate the job sheet and CSV use (see defaultTaxType).
                 TaxType: selectedTaxType || undefined,
             }));
 
@@ -410,6 +422,9 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                 Reference: reference || projectName,
                 Status: 'DRAFT',
                 LineAmountTypes: 'Exclusive',
+                // Every amount in this view is AUD; without this Xero would read
+                // them in the organisation's base currency.
+                CurrencyCode: 'AUD',
             });
 
             addToast(`Invoice ${result.InvoiceNumber} created in Xero!`, 'success');
@@ -866,7 +881,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                                     onChange={(e) => setSelectedTaxType(e.target.value)}
                                                     className="w-full h-8 text-sm border border-border rounded-md px-2 bg-background"
                                                 >
-                                                    <option value="">Account default tax rate</option>
+                                                    {taxRates.length === 0 && <option value="">No tax rates loaded</option>}
                                                     {taxRates.map((r) => (
                                                         <option key={r.TaxType} value={r.TaxType}>{r.Name}</option>
                                                     ))}
@@ -921,7 +936,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                 variant="outline"
                                 className="flex-1 h-9 text-sm"
                                 onClick={handleExportCSV}
-                                disabled={IS_MOBILE || billable.length === 0 || !csvAccountCode}
+                                disabled={IS_MOBILE || billable.length === 0 || !csvAccountCode || !datesSet}
                                 title={
                                     IS_MOBILE
                                         ? 'CSV export is only available in the desktop app'
@@ -936,7 +951,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                 <Button
                                     className="flex-1 h-9 text-sm"
                                     onClick={handleSendToXero}
-                                    disabled={isSending || !selectedContact || !selectedTenant || billable.length === 0}
+                                    disabled={isSending || !selectedContact || !selectedTenant || billable.length === 0 || !datesSet}
                                 >
                                     {isSending ? (
                                         <Loader2 size={14} className="mr-2 animate-spin" />
