@@ -1,4 +1,5 @@
 import * as mupdf from 'mupdf';
+import { isMobilePlatform } from './platform';
 
 // Define simplified types based on MuPDF API
 export interface MuPDFPage {
@@ -35,9 +36,11 @@ export interface DisplayList {
 class MuPDFController {
     private currentDoc: any | null = null;
 
-    // DisplayList cache with LRU eviction
+    // DisplayList cache with LRU eviction. Cap lower on mobile: holding ~10 full
+    // rendered pages in WebView memory risks OOM/jank on a phone. Coordinate math
+    // is unaffected (this is purely a render cache).
     private displayListCache: Map<number, DisplayList> = new Map();
-    private readonly MAX_CACHED_PAGES = 10;
+    private readonly MAX_CACHED_PAGES = isMobilePlatform() ? 3 : 10;
 
     // Page dimensions cache (lightweight, keep all)
     private dimensionsCache: Map<number, { width: number, height: number }> = new Map();

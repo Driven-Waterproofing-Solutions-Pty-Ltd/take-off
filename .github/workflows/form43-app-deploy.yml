@@ -1,0 +1,69 @@
+name: form43-app Deploy
+
+# Manual deploy of the standalone Form 43 Worker to Cloudflare.
+#
+# One-time setup (GitHub UI → Settings → Secrets and variables → Actions):
+#   CLOUDFLARE_API_TOKEN   (required) — token with Workers Scripts:Edit,
+#                          D1:Edit, Vectorize:Edit, Workers KV:Edit,
+#                          Workers R2:Edit on the Driven account.
+#   FORM43_API_TOKEN       (required) — the bearer clients use to call /mcp
+#                          and /api/v1/*. Generate with: openssl rand -hex 32
+#   GEOSCAPE_API_KEY       (optional) — enables Geoscape G-NAF address search;
+#                          without it the Worker falls back to OSM Nominatim.
+#
+# The D1 database, KV namespace, and R2 bucket already exist (IDs are in
+# wrangler.jsonc). This workflow creates the Vectorize index if missing,
+# applies migrations, pushes secrets, and deploys.
+
+on:
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: form43-app
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Typecheck + unit tests
+        run: npm run typecheck && npm test
+
+      - name: Create Vectorize index (idempotent)
+        run: |
+          npx wrangler vectorize create form43-memory \
+            --dimensions=1024 --metric=cosine \
+          || echo "Vectorize index already exists — continuing."
+
+      - name: Apply D1 migrations (remote)
+        run: npx wrangler d1 migrations apply FORM43_DB --remote
+
+      - name: Push secrets
+        run: |
+          printf '%s' "${{ secrets.FORM43_API_TOKEN }}" | npx wrangler secret put FORM43_API_TOKEN
+          if [ -n "${{ secrets.GEOSCAPE_API_KEY }}" ]; then
+            printf '%s' "${{ secrets.GEOSCAPE_API_KEY }}" | npx wrangler secret put GEOSCAPE_API_KEY
+          else
+            echo "No GEOSCAPE_API_KEY secret set — address search will use OSM fallback."
+          fi
+
+      - name: Deploy Worker
+        run: npx wrangler deploy
+
+      - name: Smoke test /health
+        run: |
+          sleep 5
+          URL="$(npx wrangler deployments list 2>/dev/null | grep -oE 'https://[^ ]+workers.dev' | head -1 || true)"
+          echo "Deployed. Check /health and /form43 on your workers.dev URL or custom route."

@@ -1,6 +1,18 @@
 use serde::{Deserialize, Serialize};
 use reqwest::Client;
-use machine_uid::get as get_machine_uid;
+
+// Hardware machine ID. The `machine-uid` crate has no Android implementation,
+// so on Android we fall back to a placeholder (licensing isn't wired up for
+// mobile yet). Desktop behaviour is unchanged.
+#[cfg(not(target_os = "android"))]
+fn get_machine_uid() -> Result<String, String> {
+    machine_uid::get().map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "android")]
+fn get_machine_uid() -> Result<String, String> {
+    Ok("android-unsupported".to_string())
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LicenseResponse {

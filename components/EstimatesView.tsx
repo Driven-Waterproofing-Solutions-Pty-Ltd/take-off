@@ -807,7 +807,7 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                         )}
                     </>
                 ) : (
-                    <div className="h-[calc(100vh-200px)]">
+                    <div className="h-[calc(100dvh-200px)]">
                         <TemplateManager mode="manage" />
                     </div>
                 )}

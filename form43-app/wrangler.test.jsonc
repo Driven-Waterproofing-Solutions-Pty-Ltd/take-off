@@ -1,0 +1,18 @@
+{
+  "$schema": "https://unpkg.com/wrangler/config-schema.json",
+  "name": "form43-app-test",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "vars": {
+    "ENV": "test",
+    "DISABLE_RATE_LIMIT": "1",
+    "DISABLE_R2_BACKUP": "1",
+    "FORM43_API_TOKEN": "test-token"
+  },
+
+  "d1_databases": [
+    { "binding": "FORM43_DB", "database_name": "form43-test", "database_id": "test", "migrations_dir": "migrations" }
+  ]
+}

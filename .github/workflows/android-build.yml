@@ -1,0 +1,78 @@
+name: 'Android APK (spike)'
+
+# First attempt at an Android build for ProTakeoff (Tauri v2).
+# Produces an UNSIGNED / debug-signed universal APK that can be sideloaded
+# onto a phone for testing (no Play Store, no release keystore yet).
+#
+# Produces the distributable debug APK (no E2E auto-load). Manual-trigger only:
+# the per-push functional loop runs android-e2e.yml instead, so we don't build
+# twice on every push. Run this from the Actions tab when you want a clean APK.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: setup Java (JDK 17)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: install Android NDK
+        run: |
+          sdkmanager "ndk;26.3.11579264" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.3.11579264" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.3.11579264" >> "$GITHUB_ENV"
+
+      - name: install Rust stable + Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-android-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: install frontend dependencies
+        run: npm install
+
+      - name: install Tauri CLI
+        run: npm install -D @tauri-apps/cli@^2
+
+      - name: initialize Android project
+        run: npx tauri android init
+
+      - name: build APK (debug, universal)
+        run: npx tauri android build --apk --debug
+
+      - name: locate built APK(s)
+        id: find_apk
+        run: |
+          echo "APKs produced:"
+          find src-tauri/gen/android -name '*.apk' -print
+
+      - name: upload APK artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: protakeoff-android-debug-apk
+          path: src-tauri/gen/android/**/*.apk
+          if-no-files-found: warn

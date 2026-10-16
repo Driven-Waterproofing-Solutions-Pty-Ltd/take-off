@@ -119,9 +119,27 @@
 @layer base {
   * {
     @apply border-border outline-ring/50;
+    /* Remove the grey tap flash on touch devices (no-op on desktop). */
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html,
+  body {
+    /* Prevent overscroll/pull-to-refresh chaining on mobile webviews.
+       No-op on desktop (no overscroll target). */
+    overscroll-behavior: none;
   }
 
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+/* P7: Enlarge icon-button touch targets on coarse pointers (touch) only.
+   Desktop (fine pointer / hover) keeps its existing pixel sizes. */
+@media (pointer: coarse) {
+  [data-slot="button"][data-size^="icon"] {
+    min-width: 44px;
+    min-height: 44px;
   }
 }

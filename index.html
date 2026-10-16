@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <title>ProTakeoff - Takeoff Estimating Software</title>
   <link rel="icon" href="/favicon.ico" />
 
@@ -54,23 +54,9 @@
       color-scheme: light;
     }
   </style>
-  <script type="importmap">
-{
-  "imports": {
-    "react": "https://aistudiocdn.com/react@^19.2.0",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0",
-    "xlsx": "https://aistudiocdn.com/xlsx@^0.18.5",
-    "react-pdf": "https://aistudiocdn.com/react-pdf@^10.2.0",
-    "pdfjs-dist": "https://aistudiocdn.com/pdfjs-dist@^4.8.69",
-    "jszip": "https://aistudiocdn.com/jszip@^3.10.1",
-    "html2canvas": "https://aistudiocdn.com/html2canvas@^1.4.1",
-    "jspdf": "https://aistudiocdn.com/jspdf@^2.5.1",
-    "pdf-lib": "https://aistudiocdn.com/pdf-lib@^1.17.1"
-  }
-}
-</script>
+  <!-- CDN importmap removed: every package below is in package.json and bundled by
+       Vite. Resolving them from a CDN at runtime broke the app offline (React itself
+       was CDN-loaded) — unacceptable for a packaged desktop/mobile app. -->
   <link rel="stylesheet" href="/index.css">
  
 </head>
