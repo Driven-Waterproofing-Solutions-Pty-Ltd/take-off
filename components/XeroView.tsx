@@ -136,6 +136,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
     const [clientName, setClientName] = useState('');
     const [clientAddress, setClientAddress] = useState('');
     const [reference, setReference] = useState('');
+    const [invoiceNumber, setInvoiceNumber] = useState('');
     const [invoiceDate, setInvoiceDate] = useState(() => toLocalIsoDate(new Date()));
     const [dueDate, setDueDate] = useState(() => toLocalIsoDate(addDays(new Date(), 30)));
 
@@ -375,8 +376,9 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                 contactName: (isConnected && selectedContactName) || clientName || projectName,
                 address: clientAddress,
                 // One invoice number for every row, so Xero imports a single invoice.
-                invoiceNumber: reference || `INV-${Date.now().toString().slice(-6)}`,
-                reference: projectName,
+                invoiceNumber: invoiceNumber.trim() || `INV-${Date.now().toString().slice(-6)}`,
+                // Same meaning as the direct send: the Reference field, else the project.
+                reference: reference || projectName,
                 invoiceDate,
                 dueDate,
                 accountCode: csvAccountCode,
@@ -424,6 +426,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                 Date: invoiceDate,
                 DueDate: dueDate,
                 Reference: reference || projectName,
+                InvoiceNumber: invoiceNumber.trim() || undefined,
                 Status: 'DRAFT',
                 LineAmountTypes: 'Exclusive',
                 // Every amount in this view is AUD; without this Xero would read
@@ -542,7 +545,7 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                     <Input
                                         value={reference}
                                         onChange={(e) => setReference(e.target.value)}
-                                        placeholder="Job / Invoice #"
+                                        placeholder="Job / PO reference"
                                         className="h-8 text-sm"
                                     />
                                 </div>
@@ -843,7 +846,11 @@ const XeroView: React.FC<XeroViewProps> = ({ items, projectName, onBack }) => {
                                 </div>
                                 <div>
                                     <label className="text-xs font-medium text-muted-foreground mb-1 block">Reference</label>
-                                    <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="Job reference / number" className="h-8 text-sm" />
+                                    <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="Job / PO reference" className="h-8 text-sm" />
+                                </div>
+                                <div>
+                                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Invoice Number <span className="font-normal">(optional; Xero numbers it if blank)</span></label>
+                                    <Input value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} placeholder="e.g. INV-0123" className="h-8 text-sm" />
                                 </div>
 
                                 {isConnected && (

@@ -67,6 +67,7 @@ export interface XeroInvoicePayload {
     Date?: string;     // YYYY-MM-DD
     DueDate?: string;  // YYYY-MM-DD
     Reference?: string;
+    InvoiceNumber?: string; // omitted: Xero assigns the next number
     Status?: 'DRAFT' | 'SUBMITTED' | 'AUTHORISED';
     LineAmountTypes?: 'Exclusive' | 'Inclusive' | 'NoTax';
     CurrencyCode?: string;
@@ -213,7 +214,10 @@ export const xeroService = {
 
         const response = await fetch('https://identity.xero.com/connect/token', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                Authorization: pkceClientAuth(clientId),
+            },
             body: body.toString(),
         });
 
