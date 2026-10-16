@@ -88,15 +88,25 @@ math.import(
   { override: true }
 );
 
-export const evaluateFormula = (
+/**
+ * Outcome of evaluating a formula: `ok` with a finite quantity, or why it
+ * could not produce one — `error` (parse error, unknown variable, disabled
+ * function) or `non-finite` (Infinity/NaN, or a non-number such as a matrix).
+ * An empty formula is `ok` with the plain quantity.
+ */
+export type FormulaEvaluation =
+  | { ok: true; value: number }
+  | { ok: false; reason: 'error' | 'non-finite' };
+
+export const tryEvaluateFormula = (
   item: TakeoffItem,
   overrideQty?: number,
   formulaOverride?: string,
   extraVariables?: Record<string, number>
-): number => {
+): FormulaEvaluation => {
   const qty = overrideQty !== undefined ? overrideQty : item.totalValue;
   const formulaToUse = formulaOverride !== undefined ? formulaOverride : item.formula;
-  if (!formulaToUse || !formulaToUse.trim()) return qty;
+  if (!formulaToUse || !formulaToUse.trim()) return { ok: true, value: qty };
 
   const scope: Record<string, number> = {
     Qty: qty,
@@ -128,9 +138,25 @@ export const evaluateFormula = (
     // which slipped past isNaN and reached buildQuote / Xero as qty, line
     // total and GST — serialised to JSON as null. Matrices, units, strings
     // etc. are not quantities either.
-    if (typeof result !== 'number' || !Number.isFinite(result)) return 0;
-    return result;
+    if (typeof result !== 'number' || !Number.isFinite(result)) return { ok: false, reason: 'non-finite' };
+    return { ok: true, value: result };
   } catch {
-    return formulaOverride ? 0 : qty;
+    return { ok: false, reason: 'error' };
   }
+};
+
+// Lenient form used for display and item/sub-item pricing: a non-finite
+// result counts as 0, and a formula that fails to evaluate falls back to the
+// plain quantity (or 0 for an explicit override formula).
+export const evaluateFormula = (
+  item: TakeoffItem,
+  overrideQty?: number,
+  formulaOverride?: string,
+  extraVariables?: Record<string, number>
+): number => {
+  const result = tryEvaluateFormula(item, overrideQty, formulaOverride, extraVariables);
+  if (result.ok === true) return result.value;
+  if (result.reason === 'non-finite') return 0;
+  const qty = overrideQty !== undefined ? overrideQty : item.totalValue;
+  return formulaOverride ? 0 : qty;
 };

@@ -516,6 +516,70 @@ test('formulas that evaluate to Infinity never reach the quote', async () => {
   expect(Number.isFinite(quote.body.total)).toBe(true);
 });
 
+test('a broken assembly formula refuses the quote instead of pricing it at zero', async () => {
+  const admin = await adminSessionClient();
+  const material = await admin<{ id: string }>('POST', '/api/memory/materials', {
+    name: `Formula membrane ${Date.now()}`,
+    unit: 'sq m',
+    unit_cost: 10,
+  });
+  expect(material.status).toBe(200);
+  const assembly = async (name: string, formula: string) => {
+    const res = await admin<{ id: string }>('POST', '/api/memory/assemblies', {
+      name: `${name} ${Date.now()}`,
+      unit: 'sq m',
+      formula,
+      lines: [{ material_id: material.body.id, qty_per_unit: 1 }],
+    });
+    expect(res.status).toBe(200);
+    return res.body.id;
+  };
+  const broken = await assembly('Broken formula', 'Qty * NoSuchVariable');
+  const doubled = await assembly('Doubled formula', 'Qty * 2');
+
+  const call = await bearerClient();
+  const projectId = await newProject(call, 'Assembly formula');
+  expect(
+    (await call('POST', '/api/measure/scale/preset', {
+      project_id: projectId,
+      page_index: 0,
+      preset_label: '1:100',
+    })).status
+  ).toBe(200);
+  const floor = await newItem(call, projectId, 'AREA', 'sq m');
+  expect(
+    (await call('POST', '/api/measure/shapes/area', {
+      project_id: projectId,
+      page_index: 0,
+      item_id: floor,
+      points: square(10),
+      snap: false,
+    })).status
+  ).toBe(200);
+  const attach = (assemblyId: string) =>
+    call('POST', '/api/memory/apply-assembly', {
+      project_id: projectId,
+      item_id: floor,
+      assembly_id: assemblyId,
+    });
+
+  expect((await attach(broken)).status).toBe(200);
+  const refused = await call<{ error: string }>('GET', `/api/memory/quote/${projectId}`);
+  expect(refused.status).toBe(400);
+  expect(refused.body.error).toMatch(/Cannot build the quote: assembly .*formula/);
+
+  // A working formula prices normally: 100 m² × 2 × $10.
+  expect((await attach(doubled)).status).toBe(200);
+  const quote = await call<{ lines: Array<{ itemId?: string; qty: number; lineTotal: number }> }>(
+    'GET',
+    `/api/memory/quote/${projectId}`
+  );
+  expect(quote.status).toBe(200);
+  const line = quote.body.lines.find((l) => l.itemId === floor)!;
+  expect(line.qty).toBeCloseTo(200, 1);
+  expect(line.lineTotal).toBeCloseTo(2000, 0);
+});
+
 test('login is throttled after repeated failures for an account', async () => {
   const ts = Date.now();
   const email = `e2e-throttle-${ts}@drivenwp.com`;

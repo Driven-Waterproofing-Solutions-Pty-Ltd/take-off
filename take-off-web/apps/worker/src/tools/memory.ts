@@ -1,6 +1,7 @@
 import type { Env } from '../env';
 import {
   evaluateFormula,
+  tryEvaluateFormula,
   TakeoffItem,
   QuoteDraft,
   QuoteLineItem,
@@ -352,7 +353,21 @@ export async function buildQuote(env: Env, projectId: string): Promise<QuoteDraf
       const assembly = assemblyById.get(item.assemblyId) ?? null;
       const assemblyLines = linesByAssembly.get(item.assemblyId) ?? [];
 
-      const qty = evaluateFormula(item, item.totalValue, assembly?.formula ?? undefined);
+      // An assembly formula that can't produce a finite quantity (syntax
+      // error, unknown variable, divide by zero) must not price the
+      // assembly at qty 0: that yields a valid-looking, fingerprinted quote
+      // that silently omits the assembly's cost. Refuse the quote instead.
+      const formulaOverride = assembly?.formula ?? undefined;
+      const assemblyFormula = formulaOverride?.trim() ? formulaOverride : undefined;
+      const evaluated = tryEvaluateFormula(item, item.totalValue, formulaOverride);
+      if (assemblyFormula && !evaluated.ok) {
+        throw new Error(
+          `Cannot build the quote: assembly "${assembly?.name ?? item.assemblyId}" has a formula ("${assemblyFormula}") that ${
+            evaluated.reason === 'error' ? 'fails to evaluate' : 'does not give a finite quantity'
+          } for item "${item.label}". Fix the assembly formula first.`
+        );
+      }
+      const qty = evaluated.ok ? evaluated.value : evaluateFormula(item, item.totalValue, formulaOverride);
 
       let assemblyLabourMinutes = 0;
       for (const r of assemblyLines) {
