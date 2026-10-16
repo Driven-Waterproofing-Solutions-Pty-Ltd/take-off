@@ -213,6 +213,9 @@ export const tools = {
       // (tan(θ/4)) and get an under-counted length.
       bulge: z
         .number()
+        .refine((b) => Number.isFinite(b) && Math.abs(b) < Math.PI, {
+          message: 'bulge is half the included angle in radians and must be strictly between -π and π',
+        })
         .describe(
           'Half of the included angle in radians; sign = side of the chord. 0 = straight line, π/4 ≈ 0.7854 = quarter circle, π/2 ≈ 1.5708 = semicircle. NOT the DXF tan(θ/4) bulge factor.'
         ),

@@ -596,6 +596,91 @@ test('a custom property named Qty cannot replace the measured quantity', async (
   expect(line.lineTotal).toBeCloseTo(60, 6);
 });
 
+test('a broken sub-item formula refuses the quote instead of dropping its line', async () => {
+  const call = await bearerClient();
+  const projectId = await newProject(call, 'Sub-item formula');
+  const itemId = crypto.randomUUID();
+  const subItems = (formula: string) => [
+    { id: 'membrane', label: 'Membrane', formula: 'Qty', unit: 'EA', price: 5 },
+    { id: 'adhesive', label: 'Adhesive', formula, unit: 'EA', price: 2 },
+  ];
+  expect(
+    (await call('POST', '/api/measure/items', {
+      project_id: projectId,
+      id: itemId,
+      label: 'Floor waste kit',
+      type: 'COUNT',
+      color: '#ef4444',
+      unit: 'EA',
+      sub_items: subItems('Membrane * NoSuchVariable'),
+    })).status
+  ).toBe(200);
+  expect(
+    (await call('POST', '/api/measure/shapes/count', {
+      project_id: projectId,
+      page_index: 0,
+      item_id: itemId,
+      points: [{ x: 1, y: 1 }],
+    })).status
+  ).toBe(200);
+
+  const refused = await call<{ error: string }>('GET', `/api/memory/quote/${projectId}`);
+  expect(refused.status).toBe(400);
+  expect(refused.body.error).toMatch(/Cannot build the quote: sub-item "Adhesive"/);
+
+  expect(
+    (await call('PUT', `/api/measure/items/${itemId}`, { sub_items: subItems('Membrane * 3') })).status
+  ).toBe(200);
+  const quote = await call<{ lines: Array<{ description: string; lineTotal: number }> }>(
+    'GET',
+    `/api/memory/quote/${projectId}`
+  );
+  expect(quote.status).toBe(200);
+  expect(quote.body.lines.find((l) => l.description.endsWith('Adhesive'))!.lineTotal).toBeCloseTo(6, 6);
+});
+
+test('arc bulges outside the single-arc range are rejected', async () => {
+  const call = await bearerClient();
+  const projectId = await newProject(call, 'Arc bulge');
+  expect(
+    (await call('POST', '/api/measure/scale/preset', {
+      project_id: projectId,
+      page_index: 0,
+      preset_label: '1:100',
+    })).status
+  ).toBe(200);
+  const arc = (bulge: number) =>
+    call<{ value?: number; error?: string }>('POST', '/api/measure/shapes/arc', {
+      project_id: projectId,
+      page_index: 0,
+      start: { x: 0, y: 0 },
+      end: { x: 10 * PPM_1_100, y: 0 },
+      bulge,
+      name: 'Curved hob',
+    });
+  expect((await arc(4)).status).toBe(400);
+  expect((await arc(-Math.PI)).status).toBe(400);
+  // A semicircle on a 10 m chord is 5π m long.
+  const ok = await arc(Math.PI / 2);
+  expect(ok.status).toBe(200);
+  expect(ok.body.value).toBeCloseTo(5 * Math.PI, 2);
+
+  // The MCP tool definition still advertises bulge as a described number.
+  const token = await mintToken();
+  const list = await fetch(`${WORKER}/mcp`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+  });
+  expect(list.status).toBe(200);
+  const tools = ((await list.json()) as {
+    result: { tools: Array<{ name: string; inputSchema: { properties: Record<string, { type?: string; description?: string }> } }> };
+  }).result.tools;
+  const bulge = tools.find((t) => t.name === 'add_arc')!.inputSchema.properties.bulge;
+  expect(bulge.type).toBe('number');
+  expect(bulge.description).toMatch(/Half of the included angle/);
+});
+
 test('a broken assembly formula refuses the quote instead of pricing it at zero', async () => {
   const admin = await adminSessionClient();
   const material = await admin<{ id: string }>('POST', '/api/memory/materials', {

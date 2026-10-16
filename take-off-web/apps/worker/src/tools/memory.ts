@@ -431,6 +431,20 @@ export async function buildQuote(env: Env, projectId: string): Promise<QuoteDraf
       // diverge from what the user sees on screen.
       const subContext: Record<string, number> = {};
       for (const sub of item.subItems) {
+        // Same rule as the assembly formula above: a sub-item formula that
+        // can't produce a finite quantity must not price its line (or any
+        // later sub-item that references it) at 0 — that yields a
+        // valid-looking quote with part of the item's cost missing.
+        if (sub.formula?.trim()) {
+          const evaluated = tryEvaluateFormula(item, item.totalValue, sub.formula, subContext);
+          if (!evaluated.ok) {
+            throw new Error(
+              `Cannot build the quote: sub-item "${sub.label}" of item "${item.label}" has a formula ("${sub.formula}") that ${
+                evaluated.reason === 'error' ? 'fails to evaluate' : 'does not give a finite quantity'
+              }. Fix the sub-item formula first.`
+            );
+          }
+        }
         const subQty = evaluateFormula(item, item.totalValue, sub.formula, subContext);
         subContext[toVariableName(sub.label)] = subQty;
         const lineTotal = subQty * sub.price;
