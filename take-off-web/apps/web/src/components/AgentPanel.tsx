@@ -148,11 +148,11 @@ const AgentPanel: React.FC<AgentPanelProps> = ({ projectId, planSets, activePlan
   };
 
   const pushDraft = async () => {
-    if (!projectId || !selectedXeroId) return;
+    if (!projectId || !selectedXeroId || !quote?.fingerprint) return;
     setPushing(true);
     try {
       // Bind the push to the draft shown in the review gate.
-      const res = await api.xero.pushQuote(projectId, selectedXeroId, undefined, quote?.fingerprint);
+      const res = await api.xero.pushQuote(projectId, selectedXeroId, undefined, quote.fingerprint);
       setPushed({ deep_link: res.deep_link });
       addToast('DRAFT quote pushed to Xero', 'success');
     } catch (e) {

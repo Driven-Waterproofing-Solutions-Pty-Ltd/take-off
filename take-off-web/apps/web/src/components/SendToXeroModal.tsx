@@ -206,6 +206,11 @@ const SendToXeroModal: React.FC<SendToXeroModalProps> = ({
       addToast("Changes are still saving — reopen the review once they've synced.", 'error');
       return;
     }
+    if (!quote?.fingerprint) {
+      addToast('Load the quote review before sending.', 'error');
+      return;
+    }
+    const reviewedFingerprint = quote.fingerprint;
     setPushing(true);
     try {
       const contactId = await resolveContactId();
@@ -216,7 +221,7 @@ const SendToXeroModal: React.FC<SendToXeroModalProps> = ({
       // Bind the push to the quote shown above: if pricing changed after the
       // modal loaded it, the worker refuses instead of invoicing different
       // lines than the user reviewed.
-      const res = await api.xero.pushInvoice(projectId, contactId, reference, quote?.fingerprint);
+      const res = await api.xero.pushInvoice(projectId, contactId, reference, reviewedFingerprint);
       setPushed({ deep_link: res.deep_link });
       addToast('DRAFT invoice created in Xero', 'success');
       // Refresh the docs list so the new draft shows immediately.

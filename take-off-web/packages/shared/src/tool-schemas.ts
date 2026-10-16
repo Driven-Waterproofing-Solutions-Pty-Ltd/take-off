@@ -320,9 +320,9 @@ export const tools = {
       reference: z.string().optional(),
       quote_fingerprint: z
         .string()
-        .optional()
+        .min(1)
         .describe(
-          'The `fingerprint` from the build_quote result the user reviewed. When given, the push is refused if the quote has changed since.'
+          'Required: the `fingerprint` from the build_quote result the user reviewed. The push is refused if the quote has changed since.'
         ),
     }),
     output: z.object({

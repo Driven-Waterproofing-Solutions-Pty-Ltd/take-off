@@ -523,7 +523,8 @@ export async function pushToXero(
     kind: 'QUOTE' | 'INVOICE';
     customer_xero_id: string;
     reference?: string;
-    quote_fingerprint?: string;
+    // Required: every push is bound to a reviewed quote, MCP and REST alike.
+    quote_fingerprint: string;
   }
 ): Promise<{ xero_id: string; deep_link: string }> {
   // Rebuild first and compare with what was reviewed: /xero/push prices from
@@ -531,7 +532,7 @@ export async function pushToXero(
   // review modal loaded would otherwise send different lines than the user
   // approved.
   const quote = await buildQuote(env, args.project_id);
-  if (args.quote_fingerprint && args.quote_fingerprint !== quote.fingerprint) {
+  if (!args.quote_fingerprint || args.quote_fingerprint !== quote.fingerprint) {
     throw new Error(
       'The quote changed after it was reviewed — cannot push it. Reopen the review to see the current lines and total, then push again.'
     );

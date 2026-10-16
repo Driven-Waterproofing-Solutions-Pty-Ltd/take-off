@@ -359,9 +359,9 @@ export const api = {
   },
 
   xero: {
-    // `quoteFingerprint` = the `fingerprint` of the quote the user reviewed;
-    // the worker refuses the push if the quote has changed since.
-    pushQuote: (projectId: string, customerXeroId: string, reference?: string, quoteFingerprint?: string) =>
+    // `quoteFingerprint` = the `fingerprint` of the quote the user reviewed
+    // (required); the worker refuses the push if the quote has changed since.
+    pushQuote: (projectId: string, customerXeroId: string, reference: string | undefined, quoteFingerprint: string) =>
       req<{ xero_id: string; deep_link: string }>('/xero/push', {
         method: 'POST',
         body: JSON.stringify({
@@ -372,7 +372,7 @@ export const api = {
           quote_fingerprint: quoteFingerprint,
         }),
       }),
-    pushInvoice: (projectId: string, customerXeroId: string, reference?: string, quoteFingerprint?: string) =>
+    pushInvoice: (projectId: string, customerXeroId: string, reference: string | undefined, quoteFingerprint: string) =>
       req<{ xero_id: string; deep_link: string }>('/xero/push', {
         method: 'POST',
         body: JSON.stringify({

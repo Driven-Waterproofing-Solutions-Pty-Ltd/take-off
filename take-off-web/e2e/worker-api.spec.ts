@@ -728,6 +728,15 @@ test('Xero push refuses a quote that changed after review', async () => {
   });
   expect(fresh.body.error).not.toMatch(/changed after it was reviewed/);
   expect(fresh.body.error).toMatch(/Xero is not connected/);
+
+  // A push must name the quote it was reviewed against.
+  const unbound = await admin<{ error: string }>('POST', '/xero/push', {
+    project_id: projectId,
+    kind: 'INVOICE',
+    customer_xero_id: 'contact-under-review',
+  });
+  expect(unbound.status).toBe(400);
+  expect(unbound.body.error).toMatch(/invalid request/);
 });
 
 test('server recalibration converts VOLUME items and totals in bulk', async () => {
