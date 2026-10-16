@@ -114,7 +114,9 @@ const AppContent: React.FC = () => {
 
   // Persist every local state change back to D1 + R2.
   const shapeSync = useShapeSync(projectId, items);
-  const scaleSync = useScaleSync(projectId, projectData);
+  const scaleSync = useScaleSync(projectId, projectData, (page, reason) =>
+    addToast(`The server kept the previous scale for page ${page + 1}: ${reason}`, 'error')
+  );
   // True when every local edit has reached the worker (nothing in flight,
   // nothing waiting to retry). Gates quote review/push and project switches.
   const isSyncIdle = () => shapeSync.isIdle() && scaleSync.isIdle();

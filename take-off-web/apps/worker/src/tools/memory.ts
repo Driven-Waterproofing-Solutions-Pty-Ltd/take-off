@@ -223,7 +223,7 @@ const MEASUREMENT_UNITS = new Set<string>([
   Unit.CU_M, Unit.CU_CM, Unit.CU_MM, Unit.CU_KM,
   Unit.EACH,
 ]);
-function canonicalMeasurementUnit(unit: string | null | undefined): string | null {
+export function canonicalMeasurementUnit(unit: string | null | undefined): string | null {
   if (!unit) return null;
   const trimmed = unit.trim();
   const aliased = UNIT_ALIASES[trimmed.toLowerCase()] ?? trimmed;

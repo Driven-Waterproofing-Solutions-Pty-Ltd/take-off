@@ -395,6 +395,74 @@ test('server recalibration refuses to mix units on a multi-page item', async () 
   expect(item.totalValue).toBeCloseTo(15, 3);
 });
 
+test('server recalibration refuses to retag an assembly-priced item', async () => {
+  const admin = await adminSessionClient();
+  const material = await admin<{ id: string }>('POST', '/api/memory/materials', {
+    name: `Retag membrane ${Date.now()}`,
+    unit: 'sq m',
+    unit_cost: 12.5,
+  });
+  expect(material.status).toBe(200);
+  const assembly = await admin<{ id: string }>('POST', '/api/memory/assemblies', {
+    name: `Retag assembly ${Date.now()}`,
+    unit: 'm2',
+    lines: [{ material_id: material.body.id, qty_per_unit: 1 }],
+  });
+  expect(assembly.status).toBe(200);
+
+  const call = await bearerClient();
+  const projectId = await newProject(call, 'Recal assembly guard');
+  expect(
+    (await call('POST', '/api/measure/scale/preset', {
+      project_id: projectId,
+      page_index: 0,
+      preset_label: '1:100',
+    })).status
+  ).toBe(200);
+  const floor = await newItem(call, projectId, 'AREA', 'sq m');
+  expect(
+    (await call('POST', '/api/measure/shapes/area', {
+      project_id: projectId,
+      page_index: 0,
+      item_id: floor,
+      points: square(10),
+      snap: false,
+    })).status
+  ).toBe(200);
+  expect(
+    (await call('POST', '/api/memory/apply-assembly', {
+      project_id: projectId,
+      item_id: floor,
+      assembly_id: assembly.body.id,
+    })).status
+  ).toBe(200);
+
+  // ft would retag the item to sq ft while its assembly is priced per m2.
+  const toFeet = await call<{ error: string }>('POST', '/api/measure/scale/preset', {
+    project_id: projectId,
+    page_index: 0,
+    preset_label: '1/4" = 1\'0"',
+  });
+  expect(toFeet.status).toBe(400);
+  expect(toFeet.body.error).toMatch(/Cannot recalibrate page 0.*assembly/);
+
+  let item = (await listItems(call, projectId)).find((i) => i.id === floor)!;
+  expect(item.unit).toBe('sq m');
+  expect(item.totalValue).toBeCloseTo(100, 1);
+
+  // A metric recalibration keeps the unit and is still allowed.
+  expect(
+    (await call('POST', '/api/measure/scale/preset', {
+      project_id: projectId,
+      page_index: 0,
+      preset_label: '1:50',
+    })).status
+  ).toBe(200);
+  item = (await listItems(call, projectId)).find((i) => i.id === floor)!;
+  expect(item.unit).toBe('sq m');
+  expect(item.totalValue).toBeCloseTo(25, 1);
+});
+
 test('projects with more than 100 items still hydrate and quote', async () => {
   const call = await bearerClient();
   const projectId = await newProject(call, 'Many items');

@@ -17,6 +17,7 @@ import {
 import type { D1PreparedStatement } from '@cloudflare/workers-types';
 import type { Env } from '../env';
 import { getPage, parseScale, upsertPage, upsertPageStatement } from '../db/queries';
+import { canonicalMeasurementUnit } from './memory';
 
 interface ShapeRowMin {
   id: string;
@@ -263,6 +264,59 @@ async function assertNoMixedUnitItems(
   }
 }
 
+// Unit a scaled item on a page calibrated in `linear` is retagged to.
+function retaggedUnit(type: string, linear: Unit): Unit | null {
+  if (type === ToolType.AREA || type === ToolType.FILL) return getAreaUnitFromLinear(linear);
+  if (type === ToolType.VOLUME) return getVolumeUnitFromLinear(linear);
+  if (
+    type === ToolType.LINEAR ||
+    type === ToolType.ARC ||
+    type === ToolType.SEGMENT ||
+    type === ToolType.DIMENSION
+  ) {
+    return linear;
+  }
+  return null;
+}
+
+/**
+ * Refuse a recalibration that would retag an assembly-linked item to a unit
+ * its assembly isn't priced in (e.g. ft → m turns a "sq ft" item into
+ * "sq m" while its assembly is priced per sq ft). buildQuote multiplies the
+ * assembly's per-unit quantities by the item's quantity, so the quote would
+ * silently price metric quantities at imperial rates. Same unit rule as
+ * apply_assembly (assertAssemblyAttachable); free-text units can't be judged
+ * and don't block.
+ */
+async function assertAssembliesSurviveRetag(
+  env: Env,
+  projectId: string,
+  pageIndex: number,
+  unit: Unit
+): Promise<void> {
+  const rows = (
+    await env.DB.prepare(
+      `SELECT DISTINCT i.label, i.type, i.unit, a.name AS assembly_name, a.unit AS assembly_unit
+         FROM items i
+         JOIN shapes s ON s.item_id = i.id
+         JOIN assemblies a ON a.id = i.assembly_id
+        WHERE i.project_id = ? AND s.page_index = ?`
+    )
+      .bind(projectId, pageIndex)
+      .all()
+  ).results as Array<{ label: string; type: string; unit: string; assembly_name: string; assembly_unit: string }>;
+  for (const r of rows) {
+    const next = retaggedUnit(r.type, unit);
+    if (!next || next === r.unit) continue;
+    const assemblyUnit = canonicalMeasurementUnit(r.assembly_unit);
+    if (assemblyUnit && assemblyUnit !== canonicalMeasurementUnit(next)) {
+      throw new Error(
+        `Cannot recalibrate page ${pageIndex} to "${unit}": item "${r.label}" would become "${next}" but its assembly "${r.assembly_name}" is priced per "${r.assembly_unit}". Detach or replace the assembly first.`
+      );
+    }
+  }
+}
+
 // Save the page scale and every dependent recomputation atomically.
 async function applyScale(
   env: Env,
@@ -271,6 +325,7 @@ async function applyScale(
   scale: ScaleCalibration
 ): Promise<void> {
   await assertNoMixedUnitItems(env, projectId, pageIndex, scale.unit);
+  await assertAssembliesSurviveRetag(env, projectId, pageIndex, scale.unit);
   const prevUnit = await capturePrevUnit(env, projectId, pageIndex);
   const recompute = await recomputeStatementsForPage(env, projectId, pageIndex, scale, prevUnit);
   await env.DB.batch([upsertPageStatement(env.DB, projectId, pageIndex, { scale }), ...recompute]);

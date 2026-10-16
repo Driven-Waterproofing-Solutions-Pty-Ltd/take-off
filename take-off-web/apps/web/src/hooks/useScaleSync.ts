@@ -19,7 +19,30 @@ function legendKey(l: LegendSettings | undefined): string {
   return `${l.x.toFixed(2)}:${l.y.toFixed(2)}:${l.scale.toFixed(3)}:${l.visible ?? true}`;
 }
 
-export function useScaleSync(projectId: string | null, projectData: ProjectData): SyncStatus {
+// The api helper throws `${status} ${body}`; pull out a 4xx's JSON `error`.
+function rejectionMessage(e: unknown): string | null {
+  const text = e instanceof Error ? e.message : String(e);
+  const m = /^4\d\d\s+(.*)$/s.exec(text);
+  if (!m) return null;
+  try {
+    const parsed = JSON.parse(m[1]) as { error?: unknown };
+    return typeof parsed.error === 'string' ? parsed.error : m[1];
+  } catch {
+    return m[1];
+  }
+}
+
+export function useScaleSync(
+  projectId: string | null,
+  projectData: ProjectData,
+  // Called once per distinct refusal (4xx) of a page's calibration push —
+  // e.g. the worker refusing a recalibration that would mix units or
+  // mis-price an assembly — so the user learns the server kept the old scale.
+  onScaleRejected?: (pageIndex: number, message: string) => void
+): SyncStatus {
+  const onScaleRejectedRef = useRef(onScaleRejected);
+  onScaleRejectedRef.current = onScaleRejected;
+  const lastRejection = useRef<Map<number, string>>(new Map());
   const lastProjectId = useRef<string | null>(null);
   const snapshots = useRef<Map<number, string>>(new Map());
   const legendSnapshots = useRef<Map<number, string>>(new Map());
@@ -117,10 +140,16 @@ export function useScaleSync(projectId: string | null, projectData: ProjectData)
             )
             .then(() => {
               scaleSnaps.set(pageIndex, key);
+              lastRejection.current.delete(pageIndex);
               return true;
             })
             .catch((e) => {
               console.error('sync: scale push failed', pageIndex, e);
+              const reason = rejectionMessage(e);
+              if (reason && isCurrent() && lastRejection.current.get(pageIndex) !== reason) {
+                lastRejection.current.set(pageIndex, reason);
+                onScaleRejectedRef.current?.(pageIndex, reason);
+              }
               return false;
             })
             .then((ok) => {
