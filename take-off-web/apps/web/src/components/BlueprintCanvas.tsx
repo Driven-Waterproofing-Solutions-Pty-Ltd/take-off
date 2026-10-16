@@ -785,7 +785,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
             try {
                 const buffer = await file.arrayBuffer();
                 if (cancelled) return;
-                const pageCount = await mupdfController.loadDocument(new Uint8Array(buffer));
+                const pageCount = await mupdfController.loadDocument(new Uint8Array(buffer), file);
                 if (cancelled) return;
                 setNumPages(pageCount);
                 setMuPdfLoaded(true);

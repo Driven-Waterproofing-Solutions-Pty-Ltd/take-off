@@ -12,7 +12,9 @@ export interface AgentToolContext {
   // Map a project-wide page index → the plan set + local PDF page index
   // (mirrors getActivePlanDetails in App.tsx). Returns null when the global
   // index lies outside every uploaded plan set.
-  resolveLocalPageIndex: (globalPageIndex: number) => { planSetId: string; localIndex: number } | null;
+  resolveLocalPageIndex: (
+    globalPageIndex: number
+  ) => { planSetId: string; localIndex: number; file: object | undefined } | null;
   // Plan set currently loaded into the shared mupdfController. get_page_image
   // can only render pages from that set; a request for a page in any other
   // uploaded plan set would otherwise render the wrong PDF entirely.
@@ -132,6 +134,16 @@ export async function executeAgentTool(
           return textResult(
             id,
             `Page ${pageIndex} belongs to a different plan set than the one currently loaded on the canvas. Ask the user to switch to that plan set / page first, then call get_page_image again.`,
+            true
+          );
+        }
+        // The canvas loads a newly selected plan set asynchronously, so the
+        // active id can name it while the controller still holds the previous
+        // PDF. Render only from the plan set's own document.
+        if (!mupdfController.isLoadedFrom(resolved.file)) {
+          return textResult(
+            id,
+            `The PDF for page ${pageIndex} is still loading on the canvas (or isn't loaded). Wait a moment, then call get_page_image again.`,
             true
           );
         }

@@ -38,12 +38,12 @@ const SYNC_POLL_MS = 300;
 // planSetId lets get_page_image refuse pages outside the currently-loaded
 // set instead of silently rendering the wrong PDF.
 function makeResolveLocalPageIndex(planSets: PlanSet[]) {
-  return (globalPageIndex: number): { planSetId: string; localIndex: number } | null => {
+  return (globalPageIndex: number): { planSetId: string; localIndex: number; file: object | undefined } | null => {
     for (const set of planSets) {
       if (globalPageIndex >= set.startPageIndex && globalPageIndex < set.startPageIndex + set.pageCount) {
         const local = globalPageIndex - set.startPageIndex;
         const localIndex = set.pages && set.pages[local] !== undefined ? set.pages[local] : local;
-        return { planSetId: set.id, localIndex };
+        return { planSetId: set.id, localIndex, file: set.file };
       }
     }
     return null;

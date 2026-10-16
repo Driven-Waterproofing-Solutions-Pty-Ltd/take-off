@@ -100,7 +100,7 @@ const PDFPlane: React.FC<{ planSets?: PlanSet[]; pageIndex?: number }> = ({ plan
 
         const arrayBuffer = await planSet.file.arrayBuffer();
         if (cancelled) return;
-        await mupdfController.loadDocument(new Uint8Array(arrayBuffer));
+        await mupdfController.loadDocument(new Uint8Array(arrayBuffer), planSet.file);
         if (cancelled) return;
 
         // Render with appropriate scale

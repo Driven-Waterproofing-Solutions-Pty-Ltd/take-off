@@ -34,6 +34,9 @@ export interface DisplayList {
  */
 class MuPDFController {
     private currentDoc: any | null = null;
+    // The file the current document was opened from (identity), so callers
+    // can tell which plan set is actually loaded. Null while loading.
+    private loadedSource: object | null = null;
 
     // DisplayList cache with LRU eviction
     private displayListCache: Map<number, DisplayList> = new Map();
@@ -45,12 +48,19 @@ class MuPDFController {
     /**
      * Loads a PDF document from a byte array (Uint8Array)
      */
-    async loadDocument(data: Uint8Array): Promise<number> {
+    /** True when the loaded document was opened from `source`. */
+    isLoadedFrom(source: object | null | undefined): boolean {
+        return !!source && !!this.currentDoc && this.loadedSource === source;
+    }
+
+    async loadDocument(data: Uint8Array, source?: object): Promise<number> {
         // Cleanup previous document and caches
         this.destroy();
+        this.loadedSource = null;
 
         try {
             this.currentDoc = mupdf.Document.openDocument(data, "application/pdf");
+            this.loadedSource = source ?? null;
             const pageCount = this.currentDoc.countPages();
             console.log(`MuPDF: Loaded document with ${pageCount} pages`);
             return pageCount;
