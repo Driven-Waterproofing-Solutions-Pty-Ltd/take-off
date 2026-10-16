@@ -151,6 +151,24 @@ const AgentPanel: React.FC<AgentPanelProps> = ({ projectId, planSets, activePlan
     if (!projectId || !selectedXeroId || !quote?.fingerprint) return;
     setPushing(true);
     try {
+      // The panel stays open beside the editable canvas. Edits made after
+      // the review must reach the server first: while they're local, the
+      // server quote (and its fingerprint) still matches the stale review.
+      if (!(await waitForSync())) {
+        addToast(
+          "Some edits haven't saved to the server yet, so the quote can't be pushed. Try again in a moment.",
+          'error'
+        );
+        return;
+      }
+      // Once synced, rebuild: if those edits changed the quote, show the
+      // new draft for review instead of pushing.
+      const latest = await api.memory.quote(projectId);
+      if (latest.fingerprint !== quote.fingerprint) {
+        setQuote(latest);
+        addToast('The quote changed since this review. Check the updated draft, then push again.', 'error');
+        return;
+      }
       // Bind the push to the draft shown in the review gate.
       const res = await api.xero.pushQuote(projectId, selectedXeroId, undefined, quote.fingerprint);
       setPushed({ deep_link: res.deep_link });
