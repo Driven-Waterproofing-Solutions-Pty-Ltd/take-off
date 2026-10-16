@@ -25,7 +25,13 @@ interface ProjectSnapshot {
   projectName: string;
 }
 
-async function fetchProject(projectId: string): Promise<ProjectSnapshot | null> {
+// `includePdfBytes: false` skips downloading every plan PDF from R2 — for
+// refreshes that keep the local plan-set blobs and only need items + pages.
+async function fetchProject(
+  projectId: string,
+  opts: { includePdfBytes?: boolean } = {}
+): Promise<ProjectSnapshot | null> {
+  const includePdfBytes = opts.includePdfBytes ?? true;
   try {
     const items = await api.items.list(projectId);
     const meta = (await api.projects.get(projectId)) as {
@@ -57,13 +63,14 @@ async function fetchProject(projectId: string): Promise<ProjectSnapshot | null> 
     // PlanSets are typically 1–3 per project; eager fetch is acceptable.
     const planSets: PlanSet[] = await Promise.all(
       meta.pdfs.map(async (pdf) => {
-        let file: File;
-        try {
-          const blob = await api.projects.fetchPdfBlob(projectId, pdf.r2_key);
-          file = new File([blob], pdf.name ?? 'plan.pdf', { type: 'application/pdf' });
-        } catch (e) {
-          console.error('fetchPdfBlob failed for', pdf.id, e);
-          file = undefined as unknown as File;
+        let file = undefined as unknown as File;
+        if (includePdfBytes) {
+          try {
+            const blob = await api.projects.fetchPdfBlob(projectId, pdf.r2_key);
+            file = new File([blob], pdf.name ?? 'plan.pdf', { type: 'application/pdf' });
+          } catch (e) {
+            console.error('fetchPdfBlob failed for', pdf.id, e);
+          }
         }
         return {
           id: pdf.id,
@@ -195,7 +202,9 @@ export const useProjectManager = (_isLicensed = true) => {
   const refreshProject = useCallback(async () => {
     if (!projectId) return;
     try {
-      const snap = await fetchProject(projectId);
+      // Plan sets are kept from local state below, so don't re-download every
+      // PDF from R2 just to discard it.
+      const snap = await fetchProject(projectId, { includePdfBytes: false });
       if (!snap) return;
       const patched = snap.items.map((item) => {
         if (item.type === ToolType.AREA) {

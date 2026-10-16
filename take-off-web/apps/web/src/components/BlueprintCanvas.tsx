@@ -709,18 +709,26 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         if (!fileId) return;
 
         let active = true;
+        // Blob URL created by THIS effect run (RAM-cache URLs above are owned
+        // by RamCacheContext). Revoke it when the page/file changes or the
+        // canvas unmounts, otherwise every page visited keeps its PNG alive
+        // until the tab closes.
+        let createdUrl: string | null = null;
 
         const loadCachedImage = async () => {
             const blob = await getPageImage(fileId, localPageIndex);
             if (blob && active) {
-                const url = URL.createObjectURL(blob);
-                setBackgroundImage(url);
+                createdUrl = URL.createObjectURL(blob);
+                setBackgroundImage(createdUrl);
             }
         };
 
         loadCachedImage();
 
-        return () => { active = false; };
+        return () => {
+            active = false;
+            if (createdUrl) URL.revokeObjectURL(createdUrl);
+        };
     }, [fileId, localPageIndex, getCachedPage]);
 
     // Render page to cache if missing (Background)

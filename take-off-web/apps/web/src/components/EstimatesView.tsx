@@ -7,6 +7,7 @@ import { useToast } from '../contexts/ToastContext';
 import PromptModal from './PromptModal';
 import TemplateManager from './TemplateManager';
 import SendToXeroModal from './SendToXeroModal';
+import { api } from '../lib/api';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -40,6 +41,41 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
             onAutoOpenXeroHandled?.();
         }
     }, [autoOpenXero, projectId, onAutoOpenXeroHandled]);
+    // Assembly-linked items are priced server-side by buildQuote from the
+    // assembly's material/labour lines (the parent price and sub-items are
+    // ignored there). Mirror those totals here so this screen and its Excel
+    // export match the draft quote/invoice the Xero action creates, instead
+    // of showing an assembly-priced item as $0 or as its stale parent price.
+    const [assemblyTotals, setAssemblyTotals] = useState<Map<string, number>>(new Map());
+    const hasAssemblies = items.some(i => !!i.assemblyId);
+    useEffect(() => {
+        if (!projectId || !hasAssemblies) {
+            setAssemblyTotals(new Map());
+            return;
+        }
+        let cancelled = false;
+        // Debounced: the sync hooks push local edits first.
+        const timer = setTimeout(() => {
+            api.memory.quote(projectId)
+                .then((quote) => {
+                    if (cancelled) return;
+                    const totals = new Map<string, number>();
+                    for (const line of quote.lines) {
+                        if (!line.assemblyId || !line.itemId) continue;
+                        totals.set(line.itemId, (totals.get(line.itemId) ?? 0) + line.lineTotal);
+                    }
+                    setAssemblyTotals(totals);
+                })
+                .catch((e) => console.warn('assembly pricing fetch failed', e));
+        }, 800);
+        return () => {
+            cancelled = true;
+            clearTimeout(timer);
+        };
+    }, [projectId, hasAssemblies, items]);
+    const assemblyTotalFor = (item: TakeoffItem): number | undefined =>
+        item.assemblyId ? assemblyTotals.get(item.id) ?? 0 : undefined;
+
     const [groups, setGroups] = useState<string[]>([]);
     const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
     const [draggedGroup, setDraggedGroup] = useState<string | null>(null);
@@ -155,6 +191,11 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                     // Current behavior (before my changes) was: const totalCost = calculated * (item.price || 0);
                     // So we revert to that simple calculation if we are not in the "empty unit price" scenario.
                     totalCost = calculated * (item.price || 0);
+                }
+                const assemblyTotal = assemblyTotalFor(item);
+                if (assemblyTotal !== undefined) {
+                    totalCost = assemblyTotal;
+                    unitPrice = calculated > 0 ? assemblyTotal / calculated : 0;
                 }
 
                 // Main Item Row
@@ -596,6 +637,8 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                                             if ((!item.price || item.price === 0) && subItemsTotal > 0) {
                                                 itemTotal = subItemsTotal;
                                             }
+                                            const assemblyTotal = assemblyTotalFor(item);
+                                            if (assemblyTotal !== undefined) itemTotal = assemblyTotal;
 
                                             return sum + itemTotal;
                                         }, 0);
@@ -677,6 +720,11 @@ const EstimatesView: React.FC<EstimatesViewProps> = ({ items, onBack, onDeleteIt
                                                         }
                                                     } else {
                                                         itemTotalCost = calculatedValue * (item.price || 0);
+                                                    }
+                                                    const assemblyTotal = assemblyTotalFor(item);
+                                                    if (assemblyTotal !== undefined) {
+                                                        itemTotalCost = assemblyTotal;
+                                                        displayUnitPrice = calculatedValue > 0 ? assemblyTotal / calculatedValue : 0;
                                                     }
 
                                                     return (
