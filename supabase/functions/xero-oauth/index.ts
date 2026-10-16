@@ -9,16 +9,31 @@
  * can copy it back into the ProTakeoff app to complete the connection.
  *
  * Route:  GET /functions/v1/xero-oauth/callback?code=XXX&state=YYY
+ *
+ * Deployment: Xero redirects the user's browser here without a Supabase JWT,
+ * so this function must be deployed with JWT verification turned off:
+ *
+ *   supabase functions deploy xero-oauth --no-verify-jwt
+ *
+ * The page is only ever a top-level navigation target, so it sends no CORS
+ * headers (other origins must not be able to read the code) and asks browsers
+ * not to cache, frame or leak it via the Referer header.
  */
 
-const corsHeaders = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+const pageHeaders = {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'Referrer-Policy': 'no-referrer',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Content-Security-Policy':
+        "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; " +
+        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
 };
 
-Deno.serve(async (req: Request) => {
-    if (req.method === 'OPTIONS') {
-        return new Response('ok', { headers: corsHeaders });
+Deno.serve((req: Request) => {
+    if (req.method !== 'GET') {
+        return new Response('Method not allowed', { status: 405, headers: { Allow: 'GET' } });
     }
 
     const url = new URL(req.url);
@@ -32,27 +47,20 @@ Deno.serve(async (req: Request) => {
 
         if (error) {
             const html = buildErrorPage(error, errorDesc || '');
-            return new Response(html, {
-                headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' },
-            });
+            return new Response(html, { headers: pageHeaders });
         }
 
         if (!code) {
             const html = buildErrorPage('Missing Code', 'No authorization code was returned by Xero.');
-            return new Response(html, {
-                headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' },
-                status: 400,
-            });
+            return new Response(html, { headers: pageHeaders, status: 400 });
         }
 
         const html = buildSuccessPage(code, state || '');
-        return new Response(html, {
-            headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' },
-        });
+        return new Response(html, { headers: pageHeaders });
     }
 
     return new Response(JSON.stringify({ error: 'Not found' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json' },
         status: 404,
     });
 });
