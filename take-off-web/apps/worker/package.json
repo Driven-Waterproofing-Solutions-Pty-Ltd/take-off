@@ -1,0 +1,25 @@
+{
+  "name": "@takeoff/worker",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "migrate:local": "wrangler d1 migrations apply takeoff-production --local",
+    "migrate:remote": "wrangler d1 migrations apply takeoff-production --remote"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@takeoff/shared": "workspace:*",
+    "hono": "^4.6.0",
+    "zod": "^3.23.8",
+    "zod-to-json-schema": "^3.23.5"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250501.0",
+    "typescript": "^5.8.3",
+    "wrangler": "^4.98.0"
+  }
+}

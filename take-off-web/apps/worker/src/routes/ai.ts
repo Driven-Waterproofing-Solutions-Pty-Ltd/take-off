@@ -1,0 +1,196 @@
+import { Hono } from 'hono';
+import type { Env } from '../env';
+import { tools, type ToolName } from '@takeoff/shared';
+import { zodToJsonSchema } from 'zod-to-json-schema';
+import { authenticate } from '../lib/auth';
+
+// Anthropic proxy. The browser-side agent (and the in-app chat panel) drive
+// the tool-use loop; this endpoint runs a single model turn server-side so
+// the API key never reaches the client. The browser executes the returned
+// tool_use blocks against the same REST endpoints the canvas uses, then posts
+// the next turn with the tool_results appended.
+//
+// Why a proxy and not the full loop here: the worker can't render PDFs (MuPDF
+// is browser-only), so vision turns must originate in the browser. See
+// dispatches/takeoff-agent-design.md.
+
+const app = new Hono<{ Bindings: Env; Variables: { auth: { via: string; identity: string } } }>();
+
+const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+const ANTHROPIC_VERSION = '2023-06-01';
+const DEFAULT_MODEL = 'claude-sonnet-4-6';
+const DEFAULT_MAX_TOKENS = 4096;
+// Hard server-side cap so a caller can't pass `maxTokens: 200_000` and burn
+// the configured ANTHROPIC_API_KEY in a single request.
+const MAX_OUTPUT_TOKENS = 16_000;
+// Allowlist — anything outside this set falls back to DEFAULT_MODEL.
+const ALLOWED_MODELS = new Set<string>([
+  'claude-sonnet-4-6',
+  'claude-opus-4-7',
+  'claude-haiku-4-5-20251001',
+]);
+
+// Tools the agent/chat may call. push_to_xero is deliberately EXCLUDED — the
+// model proposes a quote via build_quote and stops; a human pushes the DRAFT
+// through the review gate. load_pdf/get_page_image are client-executed (the
+// browser renders + uploads), so they're offered to the model but resolved
+// browser-side, not server-side.
+const AGENT_TOOLS: ToolName[] = [
+  'get_page_image',
+  'set_scale_preset',
+  'set_scale_manual',
+  'add_area',
+  'add_linear',
+  'add_count',
+  'add_arc',
+  'snap_to_vector',
+  'list_items',
+  'search_projects',
+  'recall_customer',
+  'list_assemblies',
+  'apply_assembly',
+  'build_quote',
+  // Read-only — lets the agent reference a past similar job's pricing
+  // before proposing a new quote. push_to_xero stays excluded.
+  'pull_xero_invoice',
+  // Methodology + rate cards + counting rule + Pavilion Studio template +
+  // FFE conventions + worked examples. The agent MUST pull this before
+  // measuring (the system prompt directs it to) so numbers come from
+  // Driven's calibrated knowledge rather than the model's priors.
+  'get_takeoff_knowledge',
+];
+
+interface AnthropicTool {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  cache_control?: { type: 'ephemeral' };
+}
+
+function buildToolDefs(allow: ToolName[]): AnthropicTool[] {
+  const names = allow.filter((n) => n in tools);
+  return names.map((name, i) => {
+    const schema = zodToJsonSchema(tools[name].input, {
+      $refStrategy: 'none',
+      target: 'jsonSchema7',
+    }) as Record<string, unknown>;
+    delete schema.$schema;
+    return {
+      name,
+      description: tools[name].description,
+      input_schema: schema,
+      // Cache the whole tool list by marking the final entry — Anthropic
+      // caches everything up to and including the breakpoint.
+      ...(i === names.length - 1 ? { cache_control: { type: 'ephemeral' as const } } : {}),
+    };
+  });
+}
+
+interface TurnBody {
+  // Anthropic message array — caller owns the running transcript (text +
+  // tool_use + tool_result blocks). We don't persist it; the loop is stateless
+  // server-side.
+  messages: unknown[];
+  system?: string;
+  model?: string;
+  maxTokens?: number;
+  // Optional override of the tool allowlist (subset of AGENT_TOOLS). Anything
+  // outside AGENT_TOOLS is dropped — the proxy never widens the surface.
+  toolNames?: ToolName[];
+}
+
+// Session-only — NOT requireAuth (which also accepts MCP bearer tokens). An
+// MCP token shouldn't be able to spend the ANTHROPIC_API_KEY uncapped from
+// outside the browser; the in-app agent runs through a user session and that
+// session is what gates this proxy. MCP-driven AI workflows use the calling
+// client's own Anthropic billing instead.
+app.post('/turn', async (c) => {
+  const auth = await authenticate(c);
+  if (!auth) return c.json({ error: 'unauthorized' }, 401);
+  if (auth.via !== 'session') {
+    return c.json(
+      { error: 'session required — MCP tokens cannot call /api/ai/turn (use the calling client\'s own Anthropic key)' },
+      403
+    );
+  }
+
+  if (!c.env.ANTHROPIC_API_KEY) {
+    return c.json({ error: 'ANTHROPIC_API_KEY not configured' }, 503);
+  }
+
+  const body = await c.req.json<TurnBody>();
+  if (!Array.isArray(body.messages) || body.messages.length === 0) {
+    return c.json({ error: 'messages[] required' }, 400);
+  }
+
+  const allow = (body.toolNames ?? AGENT_TOOLS).filter((n) => AGENT_TOOLS.includes(n));
+  const toolDefs = buildToolDefs(allow.length ? allow : AGENT_TOOLS);
+
+  // Server-side caps — clamp maxTokens and reject unknown models.
+  const requestedTokens = body.maxTokens ?? DEFAULT_MAX_TOKENS;
+  const maxTokens = Math.max(1, Math.min(requestedTokens, MAX_OUTPUT_TOKENS));
+  const requestedModel = body.model ?? DEFAULT_MODEL;
+  const model = ALLOWED_MODELS.has(requestedModel) ? requestedModel : DEFAULT_MODEL;
+
+  const system = [
+    {
+      type: 'text',
+      text:
+        body.system ??
+        "You are Driven Waterproofing's quantity-surveyor assistant. " +
+          'BEFORE measuring anything, call get_takeoff_knowledge to load the ' +
+          "methodology, rate cards, counting rule, product system, and (for Leading " +
+          "Edge plans) the Pavilion Studio sheet conventions and FFE schedule " +
+          "expectations. Then call get_takeoff_knowledge again per-topic as the work " +
+          "progresses (e.g. 'rate-cards-current' once you know the builder, " +
+          "'pavilion-template' once you confirm LE / Pavilion Studio, " +
+          "'ffe-schedule' before pricing wastes). Always confirm the page scale is " +
+          'calibrated before measuring. Snap every polygon to PDF vectors. Hard rule: ' +
+          "NEVER fabricate a measurement — figured dimensions over scaling, real " +
+          "raster over text extracts. Never attempt to send anything to Xero — " +
+          'propose a quote with build_quote and stop for human review.',
+      // Cache the system prompt across the multi-turn loop.
+      cache_control: { type: 'ephemeral' as const },
+    },
+  ];
+
+  const payload = {
+    model,
+    max_tokens: maxTokens,
+    system,
+    tools: toolDefs,
+    messages: body.messages,
+  };
+
+  const res = await fetch(ANTHROPIC_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': c.env.ANTHROPIC_API_KEY,
+      'anthropic-version': ANTHROPIC_VERSION,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const detail = await res.text();
+    // Surface Anthropic's status so the browser loop can back off on 429/529.
+    return c.json({ error: 'anthropic request failed', status: res.status, detail }, 502);
+  }
+
+  const data = (await res.json()) as {
+    content: unknown[];
+    stop_reason: string;
+    usage?: { input_tokens: number; output_tokens: number };
+  };
+
+  // Return exactly what the browser loop needs: the assistant content blocks
+  // (text + tool_use), the stop reason, and usage for the cost guard.
+  return c.json({
+    content: data.content,
+    stopReason: data.stop_reason,
+    usage: data.usage ?? null,
+  });
+});
+
+export default app;

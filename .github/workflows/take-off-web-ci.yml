@@ -1,0 +1,181 @@
+name: take-off-web CI
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'take-off-web/**'
+      - '.github/workflows/take-off-web-ci.yml'
+  pull_request:
+    paths:
+      - 'take-off-web/**'
+      - '.github/workflows/take-off-web-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  typecheck-build:
+    name: typecheck + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: take-off-web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: take-off-web/pnpm-lock.yaml
+
+      - name: install
+        run: pnpm install --frozen-lockfile
+
+      - name: typecheck (shared + worker + web)
+        run: pnpm -r typecheck
+
+      - name: build web SPA
+        run: pnpm --filter @takeoff/web build
+
+      - name: bundle worker (dry-run)
+        run: pnpm --filter @takeoff/worker exec wrangler deploy --dry-run --outdir dist
+
+      - name: verify MuPDF WASM is in sync with installed package
+        # Regression guard for the bug surfaced during e2e: public/mupdf-wasm.wasm
+        # MUST equal the WASM shipped with the installed mupdf package, otherwise
+        # the canvas renders blank in production.
+        run: |
+          PUB=apps/web/public/mupdf-wasm.wasm
+          INSTALLED=$(find node_modules -name 'mupdf-wasm.wasm' -path '*mupdf/dist*' | head -1)
+          if [ -z "$INSTALLED" ]; then
+            echo "no mupdf-wasm.wasm in node_modules"; exit 1
+          fi
+          if ! cmp -s "$PUB" "$INSTALLED"; then
+            echo "::error::public/mupdf-wasm.wasm is out of sync with $INSTALLED — run: cp $INSTALLED $PUB"
+            exit 1
+          fi
+          echo "MuPDF WASM in sync: $(stat -c%s "$PUB") bytes"
+
+  e2e:
+    name: playwright (chromium)
+    runs-on: ubuntu-latest
+    needs: typecheck-build
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: take-off-web
+    env:
+      MCP_BOOTSTRAP_TOKEN: test-bootstrap
+      APP_BASE_URL: http://localhost:5173
+      XERO_TOKEN_KEY: ci-xero-key-not-a-real-secret-just-for-e2e
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: take-off-web/pnpm-lock.yaml
+
+      - name: install
+        run: pnpm install --frozen-lockfile
+
+      - name: cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-${{ runner.os }}-${{ hashFiles('take-off-web/pnpm-lock.yaml') }}
+
+      - name: install Chromium (only on cache miss)
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: ensure system deps even on cache hit
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps chromium
+
+      - name: write .dev.vars for the local worker
+        run: |
+          cat > apps/worker/.dev.vars <<EOF
+          MCP_BOOTSTRAP_TOKEN=$MCP_BOOTSTRAP_TOKEN
+          APP_BASE_URL=$APP_BASE_URL
+          XERO_TOKEN_KEY=$XERO_TOKEN_KEY
+          EOF
+
+      - name: apply D1 migrations (local)
+        run: pnpm --filter @takeoff/worker exec wrangler d1 migrations apply takeoff-production --local
+
+      - name: start worker (background)
+        run: |
+          pnpm --filter @takeoff/worker exec wrangler dev --port 8787 --ip 127.0.0.1 \
+            > worker.log 2>&1 &
+          echo $! > worker.pid
+          # `wrangler dev` runs the [build] block (pnpm install + vite build)
+          # before it serves, so first /health can be ~40s out. Poll generously
+          # (up to 120s) and fail LOUD with the worker log if it never comes up,
+          # instead of letting Playwright race a not-yet-listening worker.
+          ok=0
+          for i in $(seq 1 120); do
+            if curl -sf http://127.0.0.1:8787/health > /dev/null; then ok=1; break; fi
+            sleep 1
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::worker did not become healthy within 120s"
+            echo "----- worker.log -----"; cat worker.log
+            exit 1
+          fi
+          curl -sf http://127.0.0.1:8787/health
+
+      - name: start web (background)
+        run: |
+          # Vite binds to "localhost" by default which on the runner resolves
+          # to IPv6 ::1; force IPv4 so the curl healthcheck (and Playwright,
+          # which goes through 127.0.0.1) can reach it.
+          pnpm --filter @takeoff/web exec vite --host 127.0.0.1 > web.log 2>&1 &
+          echo $! > web.pid
+          for i in $(seq 1 30); do
+            sleep 1
+            curl -sf -o /dev/null http://127.0.0.1:5173/ && break
+          done
+          curl -sf -o /dev/null -w 'web HTTP %{http_code}\n' http://127.0.0.1:5173/
+
+      - name: playwright
+        run: pnpm exec playwright test
+
+      - name: stop background servers
+        if: always()
+        run: |
+          [ -f worker.pid ] && kill "$(cat worker.pid)" 2>/dev/null || true
+          [ -f web.pid ] && kill "$(cat web.pid)" 2>/dev/null || true
+
+      - name: upload playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: take-off-web/playwright-report
+          retention-days: 14
+
+      - name: upload server logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-logs
+          path: |
+            take-off-web/worker.log
+            take-off-web/web.log
+          retention-days: 7
