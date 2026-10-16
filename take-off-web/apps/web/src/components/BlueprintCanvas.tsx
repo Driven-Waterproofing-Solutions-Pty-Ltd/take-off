@@ -1786,6 +1786,17 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         setContextMenu(null);
     };
 
+    // Break Path splits at an interior vertex and measures both halves as
+    // straight polylines. Breaking at an endpoint leaves an empty fragment,
+    // and a curved segment (non-zero bulge, e.g. a two-point arc from the
+    // agent/MCP) would be re-measured as its chord, so neither is offered.
+    const canBreakPathAt = (shape: Shape | undefined, pointIndex: number | undefined): boolean =>
+        !!shape &&
+        pointIndex !== undefined &&
+        pointIndex > 0 &&
+        pointIndex < shape.points.length - 1 &&
+        !(shape.bulges ?? []).some(b => b !== 0);
+
     const handleExecuteBreakPath = () => {
         if (!contextMenu || contextMenu.pointIndex === undefined || !contextMenu.shapeId) return;
         const { itemId, shapeId, pointIndex } = contextMenu;
@@ -1793,7 +1804,7 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
         const item = items.find(i => i.id === itemId);
         const shape = item?.shapes.find(s => s.id === shapeId);
 
-        if (item && shape && (item.type === ToolType.LINEAR || item.type === ToolType.ARC || item.type === ToolType.SEGMENT || item.type === ToolType.DIMENSION)) {
+        if (item && shape && canBreakPathAt(shape, pointIndex) && (item.type === ToolType.LINEAR || item.type === ToolType.ARC || item.type === ToolType.SEGMENT || item.type === ToolType.DIMENSION)) {
             const part1Points = shape.points.slice(0, pointIndex + 1);
             const part2Points = shape.points.slice(pointIndex);
 
@@ -2735,7 +2746,8 @@ const BlueprintCanvas = forwardRef<BlueprintCanvasRef, BlueprintCanvasProps>(({
 
                     {(() => {
                         const item = items.find(i => i.id === contextMenu.itemId);
-                        if (item && (item.type === ToolType.LINEAR || item.type === ToolType.ARC || item.type === ToolType.SEGMENT || item.type === ToolType.DIMENSION) && contextMenu.pointIndex !== undefined) {
+                        const shape = item?.shapes.find(s => s.id === contextMenu.shapeId);
+                        if (item && (item.type === ToolType.LINEAR || item.type === ToolType.ARC || item.type === ToolType.SEGMENT || item.type === ToolType.DIMENSION) && canBreakPathAt(shape, contextMenu.pointIndex)) {
                             return (
                                 <button
                                     onClick={handleExecuteBreakPath}

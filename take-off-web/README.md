@@ -95,7 +95,7 @@ curl -X POST https://takeoff.drivenwp.com/admin/mcp/tokens \
 | Tool | Purpose |
 |---|---|
 | `load_pdf` | Register an uploaded PDF (client uploads to R2 first) |
-| `get_page_image` | Render page → PNG + vector summary (client-side) |
+| `get_page_image` | Render page → PNG + image-pixel → PDF-point mapping (client-side) |
 | `set_scale_preset` / `set_scale_manual` | Calibrate page scale |
 | `add_area` / `add_linear` / `add_count` / `add_arc` | Place measurements |
 | `snap_to_vector` | Snap proposed coords to nearest PDF vertex/segment |

@@ -111,7 +111,7 @@ export const tools = {
   },
   get_page_image: {
     description:
-      'Render a PDF page (or viewport region) to PNG. Returns base64 PNG plus a summary of nearby vector geometry useful for snapping.',
+      'Render a PDF page (or viewport region) to PNG. Returns the image plus the offset and factor that map image pixels back to PDF points. It does not describe vector geometry: use snap_to_vector to lock proposed points onto the PDF linework.',
     input: z.object({
       project_id: z.string(),
       page_index: z.number().int().min(0),
@@ -129,7 +129,8 @@ export const tools = {
     }),
     output: z.object({
       png_base64: z.string(),
-      vector_summary: z.string(),
+      // Render notes plus the image-pixel → PDF-point mapping.
+      coordinate_mapping: z.string(),
     }),
   },
   set_scale_preset: {
