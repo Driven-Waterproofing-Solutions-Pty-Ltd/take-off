@@ -3,7 +3,7 @@ import { tools, type ToolName } from '@takeoff/shared';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { setScalePreset, setScaleManual } from '../tools/scale';
 import { addArea, addLinear, addCount, addArc } from '../tools/measure';
-import { snapToVector } from '../tools/snap';
+import { snapPdfPoints } from '../tools/snap';
 import {
   listItems,
   searchProjects,
@@ -48,7 +48,7 @@ const handlers: Partial<Record<ToolName, Handler>> = {
   add_linear: (env, i) => addLinear(env, i as Parameters<typeof addLinear>[1]),
   add_count: (env, i) => addCount(env, i as Parameters<typeof addCount>[1]),
   add_arc: (env, i) => addArc(env, i as Parameters<typeof addArc>[1]),
-  snap_to_vector: (env, i) => snapToVector(env, i as Parameters<typeof snapToVector>[1]),
+  snap_to_vector: (env, i) => snapPdfPoints(env, i as Parameters<typeof snapPdfPoints>[1]),
   list_items: (env, i) => listItems(env, (i as { project_id: string }).project_id),
   search_projects: (env, i) => searchProjects(env, i as Parameters<typeof searchProjects>[1]),
   recall_customer: (env, i) => recallCustomer(env, i as Parameters<typeof recallCustomer>[1]),
@@ -62,10 +62,14 @@ const handlers: Partial<Record<ToolName, Handler>> = {
     getTakeoffKnowledge(env, i as Parameters<typeof getTakeoffKnowledge>[1]),
 };
 
+// Only per-client tokens minted via POST /admin/mcp/tokens are accepted here.
+// MCP_BOOTSTRAP_TOKEN is deliberately NOT a valid /mcp bearer: it is the
+// token-mint (and session/OAuth-state HMAC) secret, so letting it double as
+// a universal tool credential would turn any leak of it into full read/write
+// access to every project and the Xero push tool.
 async function verifyMcpToken(env: Env, authHeader: string | undefined): Promise<boolean> {
   if (!authHeader?.startsWith('Bearer ')) return false;
   const token = authHeader.slice('Bearer '.length);
-  if (env.MCP_BOOTSTRAP_TOKEN && token === env.MCP_BOOTSTRAP_TOKEN) return true;
   const hash = await sha256Hex(token);
   const row = await env.DB.prepare('SELECT id FROM mcp_clients WHERE token_hash = ?')
     .bind(hash)

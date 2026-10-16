@@ -30,6 +30,30 @@ function getOauthSecret(env: Env): string {
   return env.MCP_BOOTSTRAP_TOKEN;
 }
 
+interface XeroConnection {
+  tenantId: string;
+  tenantName: string;
+  tenantType?: string;
+  authEventId?: string;
+}
+
+// Read the authentication_event_id claim from the access token Xero's token
+// endpoint just returned to us over TLS. Only used to narrow /connections to
+// the organisations picked on this consent screen, never as an auth decision,
+// so the JWT signature isn't verified here.
+function readAuthEventId(accessToken: string): string | null {
+  const parts = accessToken.split('.');
+  if (parts.length < 2) return null;
+  try {
+    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+    const payload = JSON.parse(atob(padded)) as { authentication_event_id?: unknown };
+    return typeof payload.authentication_event_id === 'string' ? payload.authentication_event_id : null;
+  } catch {
+    return null;
+  }
+}
+
 function getTokenSecret(env: Env): string {
   if (!env.XERO_TOKEN_KEY) {
     throw new Error('XERO_TOKEN_KEY secret not set — required to encrypt Xero tokens');
@@ -107,18 +131,58 @@ app.get('/oauth/callback', async (c) => {
     expires_in: number;
   };
 
-  const connRes = await fetch('https://api.xero.com/connections', {
-    headers: { Authorization: `Bearer ${token.access_token}`, Accept: 'application/json' },
-  });
-  if (!connRes.ok) {
+  // /connections lists EVERY organisation this app has ever been connected to
+  // for the user, not just the one chosen on this consent screen, so taking
+  // conns[0] could bind the shared connection to the wrong org and send
+  // later quote/invoice pushes there. Narrow to the organisations authorised
+  // in THIS consent (authEventId, from the access token's
+  // authentication_event_id claim) and refuse if that isn't exactly one.
+  // If the event filter yields nothing (e.g. Xero didn't tag a re-consented
+  // existing connection), fall back to the full list — still refusing when
+  // that is ambiguous.
+  const fetchConnections = async (
+    eventId: string | null
+  ): Promise<{ ok: true; conns: XeroConnection[] } | { ok: false; status: number; detail: string }> => {
+    const url = new URL('https://api.xero.com/connections');
+    if (eventId) url.searchParams.set('authEventId', eventId);
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token.access_token}`, Accept: 'application/json' },
+    });
+    if (!res.ok) return { ok: false, status: res.status, detail: await res.text() };
+    const list = (await res.json()) as XeroConnection[];
+    return {
+      ok: true,
+      conns: list.filter(
+        (conn) =>
+          (!eventId || !conn.authEventId || conn.authEventId === eventId) &&
+          (!conn.tenantType || conn.tenantType === 'ORGANISATION')
+      ),
+    };
+  };
+  const authEventId = readAuthEventId(token.access_token);
+  let connResult = await fetchConnections(authEventId);
+  if (authEventId && connResult.ok && connResult.conns.length === 0) {
+    connResult = await fetchConnections(null);
+  }
+  if (!connResult.ok) {
     return c.json(
-      { error: 'failed to fetch Xero tenant list', status: connRes.status, detail: await connRes.text() },
+      { error: 'failed to fetch Xero tenant list', status: connResult.status, detail: connResult.detail },
       502
     );
   }
-  const conns = (await connRes.json()) as Array<{ tenantId: string; tenantName: string }>;
+  const conns = connResult.conns;
+  if (conns.length === 0) return c.json({ error: 'no Xero tenants connected to this user' }, 400);
+  if (conns.length > 1) {
+    return c.json(
+      {
+        error:
+          'More than one Xero organisation was authorised. Reconnect and select exactly one organisation on the Xero consent screen.',
+        tenants: conns.map((conn) => conn.tenantName),
+      },
+      409
+    );
+  }
   const tenant = conns[0];
-  if (!tenant) return c.json({ error: 'no Xero tenants connected to this user' }, 400);
 
   const secret = getTokenSecret(c.env);
   const encAccess = await encryptString(secret, token.access_token);
