@@ -21,11 +21,16 @@ export async function listItems(env: Env, projectId: string): Promise<TakeoffIte
 
   if (itemRows.length === 0) return [];
 
+  // Join instead of `item_id IN (?, ?, …)`: D1 caps a statement at 100 bound
+  // parameters, so a project with more than 100 items could no longer be
+  // hydrated or quoted.
   const shapeRows = (
     await env.DB.prepare(
-      `SELECT * FROM shapes WHERE item_id IN (${itemRows.map(() => '?').join(',')})`
+      `SELECT s.* FROM shapes s
+         JOIN items i ON i.id = s.item_id
+        WHERE i.project_id = ?`
     )
-      .bind(...itemRows.map((r) => r.id))
+      .bind(projectId)
       .all()
   ).results as unknown as ShapeRow[];
 

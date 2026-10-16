@@ -376,3 +376,17 @@ test('server recalibration refuses to mix units on a multi-page item', async () 
   item = items.find((i) => i.id === wall)!;
   expect(item.totalValue).toBeCloseTo(15, 3);
 });
+
+test('projects with more than 100 items still hydrate and quote', async () => {
+  const call = await bearerClient();
+  const projectId = await newProject(call, 'Many items');
+  const created = await Promise.all(
+    Array.from({ length: 105 }, () => newItem(call, projectId, 'COUNT', 'EA'))
+  );
+  expect(created).toHaveLength(105);
+
+  const items = await listItems(call, projectId);
+  expect(items).toHaveLength(105);
+  const quote = await call('GET', `/api/memory/quote/${projectId}`);
+  expect(quote.status).toBe(200);
+});

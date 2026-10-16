@@ -62,12 +62,16 @@ async function recomputeShapesForPage(
   ).results as unknown as ShapeRowMin[];
   if (shapeRows.length === 0) return;
 
-  const itemIds = Array.from(new Set(shapeRows.map((r) => r.item_id)));
+  // Join rather than `id IN (…)` so a page with more than 100 items stays
+  // under D1's 100-bound-parameter limit.
   const itemRows = (
     await env.DB.prepare(
-      `SELECT id, type, unit, depth FROM items WHERE id IN (${itemIds.map(() => '?').join(',')})`
+      `SELECT DISTINCT i.id, i.type, i.unit, i.depth
+         FROM items i
+         JOIN shapes s ON s.item_id = i.id
+        WHERE i.project_id = ? AND s.page_index = ?`
     )
-      .bind(...itemIds)
+      .bind(projectId, pageIndex)
       .all()
   ).results as unknown as ItemRowMin[];
   const itemTypeById = new Map(itemRows.map((r) => [r.id, r.type as ToolType]));
@@ -182,13 +186,9 @@ async function assertNoMixedUnitItems(
   ).results as Array<{ id: string; label: string; page_index: number }>;
   if (rows.length === 0) return;
 
-  const otherPages = Array.from(new Set(rows.map((r) => r.page_index)));
   const pageRows = (
-    await env.DB.prepare(
-      `SELECT page_index, scale_json FROM pages
-        WHERE project_id = ? AND page_index IN (${otherPages.map(() => '?').join(',')})`
-    )
-      .bind(projectId, ...otherPages)
+    await env.DB.prepare('SELECT page_index, scale_json FROM pages WHERE project_id = ?')
+      .bind(projectId)
       .all()
   ).results as Array<{ page_index: number; scale_json: string | null }>;
   const unitByPage = new Map<number, Unit | null>();

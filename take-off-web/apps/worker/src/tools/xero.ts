@@ -520,15 +520,20 @@ export async function pushToXero(
   // recall (after an admin reconnected to a new tenant) would silently
   // bounce off the Xero API or, worse, hit a coincidentally-shaped ID.
   const contactRow = (await env.DB.prepare(
-    'SELECT xero_tenant_id FROM customers WHERE xero_contact_id = ?'
+    'SELECT id, xero_tenant_id FROM customers WHERE xero_contact_id = ?'
   )
     .bind(args.customer_xero_id)
-    .first()) as { xero_tenant_id: string | null } | null;
+    .first()) as { id: string; xero_tenant_id: string | null } | null;
   if (contactRow?.xero_tenant_id && contactRow.xero_tenant_id !== token.tenant_id) {
     throw new Error(
       'Xero contact belongs to a different tenant than the active connection — re-sync contacts before pushing.'
     );
   }
+  // The local customer row for the contact the user actually pushed to.
+  // Browser-created projects carry no customer_id, so without this the
+  // pushed history, project search and the invoice queue stayed
+  // "No customer" even though a synced customer was chosen.
+  const customerId = contactRow?.id ?? quote.customerId ?? null;
 
   const today = auDateString();
   const headers = xeroHeaders(token, {
@@ -556,20 +561,7 @@ export async function pushToXero(
     if (!res.ok) throw new Error(`Xero Quote create failed: ${res.status} ${await res.text()}`);
     const json = (await res.json()) as { Quotes: Array<{ QuoteID: string }> };
     const xeroId = json.Quotes[0].QuoteID;
-    await env.DB.prepare(
-      `INSERT INTO past_quotes (id, project_id, customer_id, kind, total, xero_id, snapshot_json, created_at)
-       VALUES (?, ?, ?, 'QUOTE', ?, ?, ?, ?)`
-    )
-      .bind(
-        crypto.randomUUID(),
-        args.project_id,
-        quote.customerId ?? null,
-        quote.total,
-        xeroId,
-        JSON.stringify(quote),
-        Date.now()
-      )
-      .run();
+    await recordPush(env, 'QUOTE', args.project_id, customerId, xeroId, quote);
     return { xero_id: xeroId, deep_link: xeroDeepLink('QUOTE', xeroId) };
   }
 
@@ -594,70 +586,107 @@ export async function pushToXero(
   if (!res.ok) throw new Error(`Xero Invoice create failed: ${res.status} ${await res.text()}`);
   const json = (await res.json()) as { Invoices: Array<{ InvoiceID: string }> };
   const xeroId = json.Invoices[0].InvoiceID;
-  await env.DB.prepare(
-    `INSERT INTO past_quotes (id, project_id, customer_id, kind, total, xero_id, snapshot_json, created_at)
-     VALUES (?, ?, ?, 'INVOICE', ?, ?, ?, ?)`
-  )
-    .bind(
-      crypto.randomUUID(),
-      args.project_id,
-      quote.customerId ?? null,
-      quote.total,
-      xeroId,
-      JSON.stringify(quote),
-      Date.now()
-    )
-    .run();
+  await recordPush(env, 'INVOICE', args.project_id, customerId, xeroId, quote);
   return { xero_id: xeroId, deep_link: xeroDeepLink('INVOICE', xeroId) };
 }
 
+// Record a successful push in local history.
+//   * Idempotent on (kind, xero_id): a retry after a lost response reuses the
+//     same Idempotency-Key, Xero hands back the ORIGINAL document id, and a
+//     plain INSERT added a second history row for one real document.
+//   * Links the project to the pushed customer when it has none yet.
+async function recordPush(
+  env: Env,
+  kind: 'QUOTE' | 'INVOICE',
+  projectId: string,
+  customerId: string | null,
+  xeroId: string,
+  quote: Awaited<ReturnType<typeof buildQuote>>
+): Promise<void> {
+  const stmts = [
+    env.DB.prepare(
+      `INSERT INTO past_quotes (id, project_id, customer_id, kind, total, xero_id, snapshot_json, created_at)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?
+       WHERE NOT EXISTS (SELECT 1 FROM past_quotes WHERE kind = ? AND xero_id = ?)`
+    ).bind(
+      crypto.randomUUID(),
+      projectId,
+      customerId,
+      kind,
+      quote.total,
+      xeroId,
+      JSON.stringify(quote),
+      Date.now(),
+      kind,
+      xeroId
+    ),
+  ];
+  if (customerId) {
+    stmts.push(
+      env.DB.prepare(
+        'UPDATE projects SET customer_id = ? WHERE id = ? AND customer_id IS NULL'
+      ).bind(customerId, projectId)
+    );
+  }
+  await env.DB.batch(stmts);
+}
+
+// Xero pages GET /Contacts (100 per page, and summaryOnly enforces paging),
+// so walk every page — a single request only ever imported the first 100
+// contacts and the rest never reached recallCustomer or the pickers.
+const XERO_CONTACTS_PAGE_SIZE = 100;
+const XERO_CONTACTS_MAX_PAGES = 200; // safety stop (20k contacts)
+
 export async function syncXeroContacts(env: Env): Promise<{ synced: number; tenant_id: string }> {
   const token = await getActiveXeroToken(env);
-  const res = await fetch('https://api.xero.com/api.xro/2.0/Contacts?summaryOnly=true', {
-    headers: {
-      Authorization: `Bearer ${token.access_token}`,
-      'xero-tenant-id': token.tenant_id,
-      Accept: 'application/json',
-    },
-  });
-  if (!res.ok) throw new Error(`Xero Contacts fetch failed: ${res.status}`);
-  const json = (await res.json()) as {
-    Contacts: Array<{
-      ContactID: string;
-      Name: string;
-      EmailAddress?: string;
-      Phones?: Array<{ PhoneNumber?: string }>;
-    }>;
-  };
   const now = Date.now();
   let synced = 0;
-  for (const c of json.Contacts) {
-    const id = crypto.randomUUID();
+  for (let page = 1; page <= XERO_CONTACTS_MAX_PAGES; page++) {
+    const res = await fetch(`${XERO_API}/Contacts?summaryOnly=true&page=${page}`, {
+      headers: xeroHeaders(token),
+    });
+    if (!res.ok) throw new Error(`Xero Contacts fetch failed: ${res.status}`);
+    const json = (await res.json()) as {
+      Contacts?: Array<{
+        ContactID: string;
+        Name: string;
+        EmailAddress?: string;
+        Phones?: Array<{ PhoneNumber?: string }>;
+      }>;
+      pagination?: { pageCount?: number };
+    };
+    const contacts = json.Contacts ?? [];
     // Stamp xero_tenant_id on every synced row so a future tenant switch
     // doesn't leave stale ContactIDs in `customers` that would push to the
     // wrong tenant via /xero/push. recallCustomer / pushToXero filter by
-    // the currently-active token's tenant.
-    await env.DB.prepare(
-      `INSERT INTO customers (id, xero_contact_id, xero_tenant_id, name, email, phone, last_synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(xero_contact_id) DO UPDATE SET
-         xero_tenant_id = excluded.xero_tenant_id,
-         name = excluded.name,
-         email = excluded.email,
-         phone = excluded.phone,
-         last_synced_at = excluded.last_synced_at`
-    )
-      .bind(
-        id,
-        c.ContactID,
-        token.tenant_id,
-        c.Name,
-        c.EmailAddress ?? null,
-        c.Phones?.find((p) => p.PhoneNumber)?.PhoneNumber ?? null,
-        now
-      )
-      .run();
-    synced++;
+    // the currently-active token's tenant. One D1 batch per page.
+    if (contacts.length > 0) {
+      await env.DB.batch(
+        contacts.map((c) =>
+          env.DB.prepare(
+            `INSERT INTO customers (id, xero_contact_id, xero_tenant_id, name, email, phone, last_synced_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(xero_contact_id) DO UPDATE SET
+               xero_tenant_id = excluded.xero_tenant_id,
+               name = excluded.name,
+               email = excluded.email,
+               phone = excluded.phone,
+               last_synced_at = excluded.last_synced_at`
+          ).bind(
+            crypto.randomUUID(),
+            c.ContactID,
+            token.tenant_id,
+            c.Name,
+            c.EmailAddress ?? null,
+            c.Phones?.find((p) => p.PhoneNumber)?.PhoneNumber ?? null,
+            now
+          )
+        )
+      );
+    }
+    synced += contacts.length;
+    const lastPage = json.pagination?.pageCount;
+    if (contacts.length < XERO_CONTACTS_PAGE_SIZE || (lastPage !== undefined && page >= lastPage)) break;
   }
   return { synced, tenant_id: token.tenant_id };
 }

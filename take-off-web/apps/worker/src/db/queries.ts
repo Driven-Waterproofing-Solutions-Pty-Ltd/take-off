@@ -63,6 +63,12 @@ export async function getProject(db: D1Database, projectId: string): Promise<Pro
     .first()) as ProjectRow | null;
 }
 
+// Write only the page columns this call supplies, in ONE statement. The
+// previous read-modify-write SELECTed the row and then rewrote every column,
+// so two overlapping writers (e.g. a vector-cache upload racing a
+// calibration) could each restore the other's stale value — a successful
+// calibration could reload as unset. With INSERT … ON CONFLICT DO UPDATE SET
+// <supplied columns only>, untouched columns are never rewritten.
 export async function upsertPage(
   db: D1Database,
   projectId: string,
@@ -74,45 +80,34 @@ export async function upsertPage(
     legend: unknown;
   }>
 ): Promise<PageRow> {
-  const existing = await getPage(db, projectId, pageIndex);
-  const scale_json = fields.scale ? JSON.stringify(fields.scale) : existing?.scale_json ?? null;
-  const vector_cache_json =
-    fields.vectorCache !== undefined
-      ? JSON.stringify(fields.vectorCache)
-      : existing?.vector_cache_json ?? null;
-  const name = fields.name ?? existing?.name ?? null;
-  const legend_json =
-    fields.legend !== undefined
-      ? JSON.stringify(fields.legend)
-      : existing?.legend_json ?? null;
-
-  if (existing) {
-    await db
-      .prepare(
-        `UPDATE pages SET scale_json = COALESCE(?, scale_json),
-                          vector_cache_json = ?,
-                          name = ?,
-                          legend_json = ?
-         WHERE project_id = ? AND page_index = ?`
-      )
-      .bind(scale_json, vector_cache_json, name, legend_json, projectId, pageIndex)
-      .run();
-  } else {
-    await db
-      .prepare(
-        `INSERT INTO pages (project_id, page_index, scale_json, vector_cache_json, name, legend_json)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      )
-      .bind(
-        projectId,
-        pageIndex,
-        scale_json ?? '{"isSet":false,"pixelsPerUnit":0,"unit":"m"}',
-        vector_cache_json,
-        name,
-        legend_json
-      )
-      .run();
+  const supplied: Array<[column: string, value: string]> = [];
+  if (fields.scale !== undefined) supplied.push(['scale_json', JSON.stringify(fields.scale)]);
+  if (fields.vectorCache !== undefined) {
+    supplied.push(['vector_cache_json', JSON.stringify(fields.vectorCache)]);
   }
+  if (fields.name !== undefined) supplied.push(['name', fields.name]);
+  if (fields.legend !== undefined) supplied.push(['legend_json', JSON.stringify(fields.legend)]);
+
+  const value = (column: string): string | null =>
+    supplied.find(([c]) => c === column)?.[1] ?? null;
+  const updates = supplied.map(([column]) => `${column} = excluded.${column}`);
+  await db
+    .prepare(
+      `INSERT INTO pages (project_id, page_index, scale_json, vector_cache_json, name, legend_json)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(project_id, page_index) DO ${
+         updates.length > 0 ? `UPDATE SET ${updates.join(', ')}` : 'NOTHING'
+       }`
+    )
+    .bind(
+      projectId,
+      pageIndex,
+      value('scale_json') ?? '{"isSet":false,"pixelsPerUnit":0,"unit":"m"}',
+      value('vector_cache_json'),
+      value('name'),
+      value('legend_json')
+    )
+    .run();
   return (await getPage(db, projectId, pageIndex))!;
 }
 
